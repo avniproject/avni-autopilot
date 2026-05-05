@@ -22,7 +22,7 @@ from typing import Any
 
 import pandas as pd
 
-from _bundle_models import (
+from models import (
     AddressLevelSpec,
     EncounterTypeSpec,
     EntitySpec,

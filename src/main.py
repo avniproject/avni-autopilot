@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Runner: generate a full Avni bundle ZIP for a single org.
+CLI entry point: generate a full Avni bundle ZIP for a single org.
 
 Usage:
-    python src/generate_bundles.py --org srijan
-    python src/generate_bundles.py --org astitva
-    python src/generate_bundles.py --org gubbachi
+    python src/main.py --org srijan
+    python src/main.py --org astitva
+    python src/main.py --org gubbachi
 
 Paths resolved automatically:
     input  → resources/input/<org>/
@@ -30,7 +30,7 @@ _SRC = os.path.join(_ROOT, "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from bundle_generator import run  # noqa: E402  (resolved via _SRC on sys.path)
+from pipeline import run  # noqa: E402  (resolved via _SRC on sys.path)
 
 
 def main() -> None:
@@ -71,9 +71,8 @@ def main() -> None:
             print(f"  ✗ {e}")
         sys.exit(1)
 
-    spec = result["entity_spec"]
     cancel_count = sum(
-        1 for f in result["form_specs_for_mapping"]
+        1 for f in result["mapping_specs"]
         if "Cancellation" in f["name"]
     )
     main_forms = len(result["forms_json"]) - cancel_count
