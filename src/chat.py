@@ -14,6 +14,7 @@ REPL slash commands (no token cost):
   /quit, /q     exit
   /clear        start a new thread (fresh memory)
   /history      print the message history for the current thread
+  /graph        print the chat agent graph + bundle pipeline graph
   /help         show command list
 """
 
@@ -228,14 +229,77 @@ def _handle_slash(cmd: str, agent, config: dict) -> None:
             preview = preview[:120].replace("\n", " ")
             print(f"  {i:2d} {role:15s} {preview}")
         return
+    if cmd == "graph":
+        _print_graphs(agent)
+        return
     if cmd == "help":
         print("Commands:")
         print("  /quit, /q     exit")
         print("  /clear        start a new thread (fresh memory)")
         print("  /history      list message history for the current thread")
+        print("  /graph        print the chat agent graph + bundle pipeline graph")
         print("  /help         this help")
         return
     print(f"(unknown command: /{cmd}; try /help)")
+
+
+_OUTER_GRAPH = """\
+   ┌───────────┐        ┌───────┐
+   │ __start__ │───────▶│ agent │◀────────────┐
+   └───────────┘        └───┬───┘             │
+                            │                 │
+                  ┌─────────┴─────────┐       │
+              end_turn            tool_calls  │
+                  │                   │       │
+                  ▼                   ▼       │
+            ┌─────────┐           ┌───────┐   │
+            │ __end__ │           │ tools │───┘
+            └─────────┘           └───────┘
+"""
+
+_INNER_GRAPH = """\
+              ┌───────────┐
+              │ __start__ │
+              └─────┬─────┘
+                    ▼
+          ┌────────────────┐
+          │ discover_files │─────abort──────┐
+          └───────┬────────┘                │
+                  │ continue                │
+                  ▼                         │
+         ┌─────────────────┐                │
+         │ parse_documents │─────abort──────┤
+         └───────┬─────────┘                │
+                 │ continue                 │
+                 ▼                          │
+        ┌───────────────────┐               │
+        │ generate_entities │               │
+        └─────────┬─────────┘               │
+                  ▼                         │
+         ┌────────────────┐                 │
+         │ generate_forms │                 │
+         └───────┬────────┘                 │
+                 ▼                          │
+      ┌────────────────────────┐            │
+      │ generate_form_mappings │            │
+      └───────────┬────────────┘            │
+                  ▼                         │
+            ┌─────────────┐                 │
+            │ package_zip │                 │
+            └──────┬──────┘                 │
+                   ▼                        │
+               ┌─────────┐                  │
+               │ __end__ │◀─────────────────┘
+               └─────────┘
+"""
+
+
+def _print_graphs(agent) -> None:  # noqa: ARG001  (agent unused; diagrams are static)
+    """Print the outer chat ReAct graph and the inner bundle pipeline graph."""
+    print("\nOuter — chat ReAct agent (chat.py)")
+    print(_OUTER_GRAPH)
+    print("Inner — bundle pipeline (pipeline.py)")
+    print(_INNER_GRAPH)
 
 
 def run_chat() -> None:
