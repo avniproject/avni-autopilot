@@ -17,17 +17,18 @@ pip install -e .
 ---
 
 ## Usage
+### Option 1: Command line
 
 Drop your modelling and scoping Excel files into `resources/input/<org>/`, then run:
 
 ```bash
-python src/main.py --org <org>
+python src/cli.py --org <org>
 ```
 
 Example:
 
 ```bash
-python src/main.py --org srijan
+python src/cli.py --org srijan
 ```
 
 Output:
@@ -48,6 +49,31 @@ Bundle ZIP     : resources/output/srijan/Srijan.zip
 ```
 
 If `resources/input/<org>/` is missing or contains no `.xlsx` files, the script exits with an error.
+
+---
+
+### Option 2: Interactive chat
+
+`src/chat.py` is a conversational front door over the same pipeline — a LangGraph ReAct agent (`claude-sonnet-4-6` via `ChatAnthropic`). Useful when you don't want to type CLI flags or want follow-up questions.
+
+Setup:
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # or set in .env
+python src/chat.py
+```
+
+Sample Output:
+```
+you> generate srijan
+  ⚙ generate_bundle({"org": "srijan"})
+agent> Bundle generated successfully. Subject types: 1, programs: 2, encounter types: 9, …
+you> for what org did you generate bundle for?
+agent> srijan org
+```
+
+Slash commands (no token cost): `/quit`, `/clear` (new thread), `/history`, `/help`.
+
+Conversation state is held in-memory by a `MemorySaver` checkpointer keyed by `thread_id`. It does **not** persist across `python src/chat.py` invocations.
 
 ---
 

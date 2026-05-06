@@ -3,9 +3,9 @@
 CLI entry point: generate a full Avni bundle ZIP for a single org.
 
 Usage:
-    python src/main.py --org srijan
-    python src/main.py --org astitva
-    python src/main.py --org gubbachi
+    python src/cli.py --org srijan
+    python src/cli.py --org astitva
+    python src/cli.py --org gubbachi
 
 Paths resolved automatically:
     input  → resources/input/<org>/
