@@ -64,9 +64,9 @@ A **LangGraph pipeline** (`bundle_generator.py`) takes one org at a time and run
 discover_files → parse_documents → generate_entities → generate_forms → generate_form_mappings → package_zip
 ```
 
-### 3.3 Runner script (`generate_bundles.py`)
+### 3.3 Invocation
 
-Accepts a single org name as a CLI argument (`--org srijan`), resolves the input/output paths, invokes the LangGraph pipeline once, and prints a summary.
+The compiled pipeline is invoked as `pipeline.run(org_name, input_dir, output_dir)` from a host. The host is responsible for resolving the input/output paths (`resources/input/<org>/`, `resources/output/<org>/`) and surfacing the result. In this project the host is the conversational chat agent (`src/chat.py`) which exposes the pipeline as a tool — `generate_bundle(org)`.
 
 ---
 
@@ -347,43 +347,34 @@ No additional fuzzy matching is needed in the generation layer — by the time `
 
 ---
 
-## 7. Runner Script (`generate_bundles.py`)
+## 7. Invocation
 
-Accepts a single `--org` argument. Resolves input/output paths and invokes the pipeline once.
+The compiled pipeline is invoked as `pipeline.run(org_name, input_dir, output_dir)`. Hosts are responsible for resolving paths (typically `resources/input/<org>/` → `resources/output/<org>/`) and surfacing the result.
+
+Today's host is `src/chat.py` — a LangGraph ReAct agent that exposes the pipeline as the `generate_bundle(org)` tool. A typical session:
 
 ```
-Usage:
-  python generate_bundles.py --org srijan
-  python generate_bundles.py --org astitva
-  python generate_bundles.py --org gubbachi
-
-Paths resolved:
-  input_dir  = resources/input/<org>/
-  output_dir = resources/output/<org>/
+you> generate srijan
+  ⚙ generate_bundle({"org": "srijan"})
+agent> Bundle generated. Subject types: 1, programs: 2, encounter types: 9, forms: 22 main + 13 cancellation, concepts: 84.
+       Bundle: resources/output/srijan/Srijan.zip
 ```
 
-Output:
-```
-Org: srijan
-STs: 1  |  Programs: 2  |  Encounter types: 9  |  Forms: 22  |  Concepts: 84
-Bundle: resources/output/srijan/Srijan.zip
-```
-
-If `resources/input/<org>/` does not exist or contains no `.xlsx` files, the script exits with a clear error message.
+If `resources/input/<org>/` does not exist or contains no `.xlsx` files, the tool returns a structured error and the agent reports it.
 
 ---
 
-## 8. Files to Create
+## 8. Files
 
 | File | Description |
 |---|---|
-| `bundle_generator.py` | LangGraph pipeline (replaces current draft) |
-| `generate_bundles.py` | Runner: accepts `--org`, invokes pipeline once |
+| `src/pipeline.py` | LangGraph pipeline (state, 6 nodes, `run()`) |
+| `src/generators.py` | Pure JSON-generation functions (entities, forms, concepts, mappings) |
+| `src/parser.py` | Excel/CSV → `EntitySpec`; auto-classifies sheets by content |
+| `src/models.py` | Pydantic data contracts (`EntitySpec`, `FormSpec`, …) |
+| `src/chat.py` | Conversational host that exposes `generate_bundle` as a tool |
 
-The existing `subject_type_parser.py` remains for focused subject-type-only use but is superseded by `bundle_generator.py` for full bundle generation.
-
-Dependencies already declared in `pyproject.toml`: `langgraph`, `openpyxl`, `anthropic`, `httpx`.  
-New dependency to add: `pandas` (required by `parse_scoping_docs`), `pydantic` (required by `bundle_models`).
+Dependencies declared in `pyproject.toml`: `langgraph`, `langchain-anthropic`, `openpyxl`, `pandas`, `pydantic`, `anthropic`, `httpx`.
 
 ---
 
