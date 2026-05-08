@@ -14,7 +14,6 @@ dependencies = [
     "openpyxl>=3.1.0",
     "pandas>=2.0.0",
     "pydantic>=2.0.0",
-    "rapidfuzz>=3.0",
     "tabulate>=0.9",
 ]
 

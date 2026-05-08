@@ -189,7 +189,6 @@ def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
             "no"                — skip this change
             "edit:<new_value>"  — apply with a user-provided override
     """
-    print(f"[debug:resume_bundle] thread_id={thread_id} resolutions={resolutions}")
     config = {"configurable": {"thread_id": thread_id}}
     return _run_with_interrupt_handling(Command(resume=resolutions), config)
 

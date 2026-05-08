@@ -285,29 +285,15 @@ def _apply_resolutions(
     by_id = {c.change_id: c for c in pending}
     forms_by_name = {f.name: f for f in forms}
 
-    log.info(
-        "[apply] received %d resolution(s) for %d pending change(s); pending_ids=%s",
-        len(resolutions), len(pending), list(by_id.keys()),
-    )
-
     for change_id, decision in resolutions.items():
         change = by_id.get(change_id)
         if change is None:
-            log.warning(
-                "[apply] %s SKIP: change_id not in pending list (pending=%s)",
-                change_id, list(by_id.keys()),
-            )
             warnings.append(f"Resolution for unknown change_id '{change_id}'")
             continue
         if decision == "no" or decision is False:
-            log.info("[apply] %s SKIP: user said no", change_id)
             continue
         target_form = forms_by_name.get(change.form)
         if target_form is None:
-            log.warning(
-                "[apply] %s SKIP: form '%s' not in state (forms=%s)",
-                change_id, change.form, list(forms_by_name.keys()),
-            )
             warnings.append(f"Change {change_id} targets unknown form '{change.form}'")
             continue
 
@@ -316,29 +302,14 @@ def _apply_resolutions(
         if isinstance(decision, str) and decision.startswith("edit:"):
             after = _parse_edit(decision[len("edit:"):], change.kind, after, warnings, change_id)
 
-        log.info(
-            "[apply] %s start  form='%s' kind=%s field_len=%d field_preview=%r after=%r",
-            change_id, change.form, change.kind,
-            len(change.field), change.field[:80], after,
-        )
-
         try:
             ok = _apply_one(target_form, change, after, warnings)
         except Exception as exc:  # noqa: BLE001
-            log.exception("[apply] %s RAISED", change_id)
             warnings.append(f"Apply {change_id} ({change.kind}) raised: {exc}")
             continue
         if ok:
             applied.append(change.model_copy(update={"after": after}))
-            log.info(
-                "[apply] %s OK  field renamed to %r",
-                change_id, after.get("name"),
-            )
-        else:
-            log.warning(
-                "[apply] %s NO-OP  form='%s' kind=%s field_preview=%r — _apply_one returned False",
-                change_id, change.form, change.kind, change.field[:80],
-            )
+            log.info("[apply] %s renamed to %r", change_id, after.get("name"))
     return applied, warnings
 
 
@@ -386,29 +357,11 @@ def _apply_one(form, change, after: dict, warnings: list[str]) -> bool:
     if kind == "long_name":
         f = _find_field(form, field_name)
         if f is None:
-            existing = [(len(fld.name), fld.name[:80]) for fld in _all_fields_in(form)]
-            log.warning(
-                "[apply:long_name] lookup FAILED in form='%s'\n"
-                "  searching for: len=%d preview=%r\n"
-                "  form has %d field(s); long ones: %s",
-                form.name, len(field_name), field_name[:80],
-                len(existing),
-                [(L, p) for (L, p) in existing if L > 200],
+            warnings.append(
+                f"long_name: field '{field_name[:80]}…' not found in '{form.name}'"
             )
-            warnings.append(f"long_name: field '{field_name[:80]}…' not found in '{form.name}'")
             return False
-        log.info(
-            "[apply:long_name] found field id=%d form_id=%d len=%d, renaming to len=%d",
-            id(f), id(form), len(f.name), len(new_name),
-        )
         f.name = new_name
-        # Verify the mutation actually persisted on the form's field list.
-        post = _find_field(form, new_name)
-        log.info(
-            "[apply:long_name] post-mutation lookup-by-new-name: %s (id=%s)",
-            "FOUND" if post is not None else "MISSING",
-            id(post) if post is not None else "n/a",
-        )
         return True
 
     if kind == "duplicate_field":
@@ -470,18 +423,6 @@ def generate_entities(state: BundleState) -> BundleState:
 
 def generate_forms(state: BundleState) -> BundleState:
     spec = state["entity_spec"]
-
-    # Diagnostic: dump field names that are still > 200 chars when generate_forms
-    # starts. If a long_name change was applied in enrich_with_llm but the long
-    # name survives here, the mutation didn't propagate through the state.
-    for fm in spec.forms:
-        all_fields = [f for sec in (fm.sections or []) for f in sec.fields]
-        long_here = [(len(f.name), f.name[:80]) for f in all_fields if len(f.name) > 200]
-        if long_here:
-            log.warning(
-                "[generate_forms] form='%s' still has %d long-name field(s): %s",
-                fm.name, len(long_here), long_here,
-            )
 
     result = make_forms_and_concepts(spec.forms)
     forms_json = result["forms"]

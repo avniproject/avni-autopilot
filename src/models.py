@@ -25,14 +25,6 @@ class SkipLogicSpec(BaseModel):
     value: str = ""
 
 
-# Names of attributes the parser had to guess (source cell was blank/unmapped).
-# Listed here as a Literal so a typo in `field.inferred_fields` fails Pydantic
-# validation rather than silently never matching.
-InferredField = Literal[
-    "dataType", "options", "selectionType", "unit"
-]
-
-
 class FieldSpec(BaseModel):
     name: str
     dataType: str = "Text"
@@ -49,9 +41,6 @@ class FieldSpec(BaseModel):
     isQuestionGroup: bool = False
     isRepeatable: bool = False  # Only meaningful when isQuestionGroup=True
     children: list["FieldSpec"] | None = None  # Child fields for QG/RQG
-    # Attributes the parser had to guess. Populated by parser.py, consumed by
-    # enrich_with_llm to decide whether to ask the LLM about this field.
-    inferred_fields: set[InferredField] = Field(default_factory=set)
 
 
 # ── Form-level ─────────────────────────────────────────────────────────────────

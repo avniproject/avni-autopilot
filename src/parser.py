@@ -162,22 +162,6 @@ def _parse_options(val: Any) -> list[str]:
     ]
 
 
-def _has_mixed_separators(val: Any) -> bool:
-    """True if the raw options cell contains more than one delimiter type.
-
-    The parser picks ONE separator in priority order (\\n > ; > ,), so a cell
-    that mixes them — e.g. "Rice, Wheat\\nMillets" — gets split incorrectly.
-    Flag those for LLM enrichment; cells using a single delimiter parse fine.
-    """
-    raw = _clean(val)
-    if not raw:
-        return False
-    present = sum([
-        "\n" in raw,
-        ";" in raw,
-        "," in raw,
-    ])
-    return present >= 2
 
 
 def _parse_min_max(val: Any) -> tuple[float | None, float | None]:
@@ -1116,28 +1100,6 @@ def parse_form_df(
                     dependsOn=when_to_show, condition="raw", value=when_to_show
                 )
 
-        # Track which attributes the parser had to guess. Consumed by
-        # enrich_with_llm to decide whether to ask the LLM about this field.
-        # Only flag things where the parser's output is actually suspect —
-        # missing min/max bounds or absent option lists alone don't qualify
-        # (many forms legitimately have neither).
-        inferred: set[str] = set()
-        if dtype_idx is None or not raw_dtype:
-            inferred.add("dataType")
-        # Options: only flag when the raw cell mixed delimiters (\n + ; or
-        # \n + , or ; + ,) — the parser had to pick one separator and may
-        # have split incorrectly. An empty options list on its own is fine.
-        if (
-            avni_dtype == "Coded"
-            and options_idx is not None
-            and _has_mixed_separators(row.iloc[options_idx])
-        ):
-            inferred.add("options")
-        if avni_dtype == "Coded" and selection_type is None:
-            inferred.add("selectionType")
-        if unit_idx is None:
-            inferred.add("unit")
-
         fields.append(
             FieldSpec(
                 name=field_name,
@@ -1150,7 +1112,6 @@ def parse_form_df(
                 options=options,
                 selectionType=selection_type,
                 skipLogic=skip_logic,
-                inferred_fields=inferred,  # type: ignore[arg-type]
             )
         )
 
