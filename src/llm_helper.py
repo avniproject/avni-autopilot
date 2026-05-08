@@ -10,10 +10,10 @@ The helper is invoked once per form by `enricher.py`. It builds a prompt with:
   - the raw form sheet rendered as a Markdown table
   - optional `user_instructions` (free-text)
 
-…and asks Claude to return an `EnrichedFormSpec` (refined `FormSpec` + a list of
-`Change` records explaining each refinement). Claude is instructed never to
-invent fields/options that aren't present in the source sheet — the validator
-in `enricher.py` then double-checks via rapidfuzz.
+…and asks Claude to return an `EnrichedFormSpec` (the parser's `FormSpec`
+unchanged + a list of `Change` records). The form on the response is ignored
+by `enricher.py`; only the Change records flow downstream, after a
+deterministic justification gate filters them.
 
 Caching: the system prompt is constant across forms, so we mark the last block
 with `cache_control={"type": "ephemeral"}` for prompt-cache hits on every call
