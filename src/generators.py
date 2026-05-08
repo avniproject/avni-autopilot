@@ -323,13 +323,7 @@ def make_forms_and_concepts(forms: list) -> dict:
     mapping_specs: list[dict] = []
 
     for form_spec in forms:
-        # Use sections if present; otherwise wrap all fields in a single "Details" section
-        if form_spec.sections:
-            sections = form_spec.sections
-        elif form_spec.fields:
-            sections = [SimpleNamespace(name="Details", fields=form_spec.fields)]
-        else:
-            sections = []
+        sections = form_spec.sections or []
 
         form_dict = _build_form(form_spec.name, form_spec.formType, sections, concepts_registry)
         forms_out.append({

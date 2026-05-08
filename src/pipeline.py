@@ -343,8 +343,8 @@ def _apply_resolutions(
 
 
 def _all_fields_in(form) -> list:
-    """Yield every FieldSpec in a form (top-level + every section), in order."""
-    out = list(form.fields or [])
+    """Yield every FieldSpec in a form, walking sections in order."""
+    out: list = []
     for section in form.sections or []:
         out.extend(section.fields)
     return out
@@ -475,9 +475,7 @@ def generate_forms(state: BundleState) -> BundleState:
     # starts. If a long_name change was applied in enrich_with_llm but the long
     # name survives here, the mutation didn't propagate through the state.
     for fm in spec.forms:
-        all_fields = list(fm.fields or [])
-        for sec in fm.sections or []:
-            all_fields.extend(sec.fields)
+        all_fields = [f for sec in (fm.sections or []) for f in sec.fields]
         long_here = [(len(f.name), f.name[:80]) for f in all_fields if len(f.name) > 200]
         if long_here:
             log.warning(

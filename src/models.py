@@ -68,7 +68,6 @@ class FormSpec(BaseModel):
     subjectType: str | None = None
     program: str | None = None
     encounterType: str | None = None
-    fields: list[FieldSpec] = Field(default_factory=list)
     sections: list[SectionSpec] = Field(default_factory=list)
 
 

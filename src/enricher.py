@@ -55,8 +55,8 @@ def _form_is_clean(form: FormSpec, user_instructions: str | None) -> bool:
 
 
 def _all_fields(form: FormSpec) -> list[FieldSpec]:
-    """Flatten fields from `fields` + every section's fields."""
-    out: list[FieldSpec] = list(form.fields or [])
+    """Flatten every section's fields into a single list."""
+    out: list[FieldSpec] = []
     for section in form.sections or []:
         out.extend(section.fields)
     return out
@@ -119,15 +119,8 @@ def _validate_enriched_form(
                 )
         return kept
 
-    cleaned_form.fields = _filter_fields(cleaned_form.fields or [])
-    if cleaned_form.sections:
-        for section in cleaned_form.sections:
-            section.fields = _filter_fields(section.fields)
-        # Sections are the source of truth for field membership. Drop the
-        # parallel `fields` list so a downstream rename doesn't have to
-        # mutate two duplicated FieldSpec instances (msgpack checkpointing
-        # turns shared references into separate objects).
-        cleaned_form.fields = []
+    for section in cleaned_form.sections or []:
+        section.fields = _filter_fields(section.fields)
 
     # Drop Change records whose target field no longer exists post-filter.
     surviving_field_names = {

@@ -1193,18 +1193,12 @@ def parse_form_df(
             SectionSpec(name=cur_name or "General Information", fields=cur_fields)
         )
 
-    # IMPORTANT: store fields in `sections` only, never in both `form.fields`
-    # AND `section.fields`. LangGraph's msgpack checkpoint doesn't preserve
-    # shared references, so two list copies become two separate FieldSpec
-    # objects after deserialization. A long_name rename then sticks on one
-    # copy and the JSON ends up reading the other.
     return FormSpec(
         name=sheet_name.strip(),
         formType=form_type,
         subjectType=subject_type,
         program=program,
         encounterType=encounter_type,
-        fields=[] if sections else fields,
         sections=sections,
     )
 

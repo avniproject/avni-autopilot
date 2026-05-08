@@ -98,12 +98,10 @@ def _form_spec_to_compact_dict(form: FormSpec) -> dict[str, Any]:
         out["program"] = form.program
     if form.encounterType:
         out["encounterType"] = form.encounterType
-    out["fields"] = [_field_compact(f) for f in (form.fields or [])]
-    if form.sections:
-        out["sections"] = [
-            {"name": s.name, "fields": [_field_compact(f) for f in s.fields]}
-            for s in form.sections
-        ]
+    out["sections"] = [
+        {"name": s.name, "fields": [_field_compact(f) for f in s.fields]}
+        for s in (form.sections or [])
+    ]
     return out
 
 
