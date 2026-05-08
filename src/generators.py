@@ -21,17 +21,10 @@ from typing import Callable
 # Stable namespace shared with avni-ai's bundle generator
 _NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "avni.project.org")
 
-# Avni concept_name / form_element_group_name etc. are varchar(255)
-NAME_LIMIT = 255
-
 
 def make_uuid(seed: str) -> str:
     """Deterministic UUID v5 — same seed always returns the same UUID."""
     return str(uuid.uuid5(_NAMESPACE, seed))
-
-
-def truncate(value: str, limit: int = NAME_LIMIT) -> str:
-    return value[:limit] if len(value) > limit else value
 
 
 def safe_filename(name: str) -> str:
@@ -216,32 +209,22 @@ def _build_form(
         form_elements: list[dict] = []
 
         for e_idx, field in enumerate(section.fields, start=1):
-            concept_name = truncate(field.name)
+            concept_name = field.name
             concept_uuid = make_uuid(f"concept:{concept_name}")
 
-            # Coded fields: build deduplicated answer list.
-            # Dedup by UUID — the same option text in two source rows would
-            # otherwise produce a (concept_id, answer_concept_id) duplicate
-            # that violates the unique constraint on upload.
+            # Build the answer list for Coded fields. The LLM enrichment pass
+            # has already validated/disambiguated upstream, so no dedup here.
             answers: list[dict] = []
             if field.dataType == "Coded" and field.options:
-                seen: set[str] = set()
-                order = 0
-                for opt in field.options:
-                    a_name = truncate(opt)
-                    a_uuid = make_uuid(f"concept:{a_name}")
-                    if a_uuid in seen:
-                        continue
-                    seen.add(a_uuid)
+                for a_idx, opt in enumerate(field.options):
                     answers.append({
-                        "name": a_name,
-                        "uuid": a_uuid,
-                        "order": order,
+                        "name": opt,
+                        "uuid": make_uuid(f"concept:{opt}"),
+                        "order": a_idx,
                         "active": True,
                     })
-                    order += 1
 
-            # Register concept (deduplicate by lowercased name)
+            # Register concept (key by lowercased name; LLM has resolved dupes)
             key = concept_name.lower()
             if key not in concepts_registry:
                 concepts_registry[key] = {
@@ -282,7 +265,7 @@ def _build_form(
 
         form_element_groups.append({
             "uuid": group_uuid,
-            "name": truncate(section.name),
+            "name": section.name,
             "displayOrder": g_idx,
             "voided": False,
             "formElements": form_elements,

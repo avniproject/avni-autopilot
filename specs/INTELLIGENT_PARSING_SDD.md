@@ -235,7 +235,7 @@ Per form, in the worst case (every form goes through enrichment):
 | System prompt + schema (cached after first call) | ~2,000 in (10× cached at 0.1× rate) | ~$0.0002 / form |
 | DataFrame + parser FormSpec | ~5,000–30,000 in | ~$0.005–0.03 / form |
 | Output (refined FormSpec + changes) | ~1,000–3,000 out | ~$0.005–0.015 / form |
-| **Total per form** | | **~$0.01–0.05** |
+| **Total per form** | | **~$0.01–0.05** |  
 
 For an org like Ekam (25 forms): worst-case **~$1.25**. With the skip-when-clean rule (§4.4), a clean modelling document costs zero (no API calls). Prompt-cache reads bring repeat-org cost down further.
 
@@ -263,7 +263,7 @@ def generate_bundle(
 Conversation example:
 
 ```
-you> generate astitva, also add a Sponsor field to Pregnancy Enrolment
+you> generate astita, also add a Sponsor field to Pregnancy Enrolment
   ⚙ generate_bundle({"org": "astitva", "user_instructions": "add a Sponsor field to Pregnancy Enrolment"})
 agent> Pipeline ran with 14 auto-applied refinements. 3 changes need your confirmation:
         1. Add 'Sponsor' (Text) to Pregnancy Enrolment   ← from your instruction

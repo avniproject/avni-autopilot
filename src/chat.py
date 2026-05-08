@@ -4,11 +4,20 @@ Interactive chat using LangGraph's prebuilt ReAct agent + ChatAnthropic.
 Run from project root:
     python src/chat.py
 
-The agent has one tool backed by `pipeline.run`:
-  - generate_bundle(org)   — run the LangGraph pipeline; returns a summary
+Tools backed by `src/pipeline.py`:
+  - generate_bundle(org, user_instructions=None)
+        Start a bundle run. Streams the pipeline graph; if the LLM enrichment
+        node calls `interrupt()` to ask the user for confirmation, the tool
+        returns the pending changes (with a thread_id) and the agent presents
+        them. Otherwise returns a successful bundle summary.
+  - resume_bundle(thread_id, resolutions)
+        Continue a paused bundle run with the user's confirmation answers.
+        `resolutions` is a dict keyed by change_id; values are "yes"/"no"/
+        "edit:<new_value>".
 
-Per-conversation state is held by a MemorySaver checkpointer keyed by thread_id,
-so the agent automatically remembers earlier turns.
+Per-conversation state is held by a MemorySaver checkpointer keyed by
+thread_id (chat agent's own state). The bundle pipeline keeps its own
+checkpointer keyed by bundle thread_id so interrupted runs can be resumed.
 
 REPL slash commands (no token cost):
   /quit, /q     exit
@@ -51,10 +60,17 @@ from langchain_core.messages import (  # noqa: E402
 from langchain_core.tools import tool  # noqa: E402
 from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
 from langgraph.prebuilt import create_react_agent  # noqa: E402
+from langgraph.types import Command  # noqa: E402
 
-from pipeline import run as run_pipeline  # noqa: E402
+from pipeline import build_graph as build_pipeline_graph  # noqa: E402
+from pipeline import initial_state as pipeline_initial_state  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
+# Surface our own pipeline/enricher logs at INFO while keeping noisy 3rd-party
+# packages (langchain, anthropic, httpx) at WARNING.
+logging.getLogger("pipeline").setLevel(logging.INFO)
+logging.getLogger("enricher").setLevel(logging.INFO)
+logging.getLogger("llm_helper").setLevel(logging.INFO)
 
 INPUT_ROOT = os.path.join(_ROOT, "resources", "input")
 OUTPUT_ROOT = os.path.join(_ROOT, "resources", "output")
@@ -63,52 +79,122 @@ MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 8192
 
 
+# ── Pipeline (shared, kept hot across tool calls) ────────────────────────────
+
+# One compiled pipeline graph reused across `generate_bundle` and
+# `resume_bundle`. Its in-memory checkpointer keeps per-thread state so a
+# paused run can be resumed by thread_id.
+_pipeline_graph = build_pipeline_graph()
+
+
+def _summarize(state: dict) -> dict:
+    """Build the success-summary dict the chat agent reports."""
+    cancel_count = sum(
+        1 for f in state.get("mapping_specs", [])
+        if "Cancellation" in f["name"]
+    )
+    main_forms = len(state.get("forms_json", [])) - cancel_count
+    return {
+        "status": "done",
+        "org": state.get("org_name", ""),
+        "subject_types": len(state.get("subject_types_json", [])),
+        "programs": len(state.get("programs_json", [])),
+        "encounter_types": len(state.get("encounter_types_json", [])),
+        "main_forms": main_forms,
+        "cancellation_forms": cancel_count,
+        "concepts": len(state.get("concepts_json", [])),
+        "form_mappings": len(state.get("form_mappings_json", [])),
+        "zip_path": state.get("zip_path", ""),
+        "applied_changes": state.get("applied_changes", []),
+        "enrich_warnings": state.get("enrich_warnings", []),
+        "parse_warnings": state.get("parse_warnings", []),
+        "errors": state.get("errors", []),
+    }
+
+
+def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
+    """Invoke the pipeline; if it interrupts, return the pending payload.
+
+    The pipeline graph uses LangGraph's `interrupt()` in `enrich_with_llm`.
+    On invoke that returns a dict whose `__interrupt__` key carries the
+    interrupt info, the caller (the chat agent) presents it to the user.
+    Once the user responds, the agent calls `resume_bundle` with the same
+    thread_id and the pipeline resumes from the interrupt point.
+    """
+    result = _pipeline_graph.invoke(input_or_command, config=config)
+    interrupts = result.get("__interrupt__")
+    if interrupts:
+        # interrupts is a tuple of Interrupt objects; grab the first.
+        first = interrupts[0]
+        payload = getattr(first, "value", None)
+        if payload is None and isinstance(first, dict):
+            payload = first.get("value")
+        return {
+            "status": "needs_confirmation",
+            "thread_id": config["configurable"]["thread_id"],
+            "payload": payload or {},
+        }
+    return _summarize(result)
+
+
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
 
 @tool
-def generate_bundle(org: str) -> dict:
-    """Generate the Avni bundle ZIP for a specific org.
+def generate_bundle(org: str, user_instructions: str | None = None) -> dict:
+    """Start an Avni bundle generation for a specific org.
 
     Reads all .xlsx files in resources/input/<org>/ and produces
-    resources/output/<org>/<Org>.zip. Returns counts of subject types,
-    programs, encounter types, forms (main + cancellation), concepts,
-    form mappings, plus any parse warnings or errors.
+    resources/output/<org>/<Org>.zip. The deterministic parser runs first,
+    then Claude (Haiku) enriches each form's spec — fixing option splits,
+    inferring missing data types, predicting min/max bounds, etc.
+
+    If any refinement requires user confirmation (long-name shortening,
+    duplicate-field disambiguation, min/max bounds, user-driven add/remove),
+    the pipeline pauses and this tool returns a `needs_confirmation` payload.
+    The agent should present the proposed changes to the user, gather their
+    answers as a `{change_id: "yes"|"no"|"edit:<value>"}` dict, then call
+    `resume_bundle(thread_id, resolutions)` to finish the run.
 
     Args:
         org: Org subfolder name, case-insensitive (e.g. 'srijan').
+        user_instructions: Optional natural-language instruction passed to
+            the LLM enrichment step (e.g. "also add a Sponsor field to
+            Pregnancy Enrolment").
     """
     org = org.strip().lower()
     input_dir = os.path.join(INPUT_ROOT, org)
     output_dir = os.path.join(OUTPUT_ROOT, org)
     if not os.path.isdir(input_dir):
-        return {"success": False, "error": f"Input dir not found: {input_dir}"}
+        return {
+            "status": "error",
+            "error": f"Input dir not found: {input_dir}",
+        }
 
-    result = run_pipeline(org, input_dir, output_dir)
-
-    cancel_count = sum(
-        1 for f in result.get("mapping_specs", [])
-        if "Cancellation" in f["name"]
-    )
-    main_forms = len(result.get("forms_json", [])) - cancel_count
-
-    return {
-        "success": not result.get("errors"),
-        "org": org,
-        "subject_types": len(result.get("subject_types_json", [])),
-        "programs": len(result.get("programs_json", [])),
-        "encounter_types": len(result.get("encounter_types_json", [])),
-        "main_forms": main_forms,
-        "cancellation_forms": cancel_count,
-        "concepts": len(result.get("concepts_json", [])),
-        "form_mappings": len(result.get("form_mappings_json", [])),
-        "zip_path": result.get("zip_path", ""),
-        "warnings": result.get("parse_warnings", []),
-        "errors": result.get("errors", []),
-    }
+    thread_id = f"bundle-{org}-{int(time.time())}"
+    config = {"configurable": {"thread_id": thread_id}}
+    initial = pipeline_initial_state(org, input_dir, output_dir, user_instructions)
+    return _run_with_interrupt_handling(initial, config)
 
 
-TOOLS = [generate_bundle]
+@tool
+def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
+    """Resume a paused bundle run after the user confirms pending changes.
+
+    Args:
+        thread_id: The id returned in the prior `generate_bundle` /
+            `resume_bundle` `needs_confirmation` response.
+        resolutions: A dict mapping each `change_id` to one of:
+            "yes"               — apply Claude's proposed `after`
+            "no"                — skip this change
+            "edit:<new_value>"  — apply with a user-provided override
+    """
+    print(f"[debug:resume_bundle] thread_id={thread_id} resolutions={resolutions}")
+    config = {"configurable": {"thread_id": thread_id}}
+    return _run_with_interrupt_handling(Command(resume=resolutions), config)
+
+
+TOOLS = [generate_bundle, resume_bundle]
 
 
 # ── Agent build ──────────────────────────────────────────────────────────────
@@ -118,12 +204,24 @@ produce Avni configuration bundle ZIPs from modelling and scoping Excel
 documents.
 
 Available tools:
-  - generate_bundle(org): run the deterministic pipeline; returns a summary
+  - generate_bundle(org, user_instructions=None) — start a bundle run.
+    May return either a final summary (status="done") or a pause
+    (status="needs_confirmation") with a list of proposed changes.
+  - resume_bundle(thread_id, resolutions) — continue a paused run with
+    the user's confirmation answers. resolutions is a dict mapping each
+    change_id to "yes", "no", or "edit:<new_value>".
 
 Behavior:
-  - When the user asks to generate, run the pipeline and report the summary
-    clearly: counts of subject types, programs, encounter types, forms (main +
-    cancellation), concepts, form mappings, plus any warnings or errors.
+  - When the user asks to generate, call `generate_bundle`.
+  - If it returns status="needs_confirmation", present the proposed
+    changes one at a time to the user (form, field, kind, before, after,
+    reason). Collect their decisions, then call `resume_bundle` with the
+    same thread_id and a resolutions dict.
+  - On status="done", report counts: subject types, programs, encounter
+    types, forms (main + cancellation), concepts, form mappings, plus any
+    warnings or errors.
+  - When the user attaches an instruction like "also add a Sponsor field to
+    Pregnancy Enrolment", pass it through verbatim as user_instructions.
   - Keep replies concise. Use markdown tables only when comparing counts."""
 
 
@@ -271,6 +369,10 @@ _INNER_GRAPH = """\
          │ parse_documents │─────abort──────┤
          └───────┬─────────┘                │
                  │ continue                 │
+                 ▼                          │
+        ┌─────────────────┐                 │
+        │ enrich_with_llm │┄┄ interrupt ┄┄┄ │ ┄┄┄▶ caller resumes via Command
+        └────────┬────────┘                 │
                  ▼                          │
         ┌───────────────────┐               │
         │ generate_entities │               │

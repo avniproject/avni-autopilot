@@ -1,10 +1,17 @@
 """
 LangGraph pipeline that wires the bundle generation workflow:
 
-  discover_files → parse_documents → generate_entities → generate_forms
-      → generate_form_mappings → package_zip
+  discover_files → parse_documents → enrich_with_llm → generate_entities
+      → generate_forms → generate_form_mappings → package_zip
 
-Each node is thin — heavy lifting lives in `generators.py` and `parser.py`.
+Each node is thin — heavy lifting lives in `generators.py`, `parser.py`, and
+`enricher.py`.
+
+`enrich_with_llm` calls Claude (Haiku) to refine each form's parsed FormSpec
+when the parser had to guess (missing data type, mixed delimiters, long names,
+etc.). Auto-apply changes are baked in immediately; pending changes that need
+user confirmation pause the graph via `interrupt()` — the caller resumes with
+`Command(resume=resolutions)`.
 """
 
 from __future__ import annotations
@@ -17,7 +24,10 @@ import sys
 import zipfile
 from typing import Any, TypedDict
 
+import pandas as pd
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
+from langgraph.types import interrupt
 
 # src/ on sys.path so sibling modules (parser, generators, models) are importable
 # regardless of working directory.
@@ -66,6 +76,12 @@ class BundleState(TypedDict):
     file_paths: list[str]
     entity_spec: Any                        # EntitySpec — populated by parse_documents
     parse_warnings: list[str]
+    # LLM enrichment (SDD §8)
+    user_instructions: str | None           # passed through from chat tool
+    pending_changes: list[dict]             # surfaced via interrupt(); empty after resume
+    applied_changes: list[dict]             # for the run summary + audit log
+    enrich_warnings: list[str]
+    # Generated JSON
     subject_types_json: list[dict]
     operational_subject_types_json: dict
     programs_json: list[dict]
@@ -139,6 +155,293 @@ def parse_documents(state: BundleState) -> BundleState:
     return {**state, "entity_spec": entity_spec, "parse_warnings": warnings, "errors": errors}
 
 
+# ── Node 2.5: LLM enrichment ──────────────────────────────────────────────────
+
+
+def _load_form_sheets(file_paths: list[str]) -> dict[str, pd.DataFrame]:
+    """Re-read every .xlsx sheet keyed by sheet name (matches FormSpec.name)."""
+    sheets: dict[str, pd.DataFrame] = {}
+    for path in file_paths:
+        if not str(path).lower().endswith((".xlsx", ".xls")):
+            continue
+        try:
+            xf = pd.ExcelFile(path)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not open %s for enrichment: %s", path, exc)
+            continue
+        for name in xf.sheet_names:
+            try:
+                df = pd.read_excel(xf, sheet_name=name, header=None)
+                sheets[name.strip()] = df
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Could not read sheet '%s' from %s: %s", name, path, exc)
+    return sheets
+
+
+def enrich_with_llm(state: BundleState) -> BundleState:
+    """Call Claude once to refine each form; store any pending changes in state.
+
+    The actual confirmation interrupt + apply lives in `apply_user_decisions`
+    so that resuming after the user confirms only re-runs the apply node — not
+    the LLM call. Re-running the LLM produced fresh non-deterministic
+    change_ids that didn't match the resolutions the user had answered against.
+    """
+    spec = state["entity_spec"]
+    if spec is None or not spec.forms:
+        return {**state, "pending_changes": [], "applied_changes": [], "enrich_warnings": []}
+
+    from enricher import enrich_forms  # noqa: PLC0415
+    from llm_helper import LLMHelper  # noqa: PLC0415
+
+    helper = LLMHelper()
+    if not helper.is_available():
+        log.info("[%s] ANTHROPIC_API_KEY not set; skipping LLM enrichment.", state["org_name"])
+        return {
+            **state,
+            "pending_changes": [],
+            "applied_changes": [],
+            "enrich_warnings": ["LLM enrichment skipped: ANTHROPIC_API_KEY not set."],
+        }
+
+    sheets = _load_form_sheets(state["file_paths"])
+    refined_forms, applied, pending, warnings = enrich_forms(
+        spec.forms, sheets, state.get("user_instructions"), helper,
+    )
+
+    spec.forms = refined_forms
+
+    log.info(
+        "[%s] Enrichment: %d forms refined, %d auto-applied, %d pending, %d warnings.",
+        state["org_name"], len(refined_forms), len(applied), len(pending), len(warnings),
+    )
+
+    return {
+        **state,
+        "entity_spec": spec,
+        "pending_changes": [c.model_dump() for c in pending],
+        "applied_changes": [c.model_dump() for c in applied],
+        "enrich_warnings": warnings,
+    }
+
+
+def apply_user_decisions(state: BundleState) -> BundleState:
+    """If there are pending changes, ask the user via interrupt and apply.
+
+    On resume, only this node re-executes — `enrich_with_llm` already ran
+    on the first pass and its pending list is in state. The change_ids the
+    user confirmed therefore still match.
+    """
+    pending_dicts = state.get("pending_changes") or []
+    if not pending_dicts:
+        return state
+
+    from models import Change  # noqa: PLC0415
+
+    resolutions = interrupt({
+        "kind": "confirm_changes",
+        "org": state["org_name"],
+        "changes": pending_dicts,
+    })
+
+    pending = [Change(**d) for d in pending_dicts]
+    spec = state["entity_spec"]
+    confirmed_applied, post_warnings = _apply_resolutions(
+        spec.forms, pending, resolutions or {},
+    )
+
+    applied_dicts = list(state.get("applied_changes") or [])
+    applied_dicts.extend(c.model_dump() for c in confirmed_applied)
+    warnings = list(state.get("enrich_warnings") or [])
+    warnings.extend(post_warnings)
+
+    return {
+        **state,
+        "entity_spec": spec,
+        "pending_changes": [],
+        "applied_changes": applied_dicts,
+        "enrich_warnings": warnings,
+    }
+
+
+def _apply_resolutions(
+    forms: list,
+    pending: list,
+    resolutions: dict[str, str],
+) -> tuple[list, list[str]]:
+    """Apply user-confirmed Changes (from `interrupt()`) to the FormSpec list.
+
+    Each resolution is one of:
+        "yes"               — apply Claude's `after` payload as-is
+        "no"                — skip this change
+        "edit:<value>"      — apply with the user's value substituted into `after`
+                              (format depends on kind; see _parse_edit)
+
+    Mutates the FormSpec list in place. Returns (applied_changes, warnings).
+    """
+    from models import Change  # noqa: PLC0415
+
+    applied: list[Change] = []
+    warnings: list[str] = []
+    by_id = {c.change_id: c for c in pending}
+    forms_by_name = {f.name: f for f in forms}
+
+    log.info(
+        "[apply] received %d resolution(s) for %d pending change(s); pending_ids=%s",
+        len(resolutions), len(pending), list(by_id.keys()),
+    )
+
+    for change_id, decision in resolutions.items():
+        change = by_id.get(change_id)
+        if change is None:
+            log.warning(
+                "[apply] %s SKIP: change_id not in pending list (pending=%s)",
+                change_id, list(by_id.keys()),
+            )
+            warnings.append(f"Resolution for unknown change_id '{change_id}'")
+            continue
+        if decision == "no" or decision is False:
+            log.info("[apply] %s SKIP: user said no", change_id)
+            continue
+        target_form = forms_by_name.get(change.form)
+        if target_form is None:
+            log.warning(
+                "[apply] %s SKIP: form '%s' not in state (forms=%s)",
+                change_id, change.form, list(forms_by_name.keys()),
+            )
+            warnings.append(f"Change {change_id} targets unknown form '{change.form}'")
+            continue
+
+        # Resolve `after` — either Claude's proposal or the user's edit override.
+        after = dict(change.after or {})
+        if isinstance(decision, str) and decision.startswith("edit:"):
+            after = _parse_edit(decision[len("edit:"):], change.kind, after, warnings, change_id)
+
+        log.info(
+            "[apply] %s start  form='%s' kind=%s field_len=%d field_preview=%r after=%r",
+            change_id, change.form, change.kind,
+            len(change.field), change.field[:80], after,
+        )
+
+        try:
+            ok = _apply_one(target_form, change, after, warnings)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("[apply] %s RAISED", change_id)
+            warnings.append(f"Apply {change_id} ({change.kind}) raised: {exc}")
+            continue
+        if ok:
+            applied.append(change.model_copy(update={"after": after}))
+            log.info(
+                "[apply] %s OK  field renamed to %r",
+                change_id, after.get("name"),
+            )
+        else:
+            log.warning(
+                "[apply] %s NO-OP  form='%s' kind=%s field_preview=%r — _apply_one returned False",
+                change_id, change.form, change.kind, change.field[:80],
+            )
+    return applied, warnings
+
+
+def _all_fields_in(form) -> list:
+    """Yield every FieldSpec in a form (top-level + every section), in order."""
+    out = list(form.fields or [])
+    for section in form.sections or []:
+        out.extend(section.fields)
+    return out
+
+
+def _find_field(form, name: str, section: str | None = None):
+    """Locate a FieldSpec by name; if `section` is given, prefer that section's copy.
+
+    Used by duplicate_field to disambiguate two same-named occurrences.
+    """
+    name_l = name.strip().lower()
+    if section:
+        section_l = section.strip().lower()
+        for sec in form.sections or []:
+            if sec.name.strip().lower() == section_l:
+                for f in sec.fields:
+                    if f.name.strip().lower() == name_l:
+                        return f
+        # Section hint didn't match; fall through to any match.
+    for f in _all_fields_in(form):
+        if f.name.strip().lower() == name_l:
+            return f
+    return None
+
+
+def _apply_one(form, change, after: dict, warnings: list[str]) -> bool:
+    """Mutate the form per `change.kind`. Returns True if mutation happened.
+
+    Only `long_name` and `duplicate_field` are currently handled — those are
+    the only kinds the LLM is allowed to emit (see `llm_helper._SYSTEM_PROMPT`
+    and the `ChangeKind` Literal in `models.py`).
+    """
+    kind = change.kind
+    field_name = change.field
+    new_name = after.get("name")
+    if not new_name:
+        return False
+
+    if kind == "long_name":
+        f = _find_field(form, field_name)
+        if f is None:
+            existing = [(len(fld.name), fld.name[:80]) for fld in _all_fields_in(form)]
+            log.warning(
+                "[apply:long_name] lookup FAILED in form='%s'\n"
+                "  searching for: len=%d preview=%r\n"
+                "  form has %d field(s); long ones: %s",
+                form.name, len(field_name), field_name[:80],
+                len(existing),
+                [(L, p) for (L, p) in existing if L > 200],
+            )
+            warnings.append(f"long_name: field '{field_name[:80]}…' not found in '{form.name}'")
+            return False
+        log.info(
+            "[apply:long_name] found field id=%d form_id=%d len=%d, renaming to len=%d",
+            id(f), id(form), len(f.name), len(new_name),
+        )
+        f.name = new_name
+        # Verify the mutation actually persisted on the form's field list.
+        post = _find_field(form, new_name)
+        log.info(
+            "[apply:long_name] post-mutation lookup-by-new-name: %s (id=%s)",
+            "FOUND" if post is not None else "MISSING",
+            id(post) if post is not None else "n/a",
+        )
+        return True
+
+    if kind == "duplicate_field":
+        # `before.section` disambiguates which occurrence to rename.
+        before = change.before or {}
+        section = before.get("section") if isinstance(before, dict) else None
+        f = _find_field(form, field_name, section=section)
+        if f is None:
+            warnings.append(
+                f"duplicate_field: '{field_name}' not found in section '{section}' of '{form.name}'"
+            )
+            return False
+        f.name = new_name
+        return True
+
+    warnings.append(f"Unknown change kind '{kind}' for {change.change_id}")
+    return False
+
+
+def _parse_edit(raw: str, kind: str, fallback: dict, warnings: list[str], change_id: str) -> dict:
+    """Translate a user 'edit:<new name>' string into an `after` dict.
+
+    Both supported kinds (long_name, duplicate_field) take the raw value as
+    the new field name.
+    """
+    out = dict(fallback)
+    if kind in ("long_name", "duplicate_field"):
+        out["name"] = raw.strip()
+    else:
+        warnings.append(f"edit not supported for kind={kind} on {change_id}; using LLM proposal")
+    return out
+
+
 # ── Node 3: generate entity-level JSON ────────────────────────────────────────
 
 
@@ -167,6 +470,20 @@ def generate_entities(state: BundleState) -> BundleState:
 
 def generate_forms(state: BundleState) -> BundleState:
     spec = state["entity_spec"]
+
+    # Diagnostic: dump field names that are still > 200 chars when generate_forms
+    # starts. If a long_name change was applied in enrich_with_llm but the long
+    # name survives here, the mutation didn't propagate through the state.
+    for fm in spec.forms:
+        all_fields = list(fm.fields or [])
+        for sec in fm.sections or []:
+            all_fields.extend(sec.fields)
+        long_here = [(len(f.name), f.name[:80]) for f in all_fields if len(f.name) > 200]
+        if long_here:
+            log.warning(
+                "[generate_forms] form='%s' still has %d long-name field(s): %s",
+                fm.name, len(long_here), long_here,
+            )
 
     result = make_forms_and_concepts(spec.forms)
     forms_json = result["forms"]
@@ -285,11 +602,13 @@ def _can_proceed(state: BundleState) -> str:
 # ── Graph assembly ────────────────────────────────────────────────────────────
 
 
-def build_graph() -> Any:
+def build_graph(checkpointer=None) -> Any:
     graph = StateGraph(BundleState)
 
     graph.add_node("discover_files", discover_files)
     graph.add_node("parse_documents", parse_documents)
+    graph.add_node("enrich_with_llm", enrich_with_llm)
+    graph.add_node("apply_user_decisions", apply_user_decisions)
     graph.add_node("generate_entities", generate_entities)
     graph.add_node("generate_forms", generate_forms)
     graph.add_node("generate_form_mappings", generate_form_mappings)
@@ -302,28 +621,35 @@ def build_graph() -> Any:
     )
     graph.add_conditional_edges(
         "parse_documents", _can_proceed,
-        {"continue": "generate_entities", "abort": END},
+        {"continue": "enrich_with_llm", "abort": END},
     )
+    graph.add_edge("enrich_with_llm", "apply_user_decisions")
+    graph.add_edge("apply_user_decisions", "generate_entities")
     graph.add_edge("generate_entities", "generate_forms")
     graph.add_edge("generate_forms", "generate_form_mappings")
     graph.add_edge("generate_form_mappings", "package_zip")
     graph.add_edge("package_zip", END)
 
-    return graph.compile()
+    # A checkpointer is required for `interrupt()` to be resumable.
+    return graph.compile(checkpointer=checkpointer or MemorySaver())
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
 
-def run(org_name: str, input_dir: str, output_dir: str) -> BundleState:
-    pipeline = build_graph()
-    initial: BundleState = {
+def initial_state(org_name: str, input_dir: str, output_dir: str,
+                   user_instructions: str | None = None) -> BundleState:
+    return {
         "org_name": org_name,
         "input_dir": input_dir,
         "output_dir": output_dir,
         "file_paths": [],
         "entity_spec": None,
         "parse_warnings": [],
+        "user_instructions": user_instructions,
+        "pending_changes": [],
+        "applied_changes": [],
+        "enrich_warnings": [],
         "subject_types_json": [],
         "operational_subject_types_json": {},
         "programs_json": [],
@@ -339,4 +665,20 @@ def run(org_name: str, input_dir: str, output_dir: str) -> BundleState:
         "zip_path": "",
         "errors": [],
     }
-    return pipeline.invoke(initial)
+
+
+def run(org_name: str, input_dir: str, output_dir: str,
+         user_instructions: str | None = None,
+         thread_id: str | None = None) -> BundleState:
+    """Run the pipeline end-to-end. If it interrupts, the partial state is returned.
+
+    The chat host typically uses `build_graph()` directly to stream events and
+    handle interrupts; `run()` is a convenience for non-interactive callers
+    (no API key, clean inputs, no confirmation needed).
+    """
+    pipeline = build_graph()
+    config = {"configurable": {"thread_id": thread_id or f"thread-{org_name}"}}
+    return pipeline.invoke(
+        initial_state(org_name, input_dir, output_dir, user_instructions),
+        config=config,
+    )

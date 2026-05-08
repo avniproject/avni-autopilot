@@ -8,9 +8,12 @@ Used by:
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+_log = logging.getLogger(__name__)
 
 
 # ── Field-level ────────────────────────────────────────────────────────────────
@@ -20,6 +23,14 @@ class SkipLogicSpec(BaseModel):
     dependsOn: str
     condition: str = "="
     value: str = ""
+
+
+# Names of attributes the parser had to guess (source cell was blank/unmapped).
+# Listed here as a Literal so a typo in `field.inferred_fields` fails Pydantic
+# validation rather than silently never matching.
+InferredField = Literal[
+    "dataType", "options", "selectionType", "unit"
+]
 
 
 class FieldSpec(BaseModel):
@@ -38,6 +49,9 @@ class FieldSpec(BaseModel):
     isQuestionGroup: bool = False
     isRepeatable: bool = False  # Only meaningful when isQuestionGroup=True
     children: list["FieldSpec"] | None = None  # Child fields for QG/RQG
+    # Attributes the parser had to guess. Populated by parser.py, consumed by
+    # enrich_with_llm to decide whether to ask the LLM about this field.
+    inferred_fields: set[InferredField] = Field(default_factory=set)
 
 
 # ── Form-level ─────────────────────────────────────────────────────────────────
@@ -254,3 +268,70 @@ class ValidateSpecResponse(BaseModel):
     errors: list[str]
     warnings: list[str]
     suggestions: list[str]
+
+
+# ── LLM enrichment types (SDD §4.2, §3) ──────────────────────────────────────
+
+
+ChangeKind = Literal[
+    "long_name",
+    "duplicate_field",
+]
+
+
+class Change(BaseModel):
+    """One refinement Claude proposes vs. the deterministic parser's output.
+
+    Every Change is presented to the user for confirmation before being
+    applied — there is no auto-apply path right now.
+    """
+    change_id: str
+    form: str
+    field: str = ""
+    kind: ChangeKind
+    before: dict[str, Any] = Field(default_factory=dict)
+    after: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+
+
+class EnrichedFormSpec(BaseModel):
+    """Wire format for the LLM enrichment call.
+
+    Lives only between `enrich_with_llm` and the change-application step; never
+    persisted, never passed to `generators.py`. The refined `form` flows
+    downstream and `changes` get split into auto-apply vs pending.
+    """
+    form: FormSpec
+    changes: list[Change] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_unsupported_change_kinds(cls, data: Any) -> Any:
+        # Haiku occasionally invents kinds outside ChangeKind (e.g. "skip_logic"
+        # when the source sheet has skip-logic columns). The strict Literal
+        # would otherwise reject the whole response and lose every valid
+        # refinement on this form, so drop unknowns here with a warning.
+        if not isinstance(data, dict):
+            return data
+        raw_changes = data.get("changes")
+        if not isinstance(raw_changes, list):
+            return data
+        allowed = set(get_args(ChangeKind))
+        kept: list[Any] = []
+        dropped: list[str] = []
+        for ch in raw_changes:
+            if not isinstance(ch, dict):
+                kept.append(ch)
+                continue
+            kind = ch.get("kind")
+            if kind in allowed:
+                kept.append(ch)
+            else:
+                dropped.append(f"{ch.get('change_id', '?')}:{kind!r}")
+        if dropped:
+            _log.warning(
+                "EnrichedFormSpec: dropped %d change(s) with unsupported kind: %s",
+                len(dropped), ", ".join(dropped),
+            )
+        data["changes"] = kept
+        return data
