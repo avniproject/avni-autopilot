@@ -1,0 +1,9 @@
+1. Use Python f-string for logging
+2. Provide production quality comments & doc-string that is brief, wherever necessary and relevant.
+3. Do not say you/yours/me/us/we in the code comments and doc-string.
+4. Provide production quality code that is robust, maintainable, and fault-tolerant.
+5. Use production-quality, meaningful and maintainable variable, class and function names in the code.
+6. Add common functions and helpers in /utils. Don’t duplicate code & reusable functions.
+7. Provide/update test cases with Usage clearly mentioned in the doc-string
+8. Provide high-quality, comprehensive and unambiguous prompts.
+9. Always find root-cause before suggesting fix for an issue.
