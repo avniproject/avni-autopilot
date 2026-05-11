@@ -323,3 +323,44 @@ class EnrichedFormSpec(BaseModel):
             )
         data["changes"] = kept
         return data
+
+
+# ── Bundle field editing (BUNDLE_EDITING_SDD) ────────────────────────────────
+
+
+EditOpKind = Literal["field.add", "field.rename", "field.remove"]
+
+RejectionKind = Literal[
+    "not_found",
+    "ambiguous_target",
+    "duplicate_name",
+    "schema",
+    "integrity",
+]
+
+
+class EditOperation(BaseModel):
+    """One field-level edit applied to an already-generated bundle."""
+    op_id: str
+    kind: EditOpKind
+    target: dict[str, str] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class RejectedOp(BaseModel):
+    op_id: str
+    kind: RejectionKind
+    reason: str
+
+
+class EditResult(BaseModel):
+    bundle_path: str
+    applied: list[str] = Field(default_factory=list)
+    rejected: list[RejectedOp] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    forms_modified: list[str] = Field(default_factory=list)
+    form_elements_added: int = 0
+    form_elements_reinstated: int = 0
+    form_elements_voided: int = 0
+    form_elements_renamed: int = 0
+    concepts_appended: int = 0

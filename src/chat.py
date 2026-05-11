@@ -193,14 +193,79 @@ def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
     return _run_with_interrupt_handling(Command(resume=resolutions), config)
 
 
-TOOLS = [generate_bundle, resume_bundle]
+# ── Bundle editing tools (specs/BUNDLE_EDITING_SDD.md) ────────────────────────
+
+from bundle_editor import (  # noqa: E402
+    apply_field_edits,
+    list_bundle_fields as _list_bundle_fields,
+)
+
+
+@tool
+def list_bundle_fields(bundle_path: str) -> dict:
+    """Inspect an existing bundle (ZIP or unpacked directory) and return a
+    compact summary of every form, section, and field.
+
+    Use this BEFORE calling `edit_bundle_fields` so your edit operations
+    reference real names (case and punctuation matter — match is exact).
+
+    Args:
+        bundle_path: Path to a bundle ZIP file or an unpacked bundle directory
+            (e.g. 'resources/output/ekam/Ekam.zip' or 'resources/output/ekam').
+    """
+    try:
+        return {"status": "done", "result": _list_bundle_fields(bundle_path)}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "error": str(exc)}
+
+
+@tool
+def edit_bundle_fields(bundle_path: str, operations: list[dict]) -> dict:
+    """Add, rename, or remove fields in an already-generated bundle ZIP.
+
+    Each operation has shape:
+      {
+        "op_id":  "<your-id>",
+        "kind":   "field.add" | "field.rename" | "field.remove",
+        "target": { "form": "...", "section": "...", "field": "..."? },
+        "payload": { ... }     # kind-specific
+      }
+
+    field.add payload: name (required), dataType (default 'Text'),
+      mandatory?, options? (required for Coded), selectionType?, unit?, min?,
+      max?.
+    field.rename payload: new_name (required).
+    field.remove payload: empty.
+
+    Matching is case-folded + whitespace-stripped EXACT (no fuzzy). On a
+    mismatch the op is rejected with kind 'not_found' / 'ambiguous_target' /
+    'duplicate_name' / 'schema'.
+
+    Removes set `voided: true` on the form element so the server soft-deletes
+    the corresponding record on re-upload. Re-adding the same field name later
+    reinstates the original element (UUID preserved).
+
+    Args:
+        bundle_path: Bundle ZIP or unpacked directory.
+        operations: List of edit operation dicts (see above).
+    """
+    try:
+        result = apply_field_edits(bundle_path, operations)
+        return {"status": "done", "result": result.model_dump()}
+    except FileNotFoundError as exc:
+        return {"status": "error", "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "error": f"unexpected: {exc}"}
+
+
+TOOLS = [generate_bundle, resume_bundle, list_bundle_fields, edit_bundle_fields]
 
 
 # ── Agent build ──────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are an Avni bundle generator assistant. You help the user
 produce Avni configuration bundle ZIPs from modelling and scoping Excel
-documents.
+documents, and edit fields inside an already-generated bundle.
 
 Available tools:
   - generate_bundle(org, user_instructions=None) — start a bundle run.
@@ -209,8 +274,14 @@ Available tools:
   - resume_bundle(thread_id, resolutions) — continue a paused run with
     the user's confirmation answers. resolutions is a dict mapping each
     change_id to "yes", "no", or "edit:<new_value>".
+  - list_bundle_fields(bundle_path) — inspect an existing bundle and
+    return a compact form/section/field summary.
+  - edit_bundle_fields(bundle_path, operations) — add / rename / remove
+    fields in an already-generated bundle. Operations are typed; matching
+    is exact (case-folded + whitespace-stripped, no fuzzy).
 
 Behavior:
+  Generation:
   - When the user asks to generate, call `generate_bundle`.
   - If it returns status="needs_confirmation", present the proposed
     changes one at a time to the user (form, field, kind, before, after,
@@ -221,7 +292,22 @@ Behavior:
     warnings or errors.
   - When the user attaches an instruction like "also add a Sponsor field to
     Pregnancy Enrolment", pass it through verbatim as user_instructions.
-  - Keep replies concise. Use markdown tables only when comparing counts."""
+
+  Editing:
+  - When the user asks to add, rename, or remove a field, ALWAYS call
+    `list_bundle_fields` first so your operations refer to real
+    form/section/field names. Never guess names.
+  - Build a typed `operations` list and call `edit_bundle_fields`. Use a
+    short stable `op_id` per op (op-1, op-2, ...).
+  - For field.add of a Coded field, pass options as a list of strings.
+  - Report which forms were modified (`forms_modified`), counts of
+    added/reinstated/voided/renamed elements, and surface any rejections
+    verbatim (with op_id, kind, reason).
+  - Heads-up to the user: removing a field marks it voided so the server
+    soft-deletes the record on re-upload; re-adding the same field name
+    later reinstates the original element.
+
+  Keep replies concise. Use markdown tables only when comparing counts."""
 
 
 def build_agent():
