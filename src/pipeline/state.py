@@ -7,7 +7,10 @@ Owns the shape of state that flows through every node, plus the
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
+
+
+Mode = Literal["generate", "edit_from_spec"]
 
 
 class BundleState(TypedDict):
@@ -17,6 +20,11 @@ class BundleState(TypedDict):
     file_paths: list[str]
     entity_spec: Any                        # EntitySpec — populated by parse_documents
     parse_warnings: list[str]
+    # Mode-driven branching (BUNDLE_EDIT_FROM_SPEC_SDD §3.2)
+    mode: Mode                              # "generate" (default) | "edit_from_spec"
+    bundle_path: str                        # only used in edit_from_spec mode
+    diff_ops: list[dict]                    # computed by diff_against_bundle
+    edit_result: dict                       # set by apply_diff_edits (an EditResult dump)
     # LLM enrichment
     user_instructions: str | None           # passed through from chat tool
     pending_changes: list[dict]             # surfaced via interrupt(); empty after resume
@@ -44,6 +52,8 @@ def initial_state(
     input_dir: str,
     output_dir: str,
     user_instructions: str | None = None,
+    mode: Mode = "generate",
+    bundle_path: str = "",
 ) -> BundleState:
     return {
         "org_name": org_name,
@@ -52,6 +62,10 @@ def initial_state(
         "file_paths": [],
         "entity_spec": None,
         "parse_warnings": [],
+        "mode": mode,
+        "bundle_path": bundle_path,
+        "diff_ops": [],
+        "edit_result": {},
         "user_instructions": user_instructions,
         "pending_changes": [],
         "applied_changes": [],

@@ -122,6 +122,8 @@ def _apply_one(
         _apply_rename(op, form, section, concepts, result, form_name)
     elif op.kind == "field.remove":
         _apply_remove(op, section, result)
+    elif op.kind == "section.reorder_fields":
+        _apply_reorder(op, section, result)
     else:
         raise _OpReject("schema", f"unsupported kind: {op.kind}")
 
@@ -259,6 +261,43 @@ def _apply_remove(op: EditOperation, section: dict, result: EditResult) -> None:
         )
     existing["voided"] = True
     result.form_elements_voided += 1
+
+
+def _apply_reorder(op: EditOperation, section: dict, result: EditResult) -> None:
+    """Reassign displayOrder values for the section's live form elements.
+
+    Payload: {"order": [<field_name>, <field_name>, ...]}.
+    The list must contain every live form element in the section, exactly
+    once. Voided elements are not part of the order and keep their existing
+    displayOrder (which may now overlap with live ones — that's fine because
+    the integrity check enforces uniqueness only among live elements).
+    """
+    order = op.payload.get("order")
+    if not isinstance(order, list) or not order:
+        raise _OpReject("schema", "payload.order (non-empty list) required for section.reorder_fields")
+
+    live_elements = [e for e in section.get("formElements", []) if not e.get("voided", False)]
+    live_by_norm = {_norm(e.get("name", "")): e for e in live_elements}
+
+    if len(live_by_norm) != len(live_elements):
+        raise _OpReject(
+            "ambiguous_target",
+            f"section {section.get('name')!r} has duplicate live field names; cannot reorder unambiguously",
+        )
+
+    requested = [_norm(n) for n in order]
+    if len(set(requested)) != len(requested):
+        raise _OpReject("schema", "payload.order contains duplicate names")
+
+    missing = [n for n in requested if n not in live_by_norm]
+    if missing:
+        raise _OpReject("not_found", f"reorder names not found among live fields: {missing}")
+    extra = [n for n in live_by_norm if n not in requested]
+    if extra:
+        raise _OpReject("schema", f"reorder must include every live field; missing: {extra}")
+
+    for idx, norm_name in enumerate(requested, start=1):
+        live_by_norm[norm_name]["displayOrder"] = idx
 
 
 # ── Builders ──────────────────────────────────────────────────────────────────
@@ -565,6 +604,32 @@ def _parse_operations(raw: list[dict]) -> tuple[list[EditOperation], list[Reject
         except ValidationError as exc:
             rejects.append(RejectedOp(op_id=op_id, kind="schema", reason=str(exc)))
     return ops, rejects
+
+
+# ── Snapshot loader for edit-from-spec diff ───────────────────────────────────
+
+
+def load_bundle_snapshot(bundle_path: str) -> dict:
+    """Load an existing bundle into the same shape as the generator's output:
+
+        {"forms": [{"file_name": str, "content": dict}, ...],
+         "concepts": [<concept_dict>, ...]}
+
+    This matches what `generate_forms` puts into `state["forms_json"]` /
+    `state["concepts_json"]`, so the diff function (`domain/diff.py`) can
+    compare like-for-like.
+    """
+    with _open_bundle(bundle_path) as workdir:
+        forms_map = _load_forms(workdir)
+        concepts_map = _load_concepts(workdir)
+
+    return {
+        "forms": [
+            {"file_name": fname, "content": form}
+            for fname, form in sorted(forms_map.items())
+        ],
+        "concepts": list(concepts_map.values()),
+    }
 
 
 # ── Helper for the agent: a compact summary of bundle fields ──────────────────

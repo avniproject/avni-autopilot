@@ -18,7 +18,9 @@ from typing import Any
 import pandas as pd
 from langgraph.types import interrupt
 
+from domain.bundle_editor import apply_field_edits, load_bundle_snapshot
 from domain.changes import apply_resolutions
+from domain.diff import diff
 from domain.enricher import enrich_forms
 from domain.generators import (
     make_address_level_types,
@@ -329,3 +331,76 @@ def package_zip(state: BundleState) -> dict:
 
     log.info("[%s] Bundle written → %s", org_name, zip_path)
     return {"zip_path": zip_path, "errors": errors}
+
+
+# ── Edit-from-spec branch nodes (BUNDLE_EDIT_FROM_SPEC_SDD) ───────────────────
+
+
+def diff_against_bundle(state: BundleState) -> dict:
+    """Diff the freshly-generated desired bundle (in state) against the
+    existing bundle on disk. Emits `diff_ops`.
+
+    No I/O beyond loading the existing bundle. Computes ops in memory.
+    """
+    bundle_path = state.get("bundle_path", "")
+    errors = list(state.get("errors", []))
+
+    if not bundle_path or not os.path.exists(bundle_path):
+        errors.append(f"edit_from_spec: bundle not found at {bundle_path!r}")
+        return {"diff_ops": [], "errors": errors}
+
+    desired_bundle = {
+        "forms": state.get("forms_json", []),
+        "concepts": state.get("concepts_json", []),
+    }
+    current_bundle = load_bundle_snapshot(bundle_path)
+
+    ops = diff(desired_bundle, current_bundle)
+
+    log.info(
+        "[%s] diff vs %s: %d op(s) (%s)",
+        state["org_name"], os.path.basename(bundle_path), len(ops),
+        ", ".join(f"{kind}={n}" for kind, n in _count_by_kind(ops).items()) or "none",
+    )
+    return {"diff_ops": ops, "errors": errors}
+
+
+def apply_diff_edits(state: BundleState) -> dict:
+    """Apply the diff_ops to the existing bundle in place.
+
+    `apply_field_edits` handles loading, applying, integrity check,
+    write-back, and atomic re-zip. The node is intentionally thin.
+    """
+    bundle_path = state["bundle_path"]
+    ops = state.get("diff_ops", [])
+    errors = list(state.get("errors", []))
+
+    if not ops:
+        log.info("[%s] edit_from_spec: no ops to apply (bundle already in sync)",
+                 state["org_name"])
+        return {"edit_result": {"bundle_path": bundle_path, "applied": [],
+                                "rejected": [], "warnings": [],
+                                "forms_modified": []}}
+
+    result = apply_field_edits(bundle_path, ops)
+
+    if result.rejected:
+        errors.append(
+            f"edit_from_spec: {len(result.rejected)} op(s) rejected — bundle may be partially updated"
+        )
+
+    log.info(
+        "[%s] edit_from_spec applied: +%d added, %d voided, %d renamed, %d reinstated",
+        state["org_name"], result.form_elements_added, result.form_elements_voided,
+        result.form_elements_renamed, result.form_elements_reinstated,
+    )
+    return {"edit_result": result.model_dump(), "errors": errors,
+            "zip_path": bundle_path}
+
+
+def _count_by_kind(ops: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for op in ops:
+        k = op.get("kind", "?")
+        counts[k] = counts.get(k, 0) + 1
+    return counts

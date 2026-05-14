@@ -39,8 +39,9 @@ def _summarize(state: dict) -> dict:
         if "Cancellation" in f["name"]
     )
     main_forms = len(state.get("forms_json", [])) - cancel_count
-    return {
+    summary = {
         "status": "done",
+        "mode": state.get("mode", "generate"),
         "org": state.get("org_name", ""),
         "subject_types": len(state.get("subject_types_json", [])),
         "programs": len(state.get("programs_json", [])),
@@ -55,6 +56,10 @@ def _summarize(state: dict) -> dict:
         "parse_warnings": state.get("parse_warnings", []),
         "errors": state.get("errors", []),
     }
+    # edit_from_spec adds a diff summary
+    if state.get("mode") == "edit_from_spec":
+        summary["edit_result"] = state.get("edit_result", {})
+    return summary
 
 
 def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
@@ -119,6 +124,52 @@ def generate_bundle(org: str, user_instructions: str | None = None) -> dict:
     thread_id = f"bundle-{org}-{int(time.time())}"
     config = {"configurable": {"thread_id": thread_id}}
     initial = initial_state(org, input_dir, output_dir, user_instructions)
+    return _run_with_interrupt_handling(initial, config)
+
+
+@tool
+def edit_bundle_from_spec(org: str, user_instructions: str | None = None) -> dict:
+    """Update an already-generated bundle from the current source .xlsx (the spec).
+
+    Reads resources/input/<org>/*.xlsx, re-runs the deterministic parser and
+    the LLM enrichment pass (may pause for user confirmation of long-name
+    shortenings / duplicate-field disambiguations — same as generate_bundle),
+    then diffs the regenerated desired bundle against the existing
+    resources/output/<org>/<Org>.zip and applies the resulting field-level
+    edits (add / remove / reorder) atomically.
+
+    Field UUIDs are preserved across the edit. Removed fields are voided so
+    Avni soft-deletes the records on re-upload; surviving fields keep their
+    UUIDs and observation history.
+
+    If LLM enrichment proposes any changes, the pipeline pauses and this
+    tool returns `needs_confirmation`. Resume with the existing
+    `resume_bundle(thread_id, resolutions)` — same as for generate_bundle.
+
+    Args:
+        org: Org subfolder name, case-insensitive (e.g. 'srijan').
+        user_instructions: Optional natural-language instruction passed to
+            the LLM enrichment step.
+    """
+    org = org.strip().lower()
+    input_dir = os.path.join(settings.input_root, org)
+    bundle_path = os.path.join(settings.output_root, org, f"{org.capitalize()}.zip")
+    if not os.path.isdir(input_dir):
+        return {"status": "error", "error": f"Input dir not found: {input_dir}"}
+    if not os.path.exists(bundle_path):
+        return {
+            "status": "error",
+            "error": (f"Bundle not found: {bundle_path}. "
+                      f"Use generate_bundle('{org}') first to create one."),
+        }
+
+    output_dir = os.path.join(settings.output_root, org)
+    thread_id = f"bundle-{org}-{int(time.time())}"
+    config = {"configurable": {"thread_id": thread_id}}
+    initial = initial_state(
+        org, input_dir, output_dir, user_instructions,
+        mode="edit_from_spec", bundle_path=bundle_path,
+    )
     return _run_with_interrupt_handling(initial, config)
 
 
@@ -195,4 +246,10 @@ def edit_bundle_fields(bundle_path: str, operations: list[dict]) -> dict:
         return {"status": "error", "error": f"unexpected: {exc}"}
 
 
-TOOLS = [generate_bundle, resume_bundle, list_bundle_fields, edit_bundle_fields]
+TOOLS = [
+    generate_bundle,
+    edit_bundle_from_spec,
+    resume_bundle,
+    list_bundle_fields,
+    edit_bundle_fields,
+]

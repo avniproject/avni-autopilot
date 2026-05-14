@@ -13,7 +13,9 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
 from pipeline.nodes import (
+    apply_diff_edits,
     apply_user_decisions,
+    diff_against_bundle,
     discover_files,
     enrich_with_llm,
     generate_entities,
@@ -33,6 +35,15 @@ def _can_proceed(state: BundleState) -> str:
     return "continue"
 
 
+def _route_after_generation(state: BundleState) -> str:
+    """Branch after the desired bundle is fully realized in state.
+
+    Generate mode → write a fresh bundle (package_zip).
+    Edit-from-spec mode → diff against existing bundle, apply edits.
+    """
+    return "edit_from_spec" if state.get("mode") == "edit_from_spec" else "generate"
+
+
 def build_graph(checkpointer=None) -> Any:
     graph = StateGraph(BundleState)
 
@@ -44,6 +55,9 @@ def build_graph(checkpointer=None) -> Any:
     graph.add_node("generate_forms", generate_forms)
     graph.add_node("generate_form_mappings", generate_form_mappings)
     graph.add_node("package_zip", package_zip)
+    # Edit-from-spec branch (BUNDLE_EDIT_FROM_SPEC_SDD)
+    graph.add_node("diff_against_bundle", diff_against_bundle)
+    graph.add_node("apply_diff_edits", apply_diff_edits)
 
     graph.set_entry_point("discover_files")
     graph.add_conditional_edges(
@@ -58,8 +72,14 @@ def build_graph(checkpointer=None) -> Any:
     graph.add_edge("apply_user_decisions", "generate_entities")
     graph.add_edge("generate_entities", "generate_forms")
     graph.add_edge("generate_forms", "generate_form_mappings")
-    graph.add_edge("generate_form_mappings", "package_zip")
+    # Branch on mode after the desired bundle is fully realized.
+    graph.add_conditional_edges(
+        "generate_form_mappings", _route_after_generation,
+        {"generate": "package_zip", "edit_from_spec": "diff_against_bundle"},
+    )
     graph.add_edge("package_zip", END)
+    graph.add_edge("diff_against_bundle", "apply_diff_edits")
+    graph.add_edge("apply_diff_edits", END)
 
     # A checkpointer is required for `interrupt()` to be resumable.
     return graph.compile(checkpointer=checkpointer or MemorySaver())

@@ -328,7 +328,12 @@ class EnrichedFormSpec(BaseModel):
 # ── Bundle field editing (BUNDLE_EDITING_SDD) ────────────────────────────────
 
 
-EditOpKind = Literal["field.add", "field.rename", "field.remove"]
+EditOpKind = Literal[
+    "field.add",
+    "field.rename",
+    "field.remove",
+    "section.reorder_fields",
+]
 
 RejectionKind = Literal[
     "not_found",

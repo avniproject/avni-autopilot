@@ -46,6 +46,17 @@ def _stream_turn(agent, user_input: str, config: dict) -> None:
     """Send one user message, stream agent text + tool calls, return on completion."""
     started_text = False
     seen_tool_calls: set[str] = set()
+    shown_thinking_hint = False
+
+    # Indicator so the user sees activity while the model is in adaptive
+    # thinking mode (no visible text yet). Cleared when actual content arrives.
+    print("  (thinking…)", end="", flush=True)
+
+    def _clear_thinking() -> None:
+        nonlocal shown_thinking_hint
+        if not shown_thinking_hint:
+            print("\r" + " " * 14 + "\r", end="", flush=True)
+            shown_thinking_hint = True
 
     for mode, chunk in agent.stream(
         {"messages": [HumanMessage(content=user_input)]},
@@ -57,6 +68,7 @@ def _stream_turn(agent, user_input: str, config: dict) -> None:
             if isinstance(msg_chunk, AIMessageChunk):
                 text = _extract_text(msg_chunk.content)
                 if text:
+                    _clear_thinking()
                     if not started_text:
                         print("\nagent> ", end="", flush=True)
                         started_text = True
@@ -68,6 +80,7 @@ def _stream_turn(agent, user_input: str, config: dict) -> None:
                     continue
                 for msg in state.get("messages", []):
                     if isinstance(msg, AIMessage) and msg.tool_calls:
+                        _clear_thinking()
                         if started_text:
                             print()
                             started_text = False
@@ -81,6 +94,7 @@ def _stream_turn(agent, user_input: str, config: dict) -> None:
                                 args = args[:77] + "..."
                             print(f"  ⚙ {tc.get('name', '?')}({args})")
 
+    _clear_thinking()
     if started_text:
         print()
 
