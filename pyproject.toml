@@ -21,3 +21,6 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+
+[project.scripts]
+avni-chat = "chat.repl:run_chat"

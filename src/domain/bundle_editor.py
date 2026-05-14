@@ -16,19 +16,14 @@ import json
 import logging
 import os
 import shutil
-import sys
 import tempfile
 import zipfile
 from typing import Any
 
 from pydantic import ValidationError
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-
-from generators import make_uuid  # noqa: E402
-from models import EditOperation, EditResult, RejectedOp  # noqa: E402
+from domain.generators import make_uuid
+from models import EditOperation, EditResult, RejectedOp
 
 log = logging.getLogger(__name__)
 

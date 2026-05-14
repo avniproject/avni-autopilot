@@ -26,7 +26,7 @@ Drop your modelling and scoping Excel files into `resources/input/<org>/`, then:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...   # or set in .env
-python src/chat.py
+avni-chat
 ```
 
 Sample session:
@@ -58,7 +58,7 @@ You can also reply `edit:Some shorter text` for any change to override the LLM's
 
 Slash commands (no token cost): `/quit`, `/clear` (new thread), `/history`, `/help`.
 
-Conversation state is held in-memory by a `MemorySaver` checkpointer keyed by `thread_id`. It does **not** persist across `python src/chat.py` invocations.
+Conversation state is held in-memory by a `MemorySaver` checkpointer keyed by `thread_id`. It does **not** persist across REPL invocations.
 
 ---
 
@@ -118,20 +118,7 @@ flowchart TD
 
 ### Bundle field editor (`src/bundle_editor.py`)
 
-Operates on a bundle ZIP (or unpacked directory) and writes back atomically.
-
-```mermaid
-flowchart TD
-  bundle([ZIP / unpacked bundle]) --> load[load forms + concepts.json]
-  load --> parse[parse operations]
-  parse -. schema rejects .-> result([EditResult])
-  parse --> apply[apply each op: add / rename / remove]
-  apply -. op rejects .-> result
-  apply --> integrity[integrity check]
-  integrity -. fail: abort, ZIP untouched .-> result
-  integrity --> write[write JSON back + atomic re-zip]
-  write --> result
-```
+Operates on a bundle ZIP (or unpacked directory) and writes back atomically. Currently, this is a simple tool call.
 
 ---
 ## Notes

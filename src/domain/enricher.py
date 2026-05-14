@@ -30,7 +30,7 @@ import logging
 
 import pandas as pd
 
-from llm_helper import LLMHelper
+from domain.llm import LLMHelper
 from models import Change, FieldSpec, FormSpec
 
 log = logging.getLogger(__name__)
