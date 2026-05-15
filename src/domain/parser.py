@@ -2,8 +2,8 @@
 scoping_parser.py — Parse any combination of SRS/scoping/modelling files into
 a validated AVNI EntitySpec.
 
-Accepts: .xlsx (multi-sheet), .csv, .txt, .json — any number of files.
-Each sheet/file is auto-classified by its content (column headers, data patterns)
+Accepts: .xlsx (multi-sheet) — any number of files.
+Each sheet is auto-classified by its content (column headers, data patterns)
 into one of: location_hierarchy, subject_types, programs, encounters,
 program_encounters, w3h_mapping, form_fields, or ignored.
 
@@ -13,8 +13,6 @@ names or column header variations.
 
 from __future__ import annotations
 
-import io
-import json
 import logging
 import re
 from pathlib import Path
@@ -1173,94 +1171,12 @@ def _load_xlsx(path: Path) -> list[tuple[str, pd.DataFrame]]:
     return sheets
 
 
-def _load_csv(path: Path) -> list[tuple[str, pd.DataFrame]]:
-    """Load a CSV file as a single 'sheet'."""
-    try:
-        df = pd.read_csv(path)
-        return [(path.stem, df)]
-    except Exception as e:
-        logger.warning("Failed to read CSV %s: %s", path, e)
-        return []
-
-
-def _load_txt(path: Path) -> list[tuple[str, pd.DataFrame]]:
-    """Load a text file. Try JSON first, then CSV, then as single-column text."""
-    text = path.read_text(encoding="utf-8", errors="replace")
-
-    # Try JSON
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict) and "text" in data:
-            # Dify-extracted format: {"text": ["sheet1 content", "sheet2 content"]}
-            sheets = []
-            for i, t in enumerate(data["text"]):
-                # Try to parse as markdown tables
-                df = _parse_markdown_tables(t)
-                if df is not None and not df.empty:
-                    sheets.append((f"text_{i}", df))
-            if sheets:
-                return sheets
-        elif isinstance(data, dict):
-            # Direct entities dict
-            return [("json_data", pd.DataFrame([data]))]
-        elif isinstance(data, list):
-            return [("json_data", pd.DataFrame(data))]
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # Try CSV
-    try:
-        df = pd.read_csv(io.StringIO(text))
-        if df.shape[1] > 1:
-            return [(path.stem, df)]
-    except Exception:
-        pass
-
-    # Plain text — return as single column
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
-    if lines:
-        return [(path.stem, pd.DataFrame({"content": lines}))]
-    return []
-
-
-def _parse_markdown_tables(text: str) -> pd.DataFrame | None:
-    """Extract the first markdown table from text and return as DataFrame."""
-    lines = text.split("\n")
-    table_lines = []
-    in_table = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("|") and "|" in stripped[1:]:
-            if "---" in stripped:
-                continue  # separator row
-            in_table = True
-            cells = [c.strip() for c in stripped.split("|")[1:-1]]
-            table_lines.append(cells)
-        elif in_table:
-            break  # end of table
-
-    if len(table_lines) < 2:
-        return None
-
-    headers = table_lines[0]
-    data = table_lines[1:]
-    # Pad rows to match header length
-    data = [row + [""] * (len(headers) - len(row)) for row in data]
-    return pd.DataFrame(data, columns=headers)
-
-
 def _load_file(path: Path) -> list[tuple[str, pd.DataFrame]]:
     """Load any supported file format."""
-    suffix = path.suffix.lower()
-    if suffix in (".xlsx", ".xls"):
+    if path.suffix.lower() in (".xlsx", ".xls"):
         return _load_xlsx(path)
-    elif suffix == ".csv":
-        return _load_csv(path)
-    elif suffix in (".txt", ".json"):
-        return _load_txt(path)
-    else:
-        logger.warning("Unsupported file type: %s", path)
-        return []
+    logger.warning("Unsupported file type: %s", path)
+    return []
 
 
 # ── Post-processing ──────────────────────────────────────────────────────────
@@ -1389,11 +1305,10 @@ def parse_scoping_docs(
     file_paths: list[str | Path],
 ) -> tuple["EntitySpec", list[dict]]:
     """
-    Parse one or more SRS/scoping/modelling files of any supported format
-    and consolidate into a validated EntitySpec.
+    Parse one or more SRS/scoping/modelling .xlsx files and consolidate into
+    a validated EntitySpec.
 
-    Accepts .xlsx, .csv, .txt, .json files in any combination.
-    Each sheet/file is auto-classified by its content and parsed accordingly.
+    Each sheet is auto-classified by its content and parsed accordingly.
     All results are merged with deduplication.
 
     Returns:
@@ -1648,140 +1563,4 @@ def parse_scoping_docs(
         groups=groups,
         forms=all_forms,
     ), misc_sheets
-
-
-# ── Consolidation + Audit ────────────────────────────────────────────────────
-
-
-def consolidate_and_audit(
-    file_paths: list[str | Path],
-    org_name: str = "",
-) -> dict[str, Any]:
-    """
-    Parse input files, consolidate into a YAML spec (source of truth),
-    and produce an audit report.
-
-    Returns:
-        {
-            "spec_yaml": str,          # The consolidated YAML — edit this, then generate bundle
-            "audit": {
-                "files_parsed": [...],
-                "entity_counts": {...},
-                "warnings": [...],
-                "errors": [...],
-                "coverage": {...},     # What's present vs missing
-            },
-            "entities": dict,          # Raw entities dict for direct use
-        }
-    """
-    try:
-        from .spec_generator import entities_to_spec  # type: ignore[import]
-    except ImportError:
-        raise NotImplementedError("spec_generator not available in this copy") from None
-
-    entity_spec, misc_sheets = parse_scoping_docs(file_paths)
-    entities = entity_spec.to_entities_dict()
-    if misc_sheets:
-        entities["misc_sheets"] = misc_sheets
-
-    # Generate the YAML spec — this is the source of truth
-    spec_yaml = entities_to_spec(entities, org_name=org_name)
-
-    # Build audit report — include cross-ref warnings from EntitySpec validation
-    warnings: list[str] = list(entity_spec.validation_warnings)
-    errors: list[str] = []
-
-    # Check completeness
-    form_encounter_links = {
-        f.get("encounterType") for f in entities["forms"] if f.get("encounterType")
-    }
-
-    # Every subject type should have a registration form
-    for st in entities["subject_types"]:
-        has_reg = any(
-            f.get("formType") == "IndividualProfile"
-            and f.get("subjectType") == st["name"]
-            for f in entities["forms"]
-        )
-        if not has_reg:
-            warnings.append(f"Subject type '{st['name']}' has no registration form")
-
-    # Every encounter type should have a form linked
-    for et in entities["encounter_types"]:
-        if et["name"] not in form_encounter_links:
-            warnings.append(f"Encounter type '{et['name']}' has no form linked to it")
-
-    # Forms with no subjectType — this is a critical issue
-    for f in entities["forms"]:
-        if not f.get("subjectType"):
-            errors.append(
-                f"Form '{f['name']}' has no subjectType — bundle generation will produce broken formMappings"
-            )
-
-    # Forms with 0 or very few fields
-    for f in entities["forms"]:
-        field_count = len(f.get("fields", []))
-        if field_count == 0:
-            errors.append(f"Form '{f['name']}' has 0 fields — will be empty")
-        elif field_count <= 2:
-            warnings.append(
-                f"Form '{f['name']}' has only {field_count} field(s) — may be incomplete"
-            )
-
-    # Coded fields without options
-    for f in entities["forms"]:
-        for field in f.get("fields", []):
-            if field.get("dataType") == "Coded" and not field.get("options"):
-                warnings.append(
-                    f"Coded field '{field['name']}' in form '{f['name']}' has no options"
-                )
-
-    # Groups check
-    if not entities["groups"]:
-        errors.append("No groups defined — bundle will fail without at least one group")
-
-    # Coverage summary
-    coverage = {
-        "has_address_levels": len(entities["address_levels"]) > 0,
-        "has_subject_types": len(entities["subject_types"]) > 0,
-        "has_encounter_types": len(entities["encounter_types"]) > 0,
-        "has_forms": len(entities["forms"]) > 0,
-        "has_groups": len(entities["groups"]) > 0,
-        "has_programs": len(entities["programs"]) > 0,
-        "all_encounters_have_forms": all(
-            et["name"] in form_encounter_links for et in entities["encounter_types"]
-        ),
-        "all_subjects_have_registration": all(
-            any(
-                f.get("formType") == "IndividualProfile"
-                and f.get("subjectType") == st["name"]
-                for f in entities["forms"]
-            )
-            for st in entities["subject_types"]
-        ),
-    }
-
-    audit = {
-        "files_parsed": [str(p) for p in file_paths],
-        "entity_counts": {
-            "address_levels": len(entities["address_levels"]),
-            "subject_types": len(entities["subject_types"]),
-            "programs": len(entities["programs"]),
-            "encounter_types": len(entities["encounter_types"]),
-            "forms": len(entities["forms"]),
-            "groups": len(entities["groups"]),
-            "total_fields": sum(len(f.get("fields", [])) for f in entities["forms"]),
-            "misc_sheets": len(misc_sheets),
-        },
-        "warnings": warnings,
-        "errors": errors,
-        "coverage": coverage,
-    }
-
-    return {
-        "spec_yaml": spec_yaml,
-        "audit": audit,
-        "entities": entities,
-    }
-
 

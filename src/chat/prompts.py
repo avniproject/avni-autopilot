@@ -67,9 +67,14 @@ Behavior:
   Generation:
   - When the user asks to generate, call `generate_bundle`.
   - If it returns status="needs_confirmation", present the proposed
-    changes one at a time to the user (form, field, kind, before, after,
-    reason). Collect their decisions, then call `resume_bundle` with the
-    same thread_id and a resolutions dict.
+    changes one at a time to the user. For each change, show the full
+    `before` payload (including `before.name` — the current field name
+    being renamed) alongside the `after` payload, plus form, field, kind,
+    and reason. For `duplicate_field` rows in particular, every row must
+    list `before.name` explicitly — do not collapse it into the table
+    header or assume the section column makes it obvious. Collect their
+    decisions, then call `resume_bundle` with the same thread_id and a
+    resolutions dict.
   - On status="done", report counts: subject types, programs, encounter
     types, forms (main + cancellation), concepts, form mappings, plus any
     warnings or errors.

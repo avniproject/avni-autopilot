@@ -348,6 +348,26 @@ def _build_cancellation_form(
     return cancel_name, cancel_form_type, form_dict
 
 
+def _is_mapping_spec_valid(
+    form_type: str,
+    subject_type: str,
+    program: str,
+    encounter_type: str,
+) -> bool:
+    """
+    Whether a form has the references its formType requires for a valid mapping.
+    Missing pieces would produce a formMappings.json entry without the required
+    UUID and break at import time, so the mapping is dropped instead.
+    """
+    if not subject_type:
+        return False
+    if form_type in _PROGRAM_FORM_TYPES and not program:
+        return False
+    if form_type in _ENCOUNTER_FORM_TYPES and not encounter_type:
+        return False
+    return True
+
+
 def make_forms_and_concepts(forms: list) -> dict:
     """
     FormSpec list → forms (with auto-cancellations) + deduped concepts + mapping specs.
@@ -371,14 +391,20 @@ def make_forms_and_concepts(forms: list) -> dict:
             "file_name": f"{safe_filename(form_spec.name)}_{form_dict['uuid']}.json",
             "content": form_dict,
         })
-        mapping_specs.append({
-            "name": form_spec.name,
-            "uuid": form_dict["uuid"],
-            "form_type": form_spec.formType,
-            "subject_type": form_spec.subjectType or "",
-            "program": form_spec.program or "",
-            "encounter_type": form_spec.encounterType or "",
-        })
+
+        subject_type = form_spec.subjectType or ""
+        program = form_spec.program or ""
+        encounter_type = form_spec.encounterType or ""
+
+        if _is_mapping_spec_valid(form_spec.formType, subject_type, program, encounter_type):
+            mapping_specs.append({
+                "name": form_spec.name,
+                "uuid": form_dict["uuid"],
+                "form_type": form_spec.formType,
+                "subject_type": subject_type,
+                "program": program,
+                "encounter_type": encounter_type,
+            })
 
         # Auto-generate cancellation form for encounter-type forms
         if form_spec.formType in ("ProgramEncounter", "Encounter"):
@@ -389,14 +415,15 @@ def make_forms_and_concepts(forms: list) -> dict:
                 "file_name": f"{safe_filename(c_name)}_{c_dict['uuid']}.json",
                 "content": c_dict,
             })
-            mapping_specs.append({
-                "name": c_name,
-                "uuid": c_dict["uuid"],
-                "form_type": c_type,
-                "subject_type": form_spec.subjectType or "",
-                "program": form_spec.program or "",
-                "encounter_type": form_spec.encounterType or "",
-            })
+            if _is_mapping_spec_valid(c_type, subject_type, program, encounter_type):
+                mapping_specs.append({
+                    "name": c_name,
+                    "uuid": c_dict["uuid"],
+                    "form_type": c_type,
+                    "subject_type": subject_type,
+                    "program": program,
+                    "encounter_type": encounter_type,
+                })
 
     # TEMPORARY: defensive final dedup by UUID. The registry is keyed by
     # normalized name, but a belt-and-braces pass guards against any path that
