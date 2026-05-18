@@ -112,12 +112,20 @@ flowchart TD
   tools --> agent
 ```
 
-### Bundle generation pipeline (`src/pipeline.py`)
+### Bundle pipeline (`src/pipeline/`)
 
-The inner LangGraph that turns `.xlsx` → bundle ZIP. `apply_user_decisions` is where the LangGraph `interrupt()` fires when LLM enrichment proposes changes — the caller resumes via `Command(resume=resolutions)`.
+A single inner LangGraph that handles both **generate** (`.xlsx` → fresh bundle ZIP) and **edit-from-spec** (`.xlsx` → diff & patch an existing bundle, preserving UUIDs). The two modes share the entire parse + enrich + entity-generation trunk and only diverge after `generate_form_mappings`, where `state.mode` decides the terminal branch.
+
+Two nodes are visited unconditionally but short-circuit internally:
+
+- **`enrich_with_llm`** only calls Claude on forms that have a real issue to fix (a field name longer than 255 chars, or duplicate field names within the same form). Clean forms pass through with zero LLM cost. The whole node is also skipped if `ANTHROPIC_API_KEY` isn't set.
+- **`apply_user_decisions`** only fires LangGraph's `interrupt()` if `enrich_with_llm` produced pending changes. When the list is empty (clean spec or LLM had nothing to propose) it returns immediately — no human pause. When it does interrupt, the caller resumes via `Command(resume=resolutions)`.
 
 ```mermaid
 flowchart TD
+  enrich_with_llm["enrich_with_llm<br/><i>(skipped when spec is clean<br/>or no API key)</i>"]
+  apply_user_decisions["apply_user_decisions<br/><i>(no-op when no pending changes)</i>"]
+
   start([start]) --> discover_files
   discover_files -. abort .-> stop([end])
   discover_files -. continue .-> parse_documents
@@ -128,13 +136,16 @@ flowchart TD
   apply_user_decisions --> generate_entities
   generate_entities --> generate_forms
   generate_forms --> generate_form_mappings
-  generate_form_mappings --> package_zip
+  generate_form_mappings -. mode=generate .-> package_zip
+  generate_form_mappings -. mode=edit_from_spec .-> diff_against_bundle
   package_zip --> stop
+  diff_against_bundle --> apply_diff_edits
+  apply_diff_edits --> stop
 ```
 
-### Bundle field editor (`src/bundle_editor.py`)
+### Editing fields via chat (`src/bundle_editor.py`)
 
-Operates on a bundle ZIP (or unpacked directory) and writes back atomically. Currently, this is a simple tool call.
+Operates on a bundle ZIP (or unpacked directory) and writes back atomically.
 
 ---
 ## Notes
