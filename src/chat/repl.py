@@ -162,6 +162,8 @@ def run_chat() -> None:
     print("Avni Bundle Chat (LangGraph ReAct agent)")
     print(f"Model: {settings.model}    /help for commands, /quit to exit")
     print(f"Thread: {config['configurable']['thread_id']}")
+    if settings.langsmith_tracing and settings.langsmith_api_key:
+        print(f"LangSmith: tracing → project '{settings.langsmith_project}'")
     print("─" * 60)
 
     while True:

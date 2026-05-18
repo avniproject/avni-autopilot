@@ -58,8 +58,25 @@ class Settings:
     model: str = _env("CHAT_MODEL", "claude-sonnet-4-6")
     max_tokens: int = _env_int("CHAT_MAX_TOKENS", 8192)
 
+    # LangSmith tracing (optional). Set LANGSMITH_TRACING=true and provide
+    # LANGSMITH_API_KEY to send traces. Project defaults to the package name.
+    langsmith_tracing: bool = _env("LANGSMITH_TRACING", "").lower() in {"1", "true", "yes"}
+    langsmith_api_key: str = _env("LANGSMITH_API_KEY", "")
+    langsmith_project: str = _env("LANGSMITH_PROJECT", "avni-ai-tools")
+    langsmith_endpoint: str = _env("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+
     # Logging
     log_level: str = _env("LOG_LEVEL", "WARNING")
 
 
 settings = Settings()
+
+
+# Re-export LangSmith settings into the environment so the `langsmith` SDK
+# (which LangChain delegates to) picks them up. Done once at import time.
+# `setdefault` lets explicitly-set shell env vars win over .env values.
+if settings.langsmith_tracing and settings.langsmith_api_key:
+    os.environ.setdefault("LANGSMITH_TRACING", "true")
+    os.environ.setdefault("LANGSMITH_API_KEY", settings.langsmith_api_key)
+    os.environ.setdefault("LANGSMITH_PROJECT", settings.langsmith_project)
+    os.environ.setdefault("LANGSMITH_ENDPOINT", settings.langsmith_endpoint)

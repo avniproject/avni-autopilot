@@ -14,7 +14,23 @@ Requires Python 3.11+.
 git clone git@github.com:avniproject/avni-autopilot.git
 cd avni-autopilot
 pip install -e .
+cp .env.example .env       # then edit .env and set ANTHROPIC_API_KEY
 ```
+
+`.env.example` documents every supported variable (chat model, bundle I/O paths, LangSmith tracing, log level). Only `ANTHROPIC_API_KEY` is required.
+
+### Optional: LangSmith tracing
+
+To capture per-call cost and latency for every LLM/graph step (enrichment passes, ReAct turns, tool calls) on the [LangSmith](https://smith.langchain.com) dashboard, add the following to `.env`:
+
+```
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=lsv2_pt_...
+LANGSMITH_PROJECT=avni-ai-tools          # any name; groups traces in the UI
+# LANGSMITH_ENDPOINT=https://api.smith.langchain.com   # default; override for EU/self-hosted
+```
+
+When tracing is on, the REPL prints a `LangSmith: tracing → project '…'` line on startup. Leave `LANGSMITH_TRACING` unset (or empty) to disable — no traces are sent and there is no runtime overhead.
 
 ---
 
