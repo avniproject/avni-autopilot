@@ -24,7 +24,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
+from itertools import cycle
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 
@@ -67,11 +69,63 @@ def _tool_label(name: str, args: dict) -> str:
     return f"{name}({arg_str})"
 
 
+class _Spinner:
+    """Animate a single line until `stop()` is called.
+
+    Runs a daemon thread that rewrites the current line every 80ms with the
+    next Braille frame. On stop, clears the animation and re-renders the same
+    label with a static `⚙` marker so the transcript reads cleanly.
+
+    Falls back to a plain print when stdout isn't a TTY (CI, piped output) —
+    animation needs cursor control to look right.
+    """
+
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    INTERVAL_S = 0.08
+    PREFIX = "  "
+
+    def __init__(self, label: str) -> None:
+        self._label = label
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._tty = sys.stdout.isatty()
+
+    def start(self) -> None:
+        if not self._tty:
+            print(f"{self.PREFIX}⚙ {self._label}", flush=True)
+            return
+        sys.stdout.write("\033[?25l")  # hide cursor
+        sys.stdout.flush()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if not self._tty or self._thread is None:
+            return
+        self._stop_event.set()
+        self._thread.join(timeout=0.5)
+        # Clear the animated line, write the final static version, restore cursor.
+        sys.stdout.write("\r\033[K")
+        sys.stdout.write(f"{self.PREFIX}⚙ {self._label}\n")
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
+
+    def _loop(self) -> None:
+        for frame in cycle(self.FRAMES):
+            if self._stop_event.is_set():
+                return
+            sys.stdout.write(f"\r{self.PREFIX}{frame} {self._label}")
+            sys.stdout.flush()
+            if self._stop_event.wait(self.INTERVAL_S):
+                return
+
+
 def _stream_turn(agent, user_input: str, config: dict) -> None:
     """Send one user message, stream agent text + tool calls, return on completion."""
     started_text = False
     seen_tool_calls: set[str] = set()
     shown_thinking_hint = False
+    spinner: _Spinner | None = None
 
     # Indicator so the user sees activity while the model is in adaptive
     # thinking mode (no visible text yet). Cleared when actual content arrives.
@@ -83,43 +137,65 @@ def _stream_turn(agent, user_input: str, config: dict) -> None:
             print("\r" + " " * 14 + "\r", end="", flush=True)
             shown_thinking_hint = True
 
-    for mode, chunk in agent.stream(
-        {"messages": [HumanMessage(content=user_input)]},
-        config=config,
-        stream_mode=["messages", "updates"],
-    ):
-        if mode == "messages":
-            msg_chunk, _metadata = chunk
-            if isinstance(msg_chunk, AIMessageChunk):
-                text = _extract_text(msg_chunk.content)
-                if text:
-                    _clear_thinking()
-                    if not started_text:
-                        print("\nagent> ", end="", flush=True)
-                        started_text = True
-                    print(text, end="", flush=True)
+    def _stop_spinner() -> None:
+        nonlocal spinner
+        if spinner is not None:
+            spinner.stop()
+            spinner = None
 
-        elif mode == "updates":
-            for node, state in chunk.items():
-                if node != "agent" or not state:
-                    continue
-                for msg in state.get("messages", []):
-                    if isinstance(msg, AIMessage) and msg.tool_calls:
+    try:
+        for mode, chunk in agent.stream(
+            {"messages": [HumanMessage(content=user_input)]},
+            config=config,
+            stream_mode=["messages", "updates"],
+        ):
+            if mode == "messages":
+                msg_chunk, _metadata = chunk
+                if isinstance(msg_chunk, AIMessageChunk):
+                    text = _extract_text(msg_chunk.content)
+                    if text:
                         _clear_thinking()
-                        if started_text:
-                            print()
-                            started_text = False
-                        for tc in msg.tool_calls:
-                            tc_id = tc.get("id") or ""
-                            if tc_id in seen_tool_calls:
-                                continue
-                            seen_tool_calls.add(tc_id)
-                            label = _tool_label(tc.get("name", "?"), tc.get("args", {}) or {})
-                            print(f"  ⚙ {label}")
+                        _stop_spinner()
+                        if not started_text:
+                            print("\nagent> ", end="", flush=True)
+                            started_text = True
+                        print(text, end="", flush=True)
 
-    _clear_thinking()
-    if started_text:
-        print()
+            elif mode == "updates":
+                for node, state in chunk.items():
+                    if node != "agent" or not state:
+                        continue
+                    for msg in state.get("messages", []):
+                        if isinstance(msg, AIMessage) and msg.tool_calls:
+                            _clear_thinking()
+                            _stop_spinner()
+                            if started_text:
+                                print()
+                                started_text = False
+                            for tc in msg.tool_calls:
+                                tc_id = tc.get("id") or ""
+                                if tc_id in seen_tool_calls:
+                                    continue
+                                seen_tool_calls.add(tc_id)
+                                label = _tool_label(tc.get("name", "?"), tc.get("args", {}) or {})
+                                # If this AIMessage carries multiple tool_calls, the
+                                # earlier ones flash as static lines and only the
+                                # last one keeps the live spinner. Common case is
+                                # one tool per message, so this is rarely visible.
+                                _stop_spinner()
+                                spinner = _Spinner(label)
+                                spinner.start()
+
+        _clear_thinking()
+        _stop_spinner()
+        if started_text:
+            print()
+    finally:
+        # Make sure the cursor is always restored, even if we crashed mid-spin.
+        if spinner is not None:
+            spinner.stop()
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
 
 
 def _extract_text(content) -> str:
