@@ -65,8 +65,12 @@ class Settings:
     langsmith_project: str = _env("LANGSMITH_PROJECT", "avni-ai-tools")
     langsmith_endpoint: str = _env("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
 
-    # Logging
-    log_level: str = _env("LOG_LEVEL", "WARNING")
+    # Logging. File-handler threshold; the console handler stays at WARNING+
+    # regardless so the chat REPL is clean. INFO surfaces per-form progress.
+    log_level: str = _env("LOG_LEVEL", "INFO")
+    # Diagnostic logs are written here; the chat REPL stays clean.
+    # Relative paths resolve against the project root.
+    log_file: str = _env("LOG_FILE", os.path.join(_PROJECT_ROOT, "logs", "avni.log"))
 
 
 settings = Settings()

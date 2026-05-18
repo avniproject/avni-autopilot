@@ -32,3 +32,6 @@ htmlcov/
 # Generated resources
 resources/output/
 resources/temp/
+
+# Logs
+logs/

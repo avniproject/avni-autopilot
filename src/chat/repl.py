@@ -42,6 +42,31 @@ from chat.agent import build_agent  # noqa: E402
 # ── REPL ─────────────────────────────────────────────────────────────────────
 
 
+def _tool_label(name: str, args: dict) -> str:
+    """Friendly progress label for a tool call.
+
+    Falls back to `name(args)` for any tool we haven't given a label,
+    so a newly-added tool degrades gracefully instead of disappearing.
+    """
+    org = (args.get("org") or "").strip()
+    if name == "generate_bundle":
+        return f"Generating bundle for {org}…" if org else "Generating bundle…"
+    if name == "edit_bundle_from_spec":
+        return f"Updating bundle for {org} from spec…" if org else "Updating bundle from spec…"
+    if name == "resume_bundle":
+        return "Applying your decisions…"
+    if name == "list_bundle_fields":
+        return "Listing bundle fields…"
+    if name == "edit_bundle_fields":
+        n = len(args.get("operations") or [])
+        return f"Editing {n} field(s)…" if n else "Editing bundle fields…"
+    # Unknown tool — keep the technical fallback so devs aren't left guessing.
+    arg_str = json.dumps(args, default=str)
+    if len(arg_str) > 80:
+        arg_str = arg_str[:77] + "..."
+    return f"{name}({arg_str})"
+
+
 def _stream_turn(agent, user_input: str, config: dict) -> None:
     """Send one user message, stream agent text + tool calls, return on completion."""
     started_text = False
@@ -89,10 +114,8 @@ def _stream_turn(agent, user_input: str, config: dict) -> None:
                             if tc_id in seen_tool_calls:
                                 continue
                             seen_tool_calls.add(tc_id)
-                            args = json.dumps(tc.get("args", {}), default=str)
-                            if len(args) > 80:
-                                args = args[:77] + "..."
-                            print(f"  ⚙ {tc.get('name', '?')}({args})")
+                            label = _tool_label(tc.get("name", "?"), tc.get("args", {}) or {})
+                            print(f"  ⚙ {label}")
 
     _clear_thinking()
     if started_text:
