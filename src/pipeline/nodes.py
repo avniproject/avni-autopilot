@@ -36,6 +36,9 @@ from domain.generators import (
 )
 from domain.llm import LLMHelper
 from domain.parser import _fuzzy_match, parse_scoping_docs
+from domain.rules.generator import RuleGenerator
+from domain.rules.rule_spec import RuleKind, RuleSpec
+from domain.rules.validator import check as validate_rule
 from models import Change
 from pipeline.state import BundleState
 
@@ -267,6 +270,118 @@ def generate_form_mappings(state: BundleState) -> dict:
         fuzzy_match=_fuzzy_match,
     )
     return {"form_mappings_json": mappings}
+
+
+# ── Node 5.5: generate rule JS for forms that carry a rule_intent ─────────────
+
+
+def generate_rules(state: BundleState) -> dict:
+    """Generate `visitScheduleRule` (and future kinds) for forms with intents.
+
+    Runs after `generate_form_mappings` so `RuleSpec` is built from the same
+    bundle shape the chat tool sees on its calls (SDD §4.3). Forms without any
+    rule intent are skipped — zero embedding / Anthropic cost when nothing
+    needs generating.
+
+    Mutates the form JSON in `state["forms_json"]` in place to set the rule
+    field on each form whose generation passes validation; failures flow into
+    `parse_warnings` namespaced `rules.<kind>.<form>: <reason>`.
+    """
+    spec = state["entity_spec"]
+    if spec is None or not spec.forms:
+        return {}
+
+    forms_with_intents = [f for f in spec.forms if f.rule_intents]
+    if not forms_with_intents:
+        return {}
+
+    warnings = list(state.get("parse_warnings", []))
+    forms_json = state["forms_json"]
+    forms_by_name: dict[str, dict] = {
+        entry["content"]["name"]: entry for entry in forms_json
+    }
+    available_encounter_types = [et["name"] for et in state["encounter_types_json"]]
+    available_programs = [p["name"] for p in state["programs_json"]]
+
+    generator = RuleGenerator()
+    if not generator.is_available():
+        warnings.append(
+            "rules: skipped — ANTHROPIC_API_KEY not set"
+        )
+        log.info("[%s] Rule generation skipped — no ANTHROPIC_API_KEY",
+                 state["org_name"])
+        return {"parse_warnings": warnings}
+
+    written = 0
+    for form_spec in forms_with_intents:
+        for kind_value, intent in form_spec.rule_intents.items():
+            try:
+                kind = RuleKind(kind_value)
+            except ValueError:
+                warnings.append(
+                    f"rules.{kind_value}.{form_spec.name}: "
+                    f"unknown rule kind, skipped"
+                )
+                continue
+
+            rule_spec = _build_rule_spec(
+                form_spec, kind, intent,
+                available_encounter_types, available_programs,
+            )
+            result = generator.generate(rule_spec)
+            ok, val_warnings = validate_rule(result, rule_spec)
+
+            for warning in (*result.warnings, *val_warnings):
+                warnings.append(
+                    f"rules.{kind_value}.{form_spec.name}: {warning}"
+                )
+
+            if not (ok and result.js):
+                continue
+
+            target = forms_by_name.get(form_spec.name)
+            if target is None:
+                warnings.append(
+                    f"rules.{kind_value}.{form_spec.name}: "
+                    f"form JSON not found in state; cannot write"
+                )
+                continue
+            target["content"][kind_value] = result.js
+            written += 1
+
+    log.info(
+        "[%s] Rules: %d form(s) had intents, %d rule(s) written.",
+        state["org_name"], len(forms_with_intents), written,
+    )
+    return {"forms_json": forms_json, "parse_warnings": warnings}
+
+
+def _build_rule_spec(
+    form_spec: Any,
+    kind: RuleKind,
+    intent: str,
+    available_encounter_types: list[str],
+    available_programs: list[str],
+) -> RuleSpec:
+    """Compose a RuleSpec from a FormSpec and the bundle's vocabulary."""
+    available_concepts = sorted({
+        field.name
+        for section in (form_spec.sections or [])
+        for field in (section.fields or [])
+        if field.name
+    })
+    return RuleSpec(
+        rule_kind=kind,
+        intent=intent,
+        form_name=form_spec.name,
+        form_type=form_spec.formType,
+        subject_type=form_spec.subjectType,
+        program=form_spec.program,
+        encounter_type=form_spec.encounterType,
+        available_concepts=available_concepts,
+        available_encounter_types=available_encounter_types,
+        available_programs=available_programs,
+    )
 
 
 # ── Node 6: write JSON files + ZIP bundle ─────────────────────────────────────

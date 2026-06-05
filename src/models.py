@@ -58,6 +58,9 @@ class FormSpec(BaseModel):
     program: str | None = None
     encounterType: str | None = None
     sections: list[SectionSpec] = Field(default_factory=list)
+    # Natural-language rule intents keyed by RuleKind value (e.g. "visitScheduleRule").
+    # Populated from the modelling-doc Scheduling Rule column or via the chat tool.
+    rule_intents: dict[str, str] = Field(default_factory=dict)
 
 
 # ── Entity-level ───────────────────────────────────────────────────────────────

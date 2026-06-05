@@ -663,3 +663,134 @@ def list_bundle_fields(bundle_path: str) -> dict:
                 "sections": sections,
             })
         return {"bundle_path": bundle_path, "forms": out_forms}
+
+
+# ── Rule generation support (VISIT_SCHEDULE_RULE_SDD §9.2) ───────────────────
+
+
+def load_form_rule_context(bundle_path: str, form_name: str) -> dict | None:
+    """Read everything a RuleSpec needs for one form, in one bundle pass.
+
+    Returns:
+        {
+          "form_type": str,
+          "subject_type": str | None,
+          "program": str | None,
+          "encounter_type": str | None,
+          "available_concepts": list[str],
+          "available_encounter_types": list[str],
+          "available_programs": list[str],
+        }
+        or None if no form with `form_name` exists in the bundle.
+    """
+    with _open_bundle(bundle_path) as workdir:
+        forms = _load_forms(workdir)
+        target_form: dict | None = None
+        for form in forms.values():
+            if form.get("name") == form_name:
+                target_form = form
+                break
+        if target_form is None:
+            return None
+
+        concepts = sorted({
+            element.get("name")
+            for group in (target_form.get("formElementGroups") or [])
+            for element in (group.get("formElements") or [])
+            if element.get("name") and not element.get("voided")
+        })
+
+        subject_types = _load_entity_names(workdir, "subjectTypes.json")
+        programs = _load_entity_names(workdir, "programs.json")
+        encounter_types = _load_entity_names(workdir, "encounterTypes.json")
+        mappings = _load_form_mappings(workdir)
+
+        form_uuid = target_form.get("uuid")
+        mapping = next(
+            (m for m in mappings if m.get("formUUID") == form_uuid),
+            None,
+        )
+
+        return {
+            "form_type": target_form.get("formType", ""),
+            "subject_type": _name_from_uuid(
+                mapping.get("subjectTypeUUID") if mapping else None,
+                _load_entity_uuid_map(workdir, "subjectTypes.json"),
+            ),
+            "program": _name_from_uuid(
+                mapping.get("programUUID") if mapping else None,
+                _load_entity_uuid_map(workdir, "programs.json"),
+            ),
+            "encounter_type": _name_from_uuid(
+                mapping.get("encounterTypeUUID") if mapping else None,
+                _load_entity_uuid_map(workdir, "encounterTypes.json"),
+            ),
+            "available_concepts": concepts,
+            "available_encounter_types": sorted(encounter_types),
+            "available_programs": sorted(programs),
+            "_for_internal_use_subject_types": sorted(subject_types),
+        }
+
+
+def write_form_rule(
+    bundle_path: str, form_name: str, rule_field: str, js: str,
+) -> bool:
+    """Set `<form_name>[rule_field] = js` on the form JSON and re-zip atomically.
+
+    Returns True when the form was found and rewritten; False when no form
+    with that name exists. Other forms and concepts are not touched.
+    """
+    with _open_bundle(bundle_path) as workdir:
+        forms = _load_forms(workdir)
+        target_fname: str | None = None
+        for fname, form in forms.items():
+            if form.get("name") == form_name:
+                target_fname = fname
+                break
+        if target_fname is None:
+            return False
+        target_form = forms[target_fname]
+        target_form[rule_field] = js
+        _write_json(os.path.join(workdir, "forms", target_fname), target_form)
+        if zipfile.is_zipfile(bundle_path):
+            _repackage_zip(workdir, bundle_path)
+    return True
+
+
+def _load_entity_names(workdir: str, file_name: str) -> list[str]:
+    """Read a top-level array file and return the `name` field of each entry."""
+    path = os.path.join(workdir, file_name)
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, list):
+        return []
+    return [entry.get("name") for entry in data if entry.get("name")]
+
+
+def _load_entity_uuid_map(workdir: str, file_name: str) -> dict[str, str]:
+    path = os.path.join(workdir, file_name)
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if not isinstance(data, list):
+        return {}
+    return {entry["uuid"]: entry["name"]
+            for entry in data if entry.get("uuid") and entry.get("name")}
+
+
+def _load_form_mappings(workdir: str) -> list[dict]:
+    path = os.path.join(workdir, "formMappings.json")
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    return data if isinstance(data, list) else []
+
+
+def _name_from_uuid(uuid: str | None, mapping: dict[str, str]) -> str | None:
+    if not uuid:
+        return None
+    return mapping.get(uuid)

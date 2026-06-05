@@ -1,0 +1,1190 @@
+[
+  {
+    "name": "Individual.addComment",
+    "signature": "individual.addComment(comment)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Appends a comment \u2014 internal mutation, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.addEncounter",
+    "signature": "individual.addEncounter(encounter)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Appends an encounter \u2014 internal mutation, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.addEnrolment",
+    "signature": "individual.addEnrolment(programEnrolment)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Appends a program enrolment \u2014 internal mutation, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.addGroup",
+    "signature": "individual.addGroup(groupSubject)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Appends a group \u2014 internal mutation, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.addGroupSubject",
+    "signature": "individual.addGroupSubject(groupSubject)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Appends a group subject \u2014 internal mutation, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.addRelationship",
+    "signature": "individual.addRelationship(relationship)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Appends a relationship \u2014 internal mutation, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.address",
+    "signature": "individual.address(i18n)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns address label and lowest administrative level name for display.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.approvalStatuses",
+    "signature": "individual.approvalStatuses()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns approval status entities for the individual.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.associateChild",
+    "signature": "individual.associateChild(child, childEntityClass, childResource, entityService)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Associates enrolments, encounters, comments, or approvals to individual \u2014 framework plumbing.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.associateChildToMultipleParents",
+    "signature": "individual.associateChildToMultipleParents(child, childEntityClass, childResource, entityService)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Associates group subjects to multiple parents \u2014 framework plumbing.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.associateGroupSubject",
+    "signature": "individual.associateGroupSubject(child, childEntityClass, childResource, entityService)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Associates group subject to group and member subjects \u2014 framework plumbing.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.associateRelationship",
+    "signature": "individual.associateRelationship(child, childEntityClass, childResource, entityService)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Associates relationship to individual \u2014 framework plumbing.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.chronologicalEnrolments",
+    "signature": "individual.chronologicalEnrolments()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns enrolments sorted by encounter date in ascending order.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.cloneForEdit",
+    "signature": "individual.cloneForEdit()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Creates a shallow copy with all properties for edit workflows.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.cloneForReference",
+    "signature": "individual.cloneForReference()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Creates a shallow copy with demographic data for reference purposes.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.comments",
+    "signature": "individual.comments()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns comment entities for the individual.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.createEmptyInstance",
+    "signature": "individual.createEmptyInstance()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Instantiates new individual with default values and empty collections.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.createEmptySubjectInstance",
+    "signature": "individual.createEmptySubjectInstance()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Instantiates new subject with default values, excluding gender.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.createdBy",
+    "signature": "individual.createdBy()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns user who created the individual entity.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.createdByUUID",
+    "signature": "individual.createdByUUID()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns UUID of user who created the individual entity.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.dateOfBirth",
+    "signature": "individual.dateOfBirth()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns the individual's date of birth to calculate age or check enrollment eligibility.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.dateOfBirthVerified",
+    "signature": "individual.dateOfBirthVerified()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns whether the date of birth is verified for data quality validation rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.detail1",
+    "signature": "individual.detail1(i18n)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns formatted age display for individuals in summary or visit context.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.detail2",
+    "signature": "individual.detail2(i18n)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns formatted gender display for individuals in summary or visit context.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.encounters",
+    "signature": "individual.encounters()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns all encounters to query past visit history in validation or eligibility rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.enrolments",
+    "signature": "individual.enrolments()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns all program enrolments to check enrollment status or history.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.everScheduledEncounters",
+    "signature": "individual.everScheduledEncounters()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns scheduled, non-cancelled encounters for visit schedule or eligibility checks.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.everScheduledEncountersOfType",
+    "signature": "individual.everScheduledEncountersOfType(encounterTypeName)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "All encounters of the given type ever scheduled for this subject (including completed and cancelled).",
+    "example_snippet": "const all = individual.everScheduledEncountersOfType('ANC');"
+  },
+  {
+    "name": "Individual.findEnrolment",
+    "signature": "individual.findEnrolment(enrolmentUUID)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns a specific enrolment by UUID to access enrollment-specific observations.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.findGroupedObservation",
+    "signature": "individual.findGroupedObservation(parentConceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns child observations within a grouped (multi-select) concept for validation.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.findLastEncounterOfType",
+    "signature": "individual.findLastEncounterOfType(currentEncounter, encounterTypes = [])",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns the most recent encounter of specified types to access previous visit data.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.findLatestObservationFromEncounters",
+    "signature": "individual.findLatestObservationFromEncounters(conceptNameOrUuid, currentEncounter)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns the most recent observation value across all encounters before current one.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.findLatestObservationFromPreviousEncounters",
+    "signature": "individual.findLatestObservationFromPreviousEncounters(conceptNameOrUuid, currentEncounter)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Read the latest observed value of a concept across encounters that occurred BEFORE `currentEncounter`. Look-back / trend rules.",
+    "example_snippet": "const last = individual.findLatestObservationFromPreviousEncounters('Risk', programEncounter);"
+  },
+  {
+    "name": "Individual.findMediaObservations",
+    "signature": "individual.findMediaObservations()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns all media-type observations for display or attachment validation rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.findNthLastEncounterOfType",
+    "signature": "individual.findNthLastEncounterOfType(currentEncounter, encounterTypes = [], n = 0)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns the nth previous encounter of specified types for historical trend analysis.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.findObservation",
+    "signature": "individual.findObservation(conceptNameOrUuid, parentConceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns a specific observation from current or grouped observations for validation.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.findObservationAcrossAllEnrolments",
+    "signature": "individual.findObservationAcrossAllEnrolments(conceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns an enrolment containing a specific observation across all programs.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.findObservationInLastEncounter",
+    "signature": "individual.findObservationInLastEncounter(conceptNameOrUuid, currentEncounter)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns an observation value from the most recent encounter of same type.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.firstActiveOrRecentEnrolment",
+    "signature": "individual.firstActiveOrRecentEnrolment()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns the active or most recent enrollment for determining current program context.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.firstName",
+    "signature": "individual.firstName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns the individual's first name for display or name-based validation rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.fromResource",
+    "signature": "individual.fromResource(individualResource, entityService)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Deserializes API response into Individual object \u2014 internal persistence, not called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.fullAddress",
+    "signature": "individual.fullAddress(i18n)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns formatted hierarchical address for display in visit or summary context.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.gender",
+    "signature": "individual.gender()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns the individual's gender entity for eligibility and validation rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getAddressLevelDummyUUID",
+    "signature": "individual.getAddressLevelDummyUUID()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal utility \u2014 returns constant placeholder UUID for address level operations.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getAgeAndDateOfBirthDisplay",
+    "signature": "individual.getAgeAndDateOfBirthDisplay(i18n)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns formatted age and birth date string for summary or display in visit rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getAllScheduledVisits",
+    "signature": "individual.getAllScheduledVisits(currentEncounter)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns list of upcoming scheduled encounters excluding current one for visit scheduling rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getEncounters",
+    "signature": "individual.getEncounters(removeCancelledEncounters)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Subject's encounters. Pass `true` to include voided/cancelled.",
+    "example_snippet": "const encounters = individual.getEncounters(true);"
+  },
+  {
+    "name": "Individual.getEntityTypeName",
+    "signature": "individual.getEntityTypeName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns the subject type name for entity identification in eligibility and validation contexts.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getFullName",
+    "signature": "individual.getFullName(obj)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns complete formatted name from first, middle, and last name components.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getGroupSubjects",
+    "signature": "individual.getGroupSubjects()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns non-voided group subjects for household or group eligibility rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getGroups",
+    "signature": "individual.getGroups()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns non-voided groups for group membership eligibility checks.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getHeadOfHouseholdGroupSubject",
+    "signature": "individual.getHeadOfHouseholdGroupSubject()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns head-of-household group relationship for household-level eligibility rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getMemberEntitiesWithLatestStatus",
+    "signature": "individual.getMemberEntitiesWithLatestStatus(approvalStatus_status)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns descendants (individual, encounters, enrolments) matching approval status for audit rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getMobileNo",
+    "signature": "individual.getMobileNo()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns mobile number from observations \u2014 internal search, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getMobileNumber",
+    "signature": "individual.getMobileNumber()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns formatted mobile number observation value for contact eligibility rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getName",
+    "signature": "individual.getName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns 'Registration' entity type identifier \u2014 internal framework constant.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getObservationReadableValue",
+    "signature": "individual.getObservationReadableValue(conceptNameOrUuid, parentConceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns human-readable observation value by concept name for validation and summary rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getObservationValue",
+    "signature": "individual.getObservationValue(conceptNameOrUuid, parentConceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns raw observation value by concept name for eligibility and validation logic.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getPlaceholderAddressLevel",
+    "signature": "individual.getPlaceholderAddressLevel(entityService)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal \u2014 creates dummy address level entity for placeholder operations.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getPreviousEnrolment",
+    "signature": "individual.getPreviousEnrolment(programName, enrolmentUUID)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns prior enrolment in same program for eligibility and visit schedule rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getProfilePicture",
+    "signature": "individual.getProfilePicture()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns profile picture data \u2014 internal serialization, not called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getRelationships",
+    "signature": "individual.getRelationships()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns non-voided relationships for family or relative eligibility checks.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getRelative",
+    "signature": "individual.getRelative(relationName, inverse = false)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns first relative by relationship type for household or family validation rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getRelatives",
+    "signature": "individual.getRelatives(relationName, inverse = false)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Filter relatives by relationship type, optionally inverting the direction of the relation lookup.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getSchemaName",
+    "signature": "individual.getSchemaName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal utility \u2014 returns schema identifier for database mapping.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.getTranslatedNameString",
+    "signature": "individual.getTranslatedNameString(i18n)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve localized display name, handling persons, users, and group types distinctly.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.groupSubjects",
+    "signature": "individual.groupSubjects()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve group members as a list \u2014 internal entity accessor for household or group composition.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.groups",
+    "signature": "individual.groups()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve group membership list \u2014 internal entity accessor for group relationships.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.hasActiveEnrolment",
+    "signature": "individual.hasActiveEnrolment()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when at least one non-voided enrolment is currently active.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.hasEncounterOfType",
+    "signature": "individual.hasEncounterOfType(encounterTypes)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "True when at least one encounter of any of the given types exists.",
+    "example_snippet": "if (individual.hasEncounterOfType(['ANC'])) { /* ... */ }"
+  },
+  {
+    "name": "Individual.hasEnrolments",
+    "signature": "individual.hasEnrolments()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns count of non-voided enrolments; eligibility rules check active program participation.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.hasProgramEncounterOfType",
+    "signature": "individual.hasProgramEncounterOfType(encounterTypes)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "True when at least one program-encounter of the given type exists.",
+    "example_snippet": "if (individual.hasProgramEncounterOfType('Delivery')) { /* ... */ }"
+  },
+  {
+    "name": "Individual.individual",
+    "signature": "individual.individual()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal accessor \u2014 returns self reference for polymorphic entity handling.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.initLowestAddressLevel",
+    "signature": "individual.initLowestAddressLevel(lowestAddressLevel, subjectType, entityService)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal utility \u2014 initializes default address level for users or subject types.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.isFemale",
+    "signature": "individual.isFemale()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when gender is female \u2014 validation and eligibility rules check sex-based criteria.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.isGender",
+    "signature": "individual.isGender(gender)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when gender matches the given parameter \u2014 rules filter by specific gender.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.isGroup",
+    "signature": "individual.isGroup()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when subject type is a group \u2014 routing logic differentiates group vs. person workflows.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.isHousehold",
+    "signature": "individual.isHousehold()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when subject type is a household \u2014 eligibility rules check household-level criteria.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.isMale",
+    "signature": "individual.isMale()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when gender is male \u2014 validation and eligibility rules check sex-based criteria.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.isPerson",
+    "signature": "individual.isPerson()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when subject type is person or nil \u2014 rules conditionally apply person-specific logic.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.isRegistrationBeforeDateOfBirth",
+    "signature": "individual.isRegistrationBeforeDateOfBirth()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when registration date precedes birth date \u2014 validation rules flag temporal inconsistencies.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.isRejectedEntity",
+    "signature": "individual.isRejectedEntity()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when latest approval status is rejected \u2014 eligibility rules exclude rejected registrations.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.isUniqueName",
+    "signature": "individual.isUniqueName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when subject type enforces name uniqueness \u2014 validation rules require unique identifiers.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.lastModifiedBy",
+    "signature": "individual.lastModifiedBy()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal accessor \u2014 returns user who last modified the entity for audit trails.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.lastModifiedByUUID",
+    "signature": "individual.lastModifiedByUUID()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal accessor \u2014 returns UUID of user who last modified the entity for audit tracking.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.lastName",
+    "signature": "individual.lastName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Use in display or eligibility rules when validating individual's surname.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.latestEntityApprovalStatus",
+    "signature": "individual.latestEntityApprovalStatus()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Check approval status in eligibility rules when subject's data requires administrative approval.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.lowestAddressLevel",
+    "signature": "individual.lowestAddressLevel()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Use in eligibility or summary rules to filter individuals by their most granular address location.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.lowestTwoLevelAddress",
+    "signature": "individual.lowestTwoLevelAddress(i18n)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Format and display the two deepest address hierarchy levels in visit summaries or eligibility checks.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.middleName",
+    "signature": "individual.middleName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Use in display or validation rules when checking individual's complete name components.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.name",
+    "signature": "individual.name()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Use in any rule context requiring the individual's primary name field for display or filtering.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.nameString",
+    "signature": "individual.nameString()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Display formatted full name or user identifier in schedules, summaries, or eligibility rule outputs.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.nameStringWithUniqueAttribute",
+    "signature": "individual.nameStringWithUniqueAttribute()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Display individual name with mobile number for Farmer subjects in summaries or eligibility contexts.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.nonVoidedEncounters",
+    "signature": "individual.nonVoidedEncounters()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Filter active encounters in summary or eligibility rules excluding cancelled or voided records.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.nonVoidedEnrolments",
+    "signature": "individual.nonVoidedEnrolments()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve active program enrollments in eligibility or summary rules excluding voided registrations.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.observationExistsAcrossAllEnrolments",
+    "signature": "individual.observationExistsAcrossAllEnrolments(conceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Check if a concept observation exists in any active enrollment for validation or eligibility decisions.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.observations",
+    "signature": "individual.observations()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Access individual's baseline observations in eligibility, validation, or summary rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.profilePicture",
+    "signature": "individual.profilePicture()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Use in display or summary rules when showing individual's photo alongside registration or eligibility data.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.registrationDate",
+    "signature": "individual.registrationDate()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Use in eligibility rules to determine age-of-registration or time-based inclusion criteria.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.registrationLocation",
+    "signature": "individual.registrationLocation()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Use in geolocation-based eligibility rules filtering individuals by registration coordinates.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.relationships",
+    "signature": "individual.relationships()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Access household or family links in eligibility rules checking relations to other individuals.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.replaceMediaObservation",
+    "signature": "individual.replaceMediaObservation(originalValue, newValue, conceptUUID)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation replacing file/media observation \u2014 rarely called directly from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.replaceObservation",
+    "signature": "individual.replaceObservation(originalValue, newValue)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation updating observation values \u2014 rarely called directly from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.scheduledEncounters",
+    "signature": "individual.scheduledEncounters()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve upcoming unexecuted encounters in visit schedule rules for appointment management.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.scheduledEncountersOfType",
+    "signature": "individual.scheduledEncountersOfType(encounterTypeName)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Filter scheduled encounters by type in visit schedule rules to manage specific appointment workflows.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.setAge",
+    "signature": "individual.setAge(age, isInYears)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Eligibility or registration rule needs to set age in years or months, updating dateOfBirth retroactively.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.setDateOfBirth",
+    "signature": "individual.setDateOfBirth(date)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Registration validation rule explicitly sets verified date of birth from a provided date value.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.setFirstName",
+    "signature": "individual.setFirstName(firstName)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation \u2014 registration form submission updates first name and composite name field.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.setLastName",
+    "signature": "individual.setLastName(lastName)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation \u2014 registration form submission updates last name and composite name field.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.setLatestEntityApprovalStatus",
+    "signature": "individual.setLatestEntityApprovalStatus(entityApprovalStatus)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation \u2014 framework updates approval status during entity lifecycle transitions.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.setMiddleName",
+    "signature": "individual.setMiddleName(middleName)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation \u2014 registration form submission updates middle name and composite name field.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.staticallyEligiblePrograms",
+    "signature": "individual.staticallyEligiblePrograms(allPrograms)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Eligibility rule filters programs to return those not already enrolled with allowMultipleEnrolments disabled.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.subjectLocation",
+    "signature": "individual.subjectLocation()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Summary or validation rule reads the subject's registered location as a SubjectLocation entity.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.subjectType",
+    "signature": "individual.subjectType()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Validation or eligibility rule accesses subject type configuration to determine allowed fields or enrolment rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.subjectTypeName",
+    "signature": "individual.subjectTypeName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Summary or display rule returns subject type name string for UI rendering.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.toJSON",
+    "signature": "individual.toJSON()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal serialization \u2014 framework converts subject to JSON for API response or data transport.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.toResource",
+    "signature": "individual.toResource()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal serialization \u2014 framework converts subject to server resource format with formatted dates and UUIDs.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.toSummaryString",
+    "signature": "individual.toSummaryString()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Summary rule returns formatted string with name, age, and gender for dashboard or list display.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.updateAudit",
+    "signature": "individual.updateAudit(userInfo, isNew)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation \u2014 framework updates audit fields (createdBy, lastModifiedBy, timestamps) on registration.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.updateProfilePicture",
+    "signature": "individual.updateProfilePicture(newValue)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation \u2014 registration or profile update form changes the profile picture value.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.userProfileSubtext1",
+    "signature": "individual.userProfileSubtext1(i18n)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Summary rule returns gender name for persons, empty string for non-person subject types.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.userProfileSubtext2",
+    "signature": "individual.userProfileSubtext2(i18n)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Summary rule returns formatted display age for persons, empty string for non-person subject types.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.validate",
+    "signature": "individual.validate()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Registration rule runs all subject type-specific validations on address, dates, names, gender.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.validateAddress",
+    "signature": "individual.validateAddress()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Registration validation rule checks lowest address level is populated when required by subject type.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.validateDateOfBirth",
+    "signature": "individual.validateDateOfBirth()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Registration validation rule checks date of birth is valid, not future, not >120 years, after registration date.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.validateFirstName",
+    "signature": "individual.validateFirstName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Validates that firstName matches configured format rules during registration.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.validateGender",
+    "signature": "individual.validateGender()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Validates that gender is selected and not empty during registration.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.validateLastName",
+    "signature": "individual.validateLastName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Validates that lastName matches configured format and mandatory requirements.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.validateMiddleName",
+    "signature": "individual.validateMiddleName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Validates that middleName matches configured format if provided.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.validateName",
+    "signature": "individual.validateName(value, validationKey, validFormat, mandatory = true)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal validation helper\u2014checks name field emptiness, format compliance, and mandatory requirements.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.validateRegistrationDate",
+    "signature": "individual.validateRegistrationDate()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Validates registration date is present, valid, after birth, and not in future.",
+    "example_snippet": ""
+  },
+  {
+    "name": "Individual.validateRegistrationLocation",
+    "signature": "individual.validateRegistrationLocation()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Validates that registration location is assigned and not null.",
+    "example_snippet": ""
+  }
+]

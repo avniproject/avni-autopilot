@@ -21,6 +21,7 @@ from pipeline.nodes import (
     generate_entities,
     generate_form_mappings,
     generate_forms,
+    generate_rules,
     package_zip,
     parse_documents,
 )
@@ -54,6 +55,7 @@ def build_graph(checkpointer=None) -> Any:
     graph.add_node("generate_entities", generate_entities)
     graph.add_node("generate_forms", generate_forms)
     graph.add_node("generate_form_mappings", generate_form_mappings)
+    graph.add_node("generate_rules", generate_rules)
     graph.add_node("package_zip", package_zip)
     # Edit-from-spec branch (BUNDLE_EDIT_FROM_SPEC_SDD)
     graph.add_node("diff_against_bundle", diff_against_bundle)
@@ -72,9 +74,10 @@ def build_graph(checkpointer=None) -> Any:
     graph.add_edge("apply_user_decisions", "generate_entities")
     graph.add_edge("generate_entities", "generate_forms")
     graph.add_edge("generate_forms", "generate_form_mappings")
+    graph.add_edge("generate_form_mappings", "generate_rules")
     # Branch on mode after the desired bundle is fully realized.
     graph.add_conditional_edges(
-        "generate_form_mappings", _route_after_generation,
+        "generate_rules", _route_after_generation,
         {"generate": "package_zip", "edit_from_spec": "diff_against_bundle"},
     )
     graph.add_edge("package_zip", END)

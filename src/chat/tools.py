@@ -18,7 +18,12 @@ from config import settings
 from domain.bundle_editor import (
     apply_field_edits,
     list_bundle_fields as _list_bundle_fields,
+    load_form_rule_context,
+    write_form_rule,
 )
+from domain.rules.generator import generate_rule as _generate_rule
+from domain.rules.rule_spec import RuleKind, RuleSpec
+from domain.rules.validator import check as _validate_rule
 from pipeline import build_graph, initial_state
 
 # ── Pipeline graph (compiled once, shared by every tool call) ────────────────
@@ -246,10 +251,90 @@ def edit_bundle_fields(bundle_path: str, operations: list[dict]) -> dict:
         return {"status": "error", "error": f"unexpected: {exc}"}
 
 
+@tool
+def set_visit_schedule_rule(
+    bundle_path: str, form_name: str, intent: str,
+) -> dict:
+    """Generate the `visitScheduleRule` JS for one form from a natural-language intent.
+
+    Loads the bundle, builds a RuleSpec from the form's context (formType,
+    subject/program/encounter associations, available concepts and encounter
+    types), calls the rule generator, validates the produced JS, and on
+    success writes it into the form JSON before re-zipping atomically.
+
+    On validation failure (parse error, ungrounded symbol, off-bundle concept)
+    nothing is written and the warnings are returned for the user to act on.
+
+    Args:
+        bundle_path: Path to a bundle ZIP file or an unpacked bundle directory.
+        form_name: Exact name of the form (matches `form.name` in the bundle).
+        intent: Natural-language description of the desired schedule, e.g.
+            "schedule the next follow-up 30 days after this visit unless the
+            participant has exited the program".
+    """
+    try:
+        context = load_form_rule_context(bundle_path, form_name)
+    except FileNotFoundError as exc:
+        return {"status": "error", "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "error": f"unexpected: {exc}"}
+
+    if context is None:
+        return {
+            "status": "error",
+            "error": f"form not found in bundle: {form_name!r}",
+        }
+
+    spec = RuleSpec(
+        rule_kind=RuleKind.VISIT_SCHEDULE,
+        intent=intent,
+        form_name=form_name,
+        form_type=context["form_type"],
+        subject_type=context["subject_type"],
+        program=context["program"],
+        encounter_type=context["encounter_type"],
+        available_concepts=context["available_concepts"],
+        available_encounter_types=context["available_encounter_types"],
+        available_programs=context["available_programs"],
+    )
+
+    result = _generate_rule(spec)
+    ok, validator_warnings = _validate_rule(result, spec)
+    warnings = [*result.warnings, *validator_warnings]
+
+    if not (ok and result.js):
+        return {
+            "status": "rejected",
+            "form_name": form_name,
+            "rule_kind": RuleKind.VISIT_SCHEDULE.value,
+            "confidence": result.confidence,
+            "warnings": warnings,
+        }
+
+    if not write_form_rule(bundle_path, form_name, RuleKind.VISIT_SCHEDULE.value, result.js):
+        return {
+            "status": "error",
+            "error": f"form was found earlier but write_form_rule could not relocate it: {form_name!r}",
+        }
+
+    return {
+        "status": "done",
+        "form_name": form_name,
+        "rule_kind": RuleKind.VISIT_SCHEDULE.value,
+        "confidence": result.confidence,
+        "used_helpers": result.used_helpers,
+        "referenced_concepts": result.referenced_concepts,
+        "referenced_encounter_types": result.referenced_encounter_types,
+        "warnings": warnings,
+        "js_preview": result.js if len(result.js) <= 400 else result.js[:400] + "...",
+    }
+
+
 TOOLS = [
     generate_bundle,
     edit_bundle_from_spec,
     resume_bundle,
     list_bundle_fields,
     edit_bundle_fields,
+    set_visit_schedule_rule,
 ]

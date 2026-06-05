@@ -1,0 +1,51 @@
+[
+  {
+    "name": "lodash.find",
+    "signature": "_.find(collection, predicate)",
+    "applies_to": ["visitScheduleRule"],
+    "use_when": "Return the first element matching the predicate, or undefined. Common over individual.encounters / programEnrolment.getEncounters().",
+    "example_snippet": "const dailyAttendance = _.find(individual.encounters, e => e.encounterType.name === 'Daily Attendance Form');"
+  },
+  {
+    "name": "lodash.filter",
+    "signature": "_.filter(collection, predicate)",
+    "applies_to": ["visitScheduleRule"],
+    "use_when": "Return every element matching the predicate.",
+    "example_snippet": "const completed = _.filter(encounters, e => e.encounterDateTime !== null);"
+  },
+  {
+    "name": "lodash.chain",
+    "signature": "_.chain(collection)",
+    "applies_to": ["visitScheduleRule"],
+    "use_when": "Open a lazy lodash pipeline. Terminate with `.value()`. Useful when filtering + mapping over encounter lists.",
+    "example_snippet": "const completedNames = _.chain(programEnrolment.getEncounters(true)).filter(e => e.encounterDateTime).map(e => e.name).value();"
+  },
+  {
+    "name": "lodash.isNil",
+    "signature": "_.isNil(value)",
+    "applies_to": ["visitScheduleRule"],
+    "use_when": "Treat null and undefined uniformly. Common before reading observation values.",
+    "example_snippet": "if (_.isNil(programEncounter.earliestVisitDateTime)) { return []; }"
+  },
+  {
+    "name": "lodash.isEmpty",
+    "signature": "_.isEmpty(value)",
+    "applies_to": ["visitScheduleRule"],
+    "use_when": "True for empty arrays / strings / objects (and nil).",
+    "example_snippet": "if (_.isEmpty(existingEncounters)) { scheduleBuilder.add({ ... }); }"
+  },
+  {
+    "name": "lodash.isEqual",
+    "signature": "_.isEqual(a, b)",
+    "applies_to": ["visitScheduleRule"],
+    "use_when": "Deep equality. Used to compare encounter type names, weekday strings, observation values.",
+    "example_snippet": "if (_.isEqual(weekDayName, 'Sun')) { /* skip Sunday */ }"
+  },
+  {
+    "name": "lodash.get",
+    "signature": "_.get(object, path, default?)",
+    "applies_to": ["visitScheduleRule"],
+    "use_when": "Safely read a nested property. Common when walking groupSubjects / programEnrolment.individual.groups.",
+    "example_snippet": "const group = _.get(_.find(myGroups, g => !g.voided), 'groupSubject');"
+  }
+]

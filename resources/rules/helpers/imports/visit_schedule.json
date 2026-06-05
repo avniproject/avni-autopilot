@@ -1,0 +1,30 @@
+[
+  {
+    "name": "VisitScheduleBuilder.constructor",
+    "signature": "new imports.rulesConfig.VisitScheduleBuilder({ individual | programEnrolment | programEncounter | encounter })",
+    "applies_to": ["visitScheduleRule"],
+    "use_when": "Open a builder bound to the entity the form is generating the schedule for. Pass exactly one of the four entity keys.",
+    "example_snippet": "const scheduleBuilder = new imports.rulesConfig.VisitScheduleBuilder({ programEncounter });"
+  },
+  {
+    "name": "VisitScheduleBuilder.add",
+    "signature": "scheduleBuilder.add({ name, encounterType, earliestDate, maxDate })",
+    "applies_to": ["visitScheduleRule"],
+    "use_when": "Add one scheduled visit to the builder. encounterType MUST match an existing Encounter Type name in the bundle. earliestDate and maxDate are JS Dates.",
+    "example_snippet": "scheduleBuilder.add({ name: 'ANC 1', encounterType: 'ANC', earliestDate, maxDate });"
+  },
+  {
+    "name": "VisitScheduleBuilder.getAll",
+    "signature": "scheduleBuilder.getAll()",
+    "applies_to": ["visitScheduleRule"],
+    "use_when": "Return every visit currently held by the builder. Use as the rule's return value when no de-duplication is required.",
+    "example_snippet": "return scheduleBuilder.getAll();"
+  },
+  {
+    "name": "VisitScheduleBuilder.getAllUnique",
+    "signature": "scheduleBuilder.getAllUnique(key)",
+    "applies_to": ["visitScheduleRule"],
+    "use_when": "Return visits deduplicated by the given key (commonly 'encounterType'). Use when the rule may add the same encounter type more than once and only the first should survive.",
+    "example_snippet": "return scheduleBuilder.getAllUnique('encounterType');"
+  }
+]

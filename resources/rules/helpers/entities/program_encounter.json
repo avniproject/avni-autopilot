@@ -1,0 +1,164 @@
+[
+  {
+    "name": "ProgramEncounter.associateChild",
+    "signature": "programEncounter.associateChild(child, childEntityClass, childResource, entityService)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation \u2014 associates child approval statuses to the parent program encounter during sync.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.cloneForEdit",
+    "signature": "programEncounter.cloneForEdit()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation \u2014 clones the encounter for edit operations, preserving program enrolment reference.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.createEmptyInstance",
+    "signature": "programEncounter.createEmptyInstance()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal initialization \u2014 creates a blank program encounter instance for new records.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.createScheduled",
+    "signature": "programEncounter.createScheduled(encounterType, programEnrolment)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation \u2014 instantiates a scheduled program encounter for a given type and enrolment.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.findLatestObservationInEntireEnrolment",
+    "signature": "programEncounter.findLatestObservationInEntireEnrolment(conceptNameOrUuid, currentEncounter)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns the most recent observation matching a concept across all encounters in the enrolment.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.findObservationInEntireEnrolment",
+    "signature": "programEncounter.findObservationInEntireEnrolment(conceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns any observation matching a concept across all encounters in the program enrolment.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.fromResource",
+    "signature": "programEncounter.fromResource(resource, entityService)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal deserialization \u2014 reconstructs a program encounter from synced resource data.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.getAllScheduledVisits",
+    "signature": "programEncounter.getAllScheduledVisits()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns all scheduled visits within the program enrolment relative to this encounter.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.getEncounterDateValues",
+    "signature": "programEncounter.getEncounterDateValues()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns an object containing actual, scheduled, and maximum encounter date values.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.getName",
+    "signature": "programEncounter.getName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal framework \u2014 returns the hardcoded entity type name \"ProgramEncounter\".",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.getSchemaName",
+    "signature": "programEncounter.getSchemaName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal framework \u2014 returns the Realm schema name for program encounters.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.individual",
+    "signature": "programEncounter.individual()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns the individual subject enrolled in the program for this encounter.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.observationExistsInEntireEnrolment",
+    "signature": "programEncounter.observationExistsInEntireEnrolment(conceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true if a concept has been observed anywhere in the program enrolment.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.programEnrolment",
+    "signature": "programEncounter.programEnrolment()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns the associated program enrolment object containing this encounter.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.setLatestEntityApprovalStatus",
+    "signature": "programEncounter.setLatestEntityApprovalStatus(entityApprovalStatus)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation \u2014 sets the most recent approval status record for this encounter.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.toJSON",
+    "signature": "programEncounter.toJSON()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal serialization \u2014 converts the encounter to a JSON representation for transport.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.toResource",
+    "signature": "programEncounter.toResource()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal serialization \u2014 converts the encounter to a sync-ready resource object.",
+    "example_snippet": ""
+  },
+  {
+    "name": "ProgramEncounter.validate",
+    "signature": "programEncounter.validate()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns validation errors if encounter date falls outside enrolment window or is in future.",
+    "example_snippet": ""
+  }
+]

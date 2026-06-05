@@ -316,6 +316,10 @@ def _build_form(
         "name": name,
         "uuid": form_uuid,
         "formType": form_type,
+        # Populated later by the generate_rules pipeline node if the form
+        # carries a rule intent; otherwise stays the empty default that
+        # mirrors today's bundle output. See SDD §4.3.
+        "visitScheduleRule": "",
         "formElementGroups": form_element_groups,
     }
 

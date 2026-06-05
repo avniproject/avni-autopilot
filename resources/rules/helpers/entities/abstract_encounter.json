@@ -1,0 +1,434 @@
+[
+  {
+    "name": "AbstractEncounter.addObservation",
+    "signature": "encounter.addObservation(obs)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Appends an observation \u2014 internal mutation, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.approvalStatuses",
+    "signature": "encounter.approvalStatuses()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns list of approval statuses for validation or eligibility checks.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.cancelDateTime",
+    "signature": "encounter.cancelDateTime()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns cancellation timestamp for encounter in eligibility or validation rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.cancelLocation",
+    "signature": "encounter.cancelLocation()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns geographic point where encounter was cancelled.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.cancelObservations",
+    "signature": "encounter.cancelObservations()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns observations recorded when encounter was cancelled.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.cloneForEdit",
+    "signature": "encounter.cloneForEdit()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Creates editable copy \u2014 internal mutation, framework plumbing, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.createEmptyInstance",
+    "signature": "encounter.createEmptyInstance(encounter)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Initializes new encounter with defaults \u2014 internal mutation, framework plumbing.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.createdBy",
+    "signature": "encounter.createdBy()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns name of user who created the encounter.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.createdByUUID",
+    "signature": "encounter.createdByUUID()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns UUID of user who created the encounter.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.earliestVisitDateTime",
+    "signature": "encounter.earliestVisitDateTime()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns earliest allowed encounter date for scheduling validation.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.encounterDateTime",
+    "signature": "encounter.encounterDateTime()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns when the encounter occurred for scheduling or eligibility rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.encounterLocation",
+    "signature": "encounter.encounterLocation()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns geographic point where encounter was conducted.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.encounterType",
+    "signature": "encounter.encounterType()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns encounter type for visit schedule, validation, or eligibility rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.filledBy",
+    "signature": "encounter.filledBy()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns name of user who completed the encounter form.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.filledByUUID",
+    "signature": "encounter.filledByUUID()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns UUID of user who completed the encounter form.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.findCancelEncounterObservation",
+    "signature": "encounter.findCancelEncounterObservation(conceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns observation recorded during cancellation by concept name or UUID.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.findCancelEncounterObservationReadableValue",
+    "signature": "encounter.findCancelEncounterObservationReadableValue(conceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Read the human-readable value of a concept recorded on the cancellation form of this encounter (only on cancellation rule kinds).",
+    "example_snippet": "const reason = programEncounter.findCancelEncounterObservationReadableValue('Visit cancel reason');"
+  },
+  {
+    "name": "AbstractEncounter.findGroupedObservation",
+    "signature": "encounter.findGroupedObservation(parentConceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns grouped observations under parent concept for validation rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.findMediaObservations",
+    "signature": "encounter.findMediaObservations()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns media files from encounter and cancellation observations.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.findObservation",
+    "signature": "encounter.findObservation(conceptNameOrUuid, parentConceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns observation by concept name/UUID, optionally within grouped parent.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.fromResource",
+    "signature": "encounter.fromResource(resource, entityService, encounter)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Deserializes encounter from API resource \u2014 internal mutation, framework plumbing.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.getEncounterDateValues",
+    "signature": "encounter.getEncounterDateValues()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve the encounter's recorded date-time as a keyed object for comparison or assertion.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.getEntityTypeName",
+    "signature": "encounter.getEntityTypeName()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Determine the encounter type name for eligibility checks or summary display logic.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.getObservationReadableValue",
+    "signature": "encounter.getObservationReadableValue(conceptNameOrUuid, parentConceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Read the human-readable value of a concept observed on this encounter.",
+    "example_snippet": "const bt = encounter.getObservationReadableValue('BT date');"
+  },
+  {
+    "name": "AbstractEncounter.getObservationValue",
+    "signature": "encounter.getObservationValue(conceptNameOrUuid, parentConceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Read a specific observation value by concept name/UUID for validation or decision rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.getObservations",
+    "signature": "encounter.getObservations()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve observations, falling back to cancellation observations if encounter was cancelled.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.getRealEventDate",
+    "signature": "encounter.getRealEventDate()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Return `earliestVisitDateTime || encounterDateTime` \u2014 handles upload cases where earliest is null. Prefer over the inline `||` idiom.",
+    "example_snippet": "const visitDate = encounter.getRealEventDate();"
+  },
+  {
+    "name": "AbstractEncounter.hasBeenEdited",
+    "signature": "encounter.hasBeenEdited()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when an encounter has been assigned a date-time \u2014 check if previously saved.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.hasObservation",
+    "signature": "encounter.hasObservation(conceptNameOrUuid)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when a specific observation exists \u2014 guard conditional logic on data presence.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.isCancellable",
+    "signature": "encounter.isCancellable()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when encounter can be cancelled \u2014 not yet edited and not already cancelled.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.isCancelled",
+    "signature": "encounter.isCancelled()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when encounter has been cancelled \u2014 check if cancellation observations apply.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.isFilled",
+    "signature": "encounter.isFilled()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when encounter has a recorded date-time \u2014 verify data-capture completion.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.isRejectedEntity",
+    "signature": "encounter.isRejectedEntity()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when latest approval status is rejected \u2014 block actions on rejected encounters.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.isScheduled",
+    "signature": "encounter.isScheduled()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Returns true when encounter is scheduled but unfilled/uncancelled \u2014 identify pending visits.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.lastModifiedBy",
+    "signature": "encounter.lastModifiedBy()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve the name of the user who last modified the encounter \u2014 internal accessor.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.lastModifiedByUUID",
+    "signature": "encounter.lastModifiedByUUID()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve UUID of the user who last modified the encounter \u2014 internal accessor.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.latestEntityApprovalStatus",
+    "signature": "encounter.latestEntityApprovalStatus()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve the most recent approval status record \u2014 check rejection or approval state.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.maxVisitDateTime",
+    "signature": "encounter.maxVisitDateTime()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve the maximum visit date-time boundary \u2014 internal accessor.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.name",
+    "signature": "encounter.name()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve the encounter's display name \u2014 internal accessor.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.observations",
+    "signature": "encounter.observations()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve all observations as parsed Observation objects \u2014 iterate for bulk checks.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.replaceMediaObservation",
+    "signature": "encounter.replaceMediaObservation(originalValue, newValue, conceptUUID)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Replace media file reference in an observation \u2014 internal mutation, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.replaceObservation",
+    "signature": "encounter.replaceObservation(originalValue, newValue)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Update observation value in both primary and cancel collections \u2014 internal mutation, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.setLatestEntityApprovalStatus",
+    "signature": "encounter.setLatestEntityApprovalStatus(entityApprovalStatus)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Assign approval status record \u2014 internal mutation, rarely called from rules.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.subjectType",
+    "signature": "encounter.subjectType()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Retrieve the subject type (individual or program-enrolled) for observation validation or eligibility checks.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.toResource",
+    "signature": "encounter.toResource()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal serialization \u2014 converts encounter to wire format with timestamps, observations, and locations.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.updateAudit",
+    "signature": "encounter.updateAudit(userInfo, isNew, isGettingFilled)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Internal mutation \u2014 records creation/modification timestamps and filler identity when encounter is submitted.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.updateSchedule",
+    "signature": "encounter.updateSchedule(scheduledVisit)",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Sync scheduled visit details (name, date bounds) into an encounter instance after scheduling.",
+    "example_snippet": ""
+  },
+  {
+    "name": "AbstractEncounter.validate",
+    "signature": "encounter.validate()",
+    "applies_to": [
+      "visitScheduleRule"
+    ],
+    "use_when": "Return validation errors if encounter date is missing; called during form submission or eligibility checks.",
+    "example_snippet": ""
+  }
+]

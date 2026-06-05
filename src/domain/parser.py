@@ -20,6 +20,12 @@ from typing import Any
 
 import pandas as pd
 
+from domain.rules.parser import (
+    apply_intents_to_forms,
+    detect_rule_columns,
+    extract_rule_intents,
+    find_form_name_column,
+)
 from models import (
     AddressLevelSpec,
     EncounterTypeSpec,
@@ -323,6 +329,12 @@ def _classify_sheet(df: pd.DataFrame, sheet_name: str = "") -> str:
     has_data_type = any("data type" in c or "datatype" in c for c in cols_lower)
     if has_field_name and has_data_type:
         return "form"
+
+    # Form-level rules tab — name column ("form name" / "form" / "name") plus
+    # at least one rule-column alias. Detected BEFORE "form" so a sheet that
+    # only carries rules doesn't get mistaken for a field-list sheet.
+    if find_form_name_column(df) is not None and detect_rule_columns(df):
+        return "rules"
 
     # Encounters — first col contains "encounter name" or "encounter type"
     if (
@@ -1324,6 +1336,11 @@ def parse_scoping_docs(
     w3h_dfs: list[pd.DataFrame] = []
     form_sheets: list[tuple[str, pd.DataFrame, int]] = []  # (name, df, header_offset)
     misc_sheets: list[dict] = []
+    # Per-form rule intents harvested from a dedicated "Rules" / "Form Rules"
+    # tab. Each row in that tab corresponds to one form (cancellation and exit
+    # forms get their own rows, distinct from the parent encounter type).
+    # Stitched onto FormSpec.rule_intents at the end of phase 5.
+    intents_by_form_name: dict[str, dict[str, str]] = {}
 
     seen: dict[str, set[str]] = {
         "address": set(),
@@ -1428,6 +1445,13 @@ def parse_scoping_docs(
                     if et.name.lower() not in seen["encounter"]:
                         all_encounters.append(et)
                         seen["encounter"].add(et.name.lower())
+
+            elif classification == "rules":
+                name_col = find_form_name_column(df_with_header)
+                if name_col:
+                    intents_by_form_name.update(
+                        extract_rule_intents(df_with_header, name_col)
+                    )
 
             elif classification == "w3h":
                 w3h_dfs.append(df_with_header)
@@ -1539,6 +1563,15 @@ def parse_scoping_docs(
 
     # Phase 5b: Resolve missing subjectType on forms
     _resolve_form_subject_types(all_forms, all_encounters, all_subjects, all_programs)
+
+    # Phase 5c: Attach rule intents harvested from the Rules tab
+    if intents_by_form_name:
+        apply_intents_to_forms(all_forms, intents_by_form_name)
+        attached = sum(1 for f in all_forms if f.rule_intents)
+        logger.info(
+            "Attached rule intents to %d of %d form(s)",
+            attached, len(all_forms),
+        )
 
     # Phase 6: Always include default group
     groups = [GroupSpec(name="Everyone", has_all_privileges=True)]

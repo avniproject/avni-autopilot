@@ -8,20 +8,24 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40.0",
+    "esprima>=4.0.1",
     "httpx>=0.27.0",
     "langchain-anthropic>=0.3.0",
     "langgraph>=0.2.0",
     "langsmith>=0.1.0",
+    "numpy>=1.26",
     "openpyxl>=3.1.0",
     "pandas>=2.0.0",
     "pydantic>=2.0.0",
     "tabulate>=0.9",
+    "voyageai>=0.3.0",
 ]
+
+[project.scripts]
+avni-chat = "chat.repl:run_chat"
+avni-rules-kb = "domain.rules.kb_cli:main"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
 ]
-
-[project.scripts]
-avni-chat = "chat.repl:run_chat"
