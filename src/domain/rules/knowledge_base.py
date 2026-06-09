@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+from pydantic import BaseModel, ConfigDict
 
 from domain.rules.rule_spec import RuleKind, RuleSpec
 
@@ -62,9 +63,10 @@ _DEFAULT_MAX_RETRIES = int(os.environ.get("VOYAGE_MAX_RETRIES", "5"))
 # ── Catalog entry shapes ──────────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
-class HelperEntry:
+class HelperEntry(BaseModel):
     """One row of the helper catalog (per-entity or per-imports-namespace)."""
+
+    model_config = ConfigDict(frozen=True)
 
     key: str                # stable id used in the embedding cache
     name: str               # e.g. "Individual.findLatestObservationFromPreviousEncounters"
@@ -82,9 +84,10 @@ class HelperEntry:
         )
 
 
-@dataclass(frozen=True)
-class ExampleEntry:
+class ExampleEntry(BaseModel):
     """One few-shot example pulled from the curated rule corpus."""
+
+    model_config = ConfigDict(frozen=True)
 
     key: str
     rule_kind: str

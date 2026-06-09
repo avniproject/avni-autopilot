@@ -5,10 +5,10 @@ knowledge base, prompts Claude with a structured-output schema, and returns a
 `RuleResult`. The caller (pipeline node or chat tool) runs `validator.check`
 afterwards and decides whether to write the JS into the form bundle.
 
-Construct one `RuleGenerator` per pipeline run — the system prompt is cached
-across `generate()` calls so subsequent forms hit the Anthropic prompt cache.
-For one-shot use, the module-level `generate_rule(spec)` builds a fresh
-instance. See specs/VISIT_SCHEDULE_RULE_SDD.md §7.
+Construct one `RuleGenerator` per pipeline run (or hold a module-level
+instance for long-lived chat tools) — the system prompt is cached across
+`generate()` calls so subsequent forms hit the Anthropic prompt cache. See
+specs/VISIT_SCHEDULE_RULE_SDD.md §7.
 """
 
 from __future__ import annotations
@@ -130,16 +130,6 @@ class RuleGenerator:
             referenced_encounter_types=list(output.referenced_encounter_types),
             warnings=warnings,
         )
-
-
-def generate_rule(spec: RuleSpec, kb: KnowledgeBase | None = None) -> RuleResult:
-    """One-shot convenience: build a generator, generate once, discard.
-
-    Pipeline code should construct `RuleGenerator` once and reuse it across
-    forms to keep the prompt cache warm. This helper is for chat tools and
-    ad-hoc callers that only generate a single rule per call.
-    """
-    return RuleGenerator(kb=kb).generate(spec)
 
 
 def _empty(spec: RuleSpec, reason: str) -> RuleResult:

@@ -700,9 +700,9 @@ def load_form_rule_context(bundle_path: str, form_name: str) -> dict | None:
             if element.get("name") and not element.get("voided")
         })
 
-        subject_types = _load_entity_names(workdir, "subjectTypes.json")
-        programs = _load_entity_names(workdir, "programs.json")
-        encounter_types = _load_entity_names(workdir, "encounterTypes.json")
+        subject_names, subject_by_uuid = _load_entity_index(workdir, "subjectTypes.json")
+        program_names, program_by_uuid = _load_entity_index(workdir, "programs.json")
+        encounter_names, encounter_by_uuid = _load_entity_index(workdir, "encounterTypes.json")
         mappings = _load_form_mappings(workdir)
 
         form_uuid = target_form.get("uuid")
@@ -715,20 +715,20 @@ def load_form_rule_context(bundle_path: str, form_name: str) -> dict | None:
             "form_type": target_form.get("formType", ""),
             "subject_type": _name_from_uuid(
                 mapping.get("subjectTypeUUID") if mapping else None,
-                _load_entity_uuid_map(workdir, "subjectTypes.json"),
+                subject_by_uuid,
             ),
             "program": _name_from_uuid(
                 mapping.get("programUUID") if mapping else None,
-                _load_entity_uuid_map(workdir, "programs.json"),
+                program_by_uuid,
             ),
             "encounter_type": _name_from_uuid(
                 mapping.get("encounterTypeUUID") if mapping else None,
-                _load_entity_uuid_map(workdir, "encounterTypes.json"),
+                encounter_by_uuid,
             ),
             "available_concepts": concepts,
-            "available_encounter_types": sorted(encounter_types),
-            "available_programs": sorted(programs),
-            "_for_internal_use_subject_types": sorted(subject_types),
+            "available_encounter_types": sorted(encounter_names),
+            "available_programs": sorted(program_names),
+            "_for_internal_use_subject_types": sorted(subject_names),
         }
 
 
@@ -757,28 +757,33 @@ def write_form_rule(
     return True
 
 
-def _load_entity_names(workdir: str, file_name: str) -> list[str]:
-    """Read a top-level array file and return the `name` field of each entry."""
+def _load_entity_index(
+    workdir: str, file_name: str,
+) -> tuple[list[str], dict[str, str]]:
+    """Read a top-level array file once; return (names, uuid→name map).
+
+    Single-pass replacement for the previous `_load_entity_names` +
+    `_load_entity_uuid_map` pair. Entries missing `name` are dropped; entries
+    missing `uuid` still contribute to `names`.
+    """
     path = os.path.join(workdir, file_name)
     if not os.path.exists(path):
-        return []
+        return [], {}
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
     if not isinstance(data, list):
-        return []
-    return [entry.get("name") for entry in data if entry.get("name")]
-
-
-def _load_entity_uuid_map(workdir: str, file_name: str) -> dict[str, str]:
-    path = os.path.join(workdir, file_name)
-    if not os.path.exists(path):
-        return {}
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
-    if not isinstance(data, list):
-        return {}
-    return {entry["uuid"]: entry["name"]
-            for entry in data if entry.get("uuid") and entry.get("name")}
+        return [], {}
+    names: list[str] = []
+    uuid_to_name: dict[str, str] = {}
+    for entry in data:
+        name = entry.get("name")
+        if not name:
+            continue
+        names.append(name)
+        uuid = entry.get("uuid")
+        if uuid:
+            uuid_to_name[uuid] = name
+    return names, uuid_to_name
 
 
 def _load_form_mappings(workdir: str) -> list[dict]:

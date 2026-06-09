@@ -21,9 +21,9 @@ from domain.bundle_editor import (
     load_form_rule_context,
     write_form_rule,
 )
-from domain.rules.generator import generate_rule as _generate_rule
+from domain.rules.generator import RuleGenerator
 from domain.rules.rule_spec import RuleKind, RuleSpec
-from domain.rules.validator import check as _validate_rule
+from domain.rules.validator import validate_and_decide as _validate_and_decide
 from pipeline import build_graph, initial_state
 
 # ── Pipeline graph (compiled once, shared by every tool call) ────────────────
@@ -32,6 +32,7 @@ from pipeline import build_graph, initial_state
 # resumed later by passing the same `thread_id` back via `resume_bundle`.
 
 _pipeline_graph = build_graph()
+_rule_generator = RuleGenerator()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -298,11 +299,10 @@ def set_visit_schedule_rule(
         available_programs=context["available_programs"],
     )
 
-    result = _generate_rule(spec)
-    ok, validator_warnings = _validate_rule(result, spec)
-    warnings = [*result.warnings, *validator_warnings]
+    result = _rule_generator.generate(spec)
+    ok, warnings = _validate_and_decide(result, spec)
 
-    if not (ok and result.js):
+    if not ok:
         return {
             "status": "rejected",
             "form_name": form_name,

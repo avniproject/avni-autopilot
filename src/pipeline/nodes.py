@@ -38,7 +38,7 @@ from domain.llm import LLMHelper
 from domain.parser import _fuzzy_match, parse_scoping_docs
 from domain.rules.generator import RuleGenerator
 from domain.rules.rule_spec import RuleKind, RuleSpec
-from domain.rules.validator import check as validate_rule
+from domain.rules.validator import validate_and_decide
 from models import Change
 from pipeline.state import BundleState
 
@@ -329,14 +329,14 @@ def generate_rules(state: BundleState) -> dict:
                 available_encounter_types, available_programs,
             )
             result = generator.generate(rule_spec)
-            ok, val_warnings = validate_rule(result, rule_spec)
+            ok, raw_warnings = validate_and_decide(result, rule_spec)
 
-            for warning in (*result.warnings, *val_warnings):
+            for warning in raw_warnings:
                 warnings.append(
                     f"rules.{kind_value}.{form_spec.name}: {warning}"
                 )
 
-            if not (ok and result.js):
+            if not ok:
                 continue
 
             target = forms_by_name.get(form_spec.name)

@@ -27,6 +27,24 @@ _ENCOUNTER_TYPE_PROPERTY_KEYS: frozenset[str] = frozenset({
 })
 
 
+def validate_and_decide(
+    result: RuleResult, spec: RuleSpec,
+) -> tuple[bool, list[str]]:
+    """Run `check` and decide whether the rule should be written.
+
+    Combines LLM-reported warnings with validator findings and gates the
+    write on validator approval AND a non-empty `result.js`. Single shared
+    decision point for the pipeline (`generate_rules`) and the chat tool
+    (`set_visit_schedule_rule`) — see specs/VISIT_SCHEDULE_RULE_SDD.md §7.3.
+
+    Returns:
+        (ok, warnings). When False, the caller must skip the write.
+    """
+    check_ok, validator_warnings = check(result, spec)
+    warnings = [*result.warnings, *validator_warnings]
+    return (check_ok and bool(result.js)), warnings
+
+
 def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
     """Validate a generated rule against the bundle's symbol surface.
 

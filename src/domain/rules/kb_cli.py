@@ -300,7 +300,11 @@ def _load_existing_helpers(path: Path) -> dict[str, dict[str, Any]]:
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError as exc:
+        log.warning(f"could not read {path}: {exc}")
+        return {}
+    except json.JSONDecodeError as exc:
+        log.warning(f"{path} is not valid JSON ({exc}); ignoring prior catalog")
         return {}
     if isinstance(data, list):
         return {entry["name"]: entry for entry in data if entry.get("name")}
