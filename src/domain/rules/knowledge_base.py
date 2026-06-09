@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+import yaml
 from pydantic import BaseModel, ConfigDict
 
 from domain.rules.rule_spec import RuleKind, RuleSpec
@@ -545,33 +546,13 @@ def _parse_example(text: str) -> tuple[dict, str]:
         raise ValueError("missing frontmatter")
     meta_block, rest = match.group(1), match.group(2)
 
-    meta: dict = {}
-    for line in meta_block.splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if ":" not in line:
-            continue
-        key, _, val = line.partition(":")
-        meta[key.strip()] = _parse_yaml_scalar(val.strip())
+    try:
+        meta = yaml.safe_load(meta_block) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid YAML frontmatter: {exc}") from exc
+    if not isinstance(meta, dict):
+        raise ValueError("frontmatter must be a YAML mapping")
 
     fence = _FENCE_RE.search(rest)
     body = fence.group(1).strip() if fence else rest.strip()
     return meta, body
-
-
-def _parse_yaml_scalar(raw: str):
-    """Tiny YAML-ish scalar parser for the example frontmatter.
-
-    Handles quoted strings and inline JSON arrays. Anything more exotic is
-    returned verbatim — the frontmatter we write is deliberately narrow.
-    """
-    if not raw:
-        return ""
-    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
-        return raw[1:-1]
-    if raw.startswith("[") and raw.endswith("]"):
-        try:
-            return json.loads(raw.replace("'", '"'))
-        except json.JSONDecodeError:
-            return raw
-    return raw

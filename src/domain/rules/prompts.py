@@ -115,16 +115,14 @@ def build_user_prompt(
 
     `helpers_text` and `examples_text` are pre-formatted blocks supplied by the
     knowledge base; this function just stitches them into the prompt with the
-    bundle context.
+    intent + symbol allowlists. Form context (formType / subjectType / program /
+    encounterType) is not re-stated here — retrieval has already scored
+    examples + helpers against it via the query embedding, and `entity_param`
+    in the system prompt encodes the form-type signal.
     """
     return _USER_PROMPT_TEMPLATE.format(
         intent=spec.intent,
         rule_kind=spec.rule_kind.value,
-        form_name=spec.form_name,
-        form_type=spec.form_type,
-        subject_type=spec.subject_type or "-",
-        program=spec.program or "-",
-        encounter_type=spec.encounter_type or "-",
         available_concepts=_format_list(spec.available_concepts),
         available_encounter_types=_format_list(spec.available_encounter_types),
         available_programs=_format_list(spec.available_programs),
@@ -139,13 +137,6 @@ INTENT
 
 RULE_KIND
 {rule_kind}
-
-FORM
-name: {form_name}
-formType: {form_type}
-subjectType: {subject_type}
-program: {program}
-encounterType: {encounter_type}
 
 AVAILABLE_CONCEPTS
 {available_concepts}

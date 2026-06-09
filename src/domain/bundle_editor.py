@@ -228,7 +228,7 @@ def _apply_rename(
         # Reinstate keeps its own original properties; do NOT clobber with captured
         # (the user is bringing back a previously-deleted field exactly as it was).
     else:
-        new_elem = _build_element_from_captured(form_name, new_name, captured, new_uuid)
+        new_elem = _build_element_from_captured(new_name, captured, new_uuid)
         section["formElements"].append(new_elem)
 
     # Concept for the new name
@@ -325,7 +325,7 @@ def _build_element(form_name: str, field_name: str, payload: dict, uuid: str, di
     return elem
 
 
-def _build_element_from_captured(form_name: str, field_name: str, captured: dict, uuid: str) -> dict:
+def _build_element_from_captured(field_name: str, captured: dict, uuid: str) -> dict:
     elem = {
         "uuid": uuid,
         "name": field_name,

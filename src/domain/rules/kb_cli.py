@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import openpyxl
+import yaml
 from collections.abc import Iterator
 from pydantic import BaseModel, Field
 
@@ -457,23 +458,20 @@ def _render_example(
     js: str,
 ) -> str:
     """Render a single example Markdown file matching SDD §6.2."""
-    return (
-        "---\n"
-        f"rule_kind: {rule_kind}\n"
-        f'intent: "{_escape(intent)}"\n'
-        f"entity_param: {entity_param}\n"
-        f"encounter_types: {json.dumps(encounter_types, ensure_ascii=False)}\n"
-        f"concepts: {json.dumps(concepts, ensure_ascii=False)}\n"
-        f'source_org: "{_escape(source_org)}"\n'
-        "---\n"
-        "```js\n"
-        f"{js}\n"
-        "```\n"
+    frontmatter = yaml.safe_dump(
+        {
+            "rule_kind": rule_kind,
+            "intent": intent,
+            "entity_param": entity_param,
+            "encounter_types": encounter_types,
+            "concepts": concepts,
+            "source_org": source_org,
+        },
+        sort_keys=False,
+        allow_unicode=True,
+        default_flow_style=False,
     )
-
-
-def _escape(s: str) -> str:
-    return s.replace("\\", "\\\\").replace('"', '\\"')
+    return f"---\n{frontmatter}---\n```js\n{js}\n```\n"
 
 
 # ── `rebuild` ─────────────────────────────────────────────────────────────────
