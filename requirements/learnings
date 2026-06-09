@@ -1,0 +1,12 @@
+1.Why chose? Provides a framework for observability, parallel processing, keeping track of chat discussions and also provides flexibility for determinism and integrating with AI as needed.
+    - configuring as nodes provides flexibility for retrying and observability
+2. Spec driven development
+3. LLM vs determinism :
+    - When needed intelligent deduction, use LLM - when path is clear code it.
+    - Dont give any counting tasks to LLM
+    - Validate output of LLM
+4. For lesser contexts JSON RAG is sufficient and Voyage AI embeddings are good for coding.
+- Prepare the data(remove similar and annotate) before applying RAG to avoid overloading with similar context
+
+
+
