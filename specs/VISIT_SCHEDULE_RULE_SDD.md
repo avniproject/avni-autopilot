@@ -65,6 +65,69 @@ This is the "store helpers + examples; vectorise only at query time" path from `
 
 ## 4. Architecture
 
+### 4.0 Overview
+
+Bird's-eye view of the system. The bundle pipeline (centre) is largely
+unchanged; rule generation is a new node that draws on a knowledge base
+populated offline and calls two external services per form.
+
+```mermaid
+flowchart LR
+    classDef new fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
+    classDef ext fill:#e0e7ff,stroke:#6366f1
+    classDef store fill:#fce7f3,stroke:#ec4899
+
+    XLSX[(Scoping xlsx<br/>Rules tab)]:::ext
+    AVNI[(avni-models src)]:::ext
+    CURATED[(curated rule<br/>examples)]:::ext
+
+    subgraph offline[Offline catalog build]
+        CLI["avni-rules-kb<br/>sync / ingest / enrich / rebuild"]
+        HELPERS[("helpers/*.json")]:::store
+        EXAMPLES[("examples/*.md")]:::store
+        CACHE[(".embeddings.json")]:::store
+        AVNI --> CLI
+        CURATED --> CLI
+        CLI --> HELPERS
+        CLI --> EXAMPLES
+        HELPERS --> CACHE
+        EXAMPLES --> CACHE
+    end
+
+    subgraph runtime[Bundle generation pipeline]
+        PARSE["parse_documents<br/>harvests rule intents"]
+        BUILD["generate_entities / forms /<br/>form_mappings"]
+        RULES["generate_rules"]:::new
+        ZIP[package_zip]
+    end
+
+    VOYAGE([Voyage AI<br/>embeddings]):::ext
+    ANTHROPIC([Anthropic<br/>Sonnet for JS, Haiku for catalog]):::ext
+    BUNDLE[(Org bundle ZIP)]:::ext
+
+    XLSX --> PARSE --> BUILD --> RULES --> ZIP --> BUNDLE
+    HELPERS --> RULES
+    EXAMPLES --> RULES
+    CACHE --> RULES
+    RULES <-->|query embed| VOYAGE
+    CLI <-->|catalog embed| VOYAGE
+    RULES <-->|JS generation| ANTHROPIC
+    CLI <-->|annotate use_when| ANTHROPIC
+```
+
+Three subsystems:
+
+- **Offline catalog build** — operator-run CLI populates a stable, reviewable
+  helper + example corpus on disk, plus an embedding cache. Runs rarely
+  (when avni-models changes or new curated examples land).
+- **Bundle generation pipeline** — existing LangGraph pipeline gains one
+  node (`generate_rules`) that consumes the catalog at runtime.
+- **External services** — Voyage AI (embeddings only) and Anthropic (Sonnet
+  for rule JS, Haiku for offline catalog annotation).
+
+Detailed per-node + per-stage diagrams live in
+[`OVERALL_ARCHITECTURE.md`](OVERALL_ARCHITECTURE.md).
+
 ### 4.1 Reuse from existing code
 
 - `EntitySpec` (`src/models.py:108`) — already carries every symbol the generated rule can legally reference.
@@ -109,21 +172,30 @@ A new pipeline node `generate_rules` is inserted **after** `generate_form_mappin
 
 ### 4.3 End-to-end flow
 
-```
-parse_documents (existing)
-  └─ Scheduling Rule column → rule_intent stored on FormSpec.rule_intents["visitSchedule"]
-generate_entities (existing)
-generate_forms (existing)
-generate_form_mappings (existing)
-generate_rules (new)
-  └─ for each form with a rule_intent:
-       1. build RuleSpec from form mappings + EntitySpec
-          (subject type, program, sibling encounter types in same program, …)
-       2. knowledge_base.retrieve(rule_kind, intent) → helpers, examples
-       3. generator.generate_rule(rule_spec, rule_kind) → RuleResult
-       4. validator.check(result) → accept / drop with warning
-       5. mutate already-written form JSON: form_json["visitScheduleRule"] = result.js
-package_zip (existing)
+```mermaid
+flowchart TB
+    classDef new fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
+
+    PARSE["parse_documents<br/>Rules tab to FormSpec.rule_intents"]
+    GE[generate_entities]
+    GF[generate_forms]
+    GFM[generate_form_mappings]
+    GR[generate_rules]:::new
+    PZ[package_zip]
+
+    PARSE --> GE --> GF --> GFM --> GR --> PZ
+
+    S1["1. Build RuleSpec from form +<br/>EntitySpec + form mappings"]
+    S2["2. KnowledgeBase.retrieve gives<br/>top-K helpers + examples"]
+    S3["3. RuleGenerator.generate gives<br/>RuleResult"]
+    S4["4. validator.check:<br/>accept or drop"]
+    S5["5. Mutate form JSON:<br/>visitScheduleRule = result.js"]
+    W[parse_warnings]
+
+    GR -.->|per form with intent| S1
+    S1 --> S2 --> S3 --> S4
+    S4 -->|ok| S5
+    S4 -->|reject| W
 ```
 
 **Why after `generate_form_mappings`:** so the pipeline and the chat tool both build `RuleSpec` from the same source (a bundle with mappings in place). Mappings don't read the rule fields, so the order is safe.

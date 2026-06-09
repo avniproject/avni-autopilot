@@ -15,42 +15,10 @@ from typing import Any
 import esprima
 from esprima.error_handler import Error as EsprimaError
 
+from domain.rules.accessors import CONCEPT_ACCESSORS, ENCOUNTER_TYPE_ACCESSORS
 from domain.rules.rule_spec import RuleResult, RuleSpec
 
 log = logging.getLogger(__name__)
-
-
-# ── Method names whose first string-literal arg is a concept name ─────────────
-# Sourced from the avni-models entity classes that rules access via
-# `params.entity`. Conservative list — only methods that unambiguously take a
-# concept name as their first arg.
-_CONCEPT_ACCESSORS: frozenset[str] = frozenset({
-    "getObservationReadableValue",
-    "getObservationReadableValueInEntireEnrolment",
-    "findCancelEncounterObservationReadableValue",
-    "findObservationInLastEncounter",
-    "findLatestObservationInEntireEnrolment",
-    "findLatestObservationFromPreviousEncounters",
-    "findLatestPreviousEncounterWithValueForConcept",
-    "findLatestPreviousEncounterWithObservationForConcept",
-    "findObservationValueInEntireEnrolment",
-    "findObservationAcrossAllEnrolments",
-    "getObservationValue",
-    "getObservationsForConceptName",
-})
-
-
-# ── Method names whose first string-literal arg is an encounter-type name ─────
-_ENCOUNTER_TYPE_ACCESSORS: frozenset[str] = frozenset({
-    "hasEncounter",
-    "hasEncounterOfType",
-    "hasProgramEncounterOfType",
-    "hasCompletedEncounterOfType",
-    "getEncountersOfType",
-    "numberOfEncountersOfType",
-    "scheduledEncountersOfType",
-    "findEncounter",
-})
 
 
 # ── Property keys whose Literal value is an encounter-type name ───────────────
@@ -193,9 +161,9 @@ def _collect_call_args(
     if not isinstance(value, str):
         return
 
-    if method in _CONCEPT_ACCESSORS:
+    if method in CONCEPT_ACCESSORS:
         concepts.add(value)
-    elif method in _ENCOUNTER_TYPE_ACCESSORS:
+    elif method in ENCOUNTER_TYPE_ACCESSORS:
         encounter_types.add(value)
 
 

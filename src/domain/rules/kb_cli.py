@@ -33,9 +33,11 @@ from pathlib import Path
 from typing import Any
 
 import openpyxl
+from collections.abc import Iterator
 from pydantic import BaseModel, Field
 
 import config  # noqa: F401  — imported for the .env-loading side effect
+from domain.rules.accessors import concept_accessor_call_regex
 from domain.rules.knowledge_base import KnowledgeBase
 from domain.rules.rule_spec import RuleKind
 
@@ -166,17 +168,18 @@ _RESERVED_WORDS: frozenset[str] = frozenset({
 })
 
 
-def _extract_public_methods(js: str) -> list[tuple[str, str]]:
-    """Extract `(name, parameter_list)` pairs from a JS class body.
+def _iter_method_declarations(js: str) -> Iterator[tuple[str, str, int]]:
+    """Yield `(name, params, line_index)` for each method-like declaration.
 
-    Best-effort regex — not a real JS parser. Parameter list is captured
-    verbatim from the source (e.g. `'conceptNameOrUuid, currentEncounter'`)
-    so the catalog can show realistic call sites.
+    Walks the JS source line by line, applying `_METHOD_PATTERNS` and the
+    skip-list (`_`-prefixed, `_SKIP_NAMES`, `_RESERVED_WORDS`). Comment-only
+    lines (`//`, `*`, `/*`) are ignored. Consumers decide whether to keep
+    every match (signature extraction) or whether to skip past captured
+    method bodies (body extraction).
     """
-    seen: dict[str, str] = {}
-    for line in js.splitlines():
+    for idx, line in enumerate(js.splitlines()):
         stripped = line.lstrip()
-        if stripped.startswith("//") or stripped.startswith("*"):
+        if stripped.startswith(("//", "*", "/*")):
             continue
         for pattern in _METHOD_PATTERNS:
             match = pattern.match(line)
@@ -186,8 +189,20 @@ def _extract_public_methods(js: str) -> list[tuple[str, str]]:
             if name.startswith("_") or name in _SKIP_NAMES or name in _RESERVED_WORDS:
                 break
             params = match.group(2).strip() if match.lastindex and match.lastindex >= 2 else ""
-            seen.setdefault(name, params)
+            yield name, params, idx
             break
+
+
+def _extract_public_methods(js: str) -> list[tuple[str, str]]:
+    """Extract `(name, parameter_list)` pairs from a JS class body.
+
+    Best-effort regex — not a real JS parser. Parameter list is captured
+    verbatim from the source (e.g. `'conceptNameOrUuid, currentEncounter'`)
+    so the catalog can show realistic call sites.
+    """
+    seen: dict[str, str] = {}
+    for name, params, _idx in _iter_method_declarations(js):
+        seen.setdefault(name, params)
     return list(seen.items())
 
 
@@ -396,15 +411,7 @@ _VS_BUILDER_RE = re.compile(r"VisitScheduleBuilder\s*\(\s*\{\s*(\w+)")
 _ENCOUNTER_TYPE_PROPERTY_RE = re.compile(
     r"""encounterType\s*:\s*['"]([^'"]+)['"]""", re.DOTALL,
 )
-_CONCEPT_ACCESSOR_RE = re.compile(
-    r"""\.(?:getObservationReadableValue|getObservationReadableValueInEntireEnrolment|"""
-    r"""findCancelEncounterObservationReadableValue|findObservationInLastEncounter|"""
-    r"""findLatestObservationInEntireEnrolment|findLatestObservationFromPreviousEncounters|"""
-    r"""findLatestPreviousEncounterWithValueForConcept|findLatestPreviousEncounterWithObservationForConcept|"""
-    r"""findObservationValueInEntireEnrolment|findObservationAcrossAllEnrolments|"""
-    r"""getObservationValue|getObservationsForConceptName)"""
-    r"""\(\s*['"]([^'"]+)['"]"""
-)
+_CONCEPT_ACCESSOR_RE = concept_accessor_call_regex()
 
 
 def _derive_entity_param(js: str) -> str:
@@ -639,40 +646,24 @@ def _extract_method_bodies(js: str) -> dict[str, str]:
     """Return `{method_name: body_text}` for every top-level method in a class.
 
     Best-effort brace-balancing extractor — not a real JS parser, but the
-    avni-models classes are flat enough that this works in practice.
+    avni-models classes are flat enough that this works in practice. Matches
+    that fall inside an already-captured body are skipped so nested
+    function-like syntax isn't recorded as a separate method.
     """
     lines = js.splitlines()
     out: dict[str, str] = {}
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        stripped = line.lstrip()
-        if stripped.startswith("//") or stripped.startswith("*") or stripped.startswith("/*"):
-            i += 1
+    skip_until = -1
+    for name, _params, idx in _iter_method_declarations(js):
+        if idx <= skip_until:
             continue
-        match: re.Match[str] | None = None
-        for pattern in _METHOD_PATTERNS:
-            match = pattern.match(line)
-            if match:
-                break
-        if not match:
-            i += 1
-            continue
-
-        method_name = match.group(1)
-        if method_name.startswith("_") or method_name in _SKIP_NAMES or method_name in _RESERVED_WORDS:
-            i += 1
-            continue
-        if method_name in out:
+        if name in out:
             # Keep the first definition; later ones could be call-sites the
             # permissive regex matched.
-            i += 1
             continue
-
-        body_lines, end = _collect_balanced_body(lines, i)
+        body_lines, end = _collect_balanced_body(lines, idx)
         if body_lines:
-            out[method_name] = "\n".join(body_lines)
-        i = end + 1
+            out[name] = "\n".join(body_lines)
+            skip_until = end
     return out
 
 
