@@ -1,6 +1,15 @@
 """CLI for maintaining the rule knowledge base.
 
-Subcommands:
+Day-to-day commands (porcelain):
+
+  helpers           Refresh entity helpers end-to-end (sync + enrich-use-when
+                    + rebuild). Use after pulling new avni-models source or
+                    hand-editing helper files. Pass --skip-enrich to avoid
+                    the Haiku cost.
+  examples          Refresh example corpus end-to-end (ingest-examples +
+                    rebuild). Use after editing the curated rules xlsx tab.
+
+Surgical commands (plumbing, run individually when you know what you need):
 
   sync              Walk avni-models source and (re)generate per-entity helper
                     catalogs under resources/rules/helpers/entities/. Existing
@@ -88,6 +97,29 @@ def main(argv: list[str] | None = None) -> int:
     p_enrich.add_argument("--dry-run", action="store_true",
                           help="Print proposed annotations without writing.")
 
+    # ── Composite porcelain commands ─────────────────────────────────────────
+    p_helpers = sub.add_parser(
+        "helpers",
+        help="Refresh entity helpers end-to-end (sync + enrich-use-when + rebuild).",
+    )
+    p_helpers.add_argument("--source", type=Path, default=_AVNI_MODELS_DEFAULT)
+    p_helpers.add_argument("--root", type=Path, default=_RULES_ROOT)
+    p_helpers.add_argument("--batch-size", type=int, default=20,
+                           help="Methods per Haiku call during enrich.")
+    p_helpers.add_argument("--skip-enrich", action="store_true",
+                           help="Skip Haiku annotation (saves API cost on a quick sync).")
+
+    p_examples = sub.add_parser(
+        "examples",
+        help="Refresh example corpus end-to-end (ingest-examples + rebuild).",
+    )
+    p_examples.add_argument("--xlsx", type=Path, default=_XLSX_DEFAULT)
+    p_examples.add_argument("--tab", type=str, default=_CURATED_TAB_DEFAULT)
+    p_examples.add_argument("--root", type=Path, default=_RULES_ROOT)
+    p_examples.add_argument("--rule-kind", type=str,
+                            default=RuleKind.VISIT_SCHEDULE.value,
+                            help="Subdirectory under examples/ and frontmatter value.")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "sync":
@@ -98,8 +130,75 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_rebuild(args.root)
     if args.cmd == "enrich-use-when":
         return cmd_enrich_use_when(args.source, args.root, args.batch_size, args.dry_run)
+    if args.cmd == "helpers":
+        return cmd_helpers(args.source, args.root, args.batch_size, args.skip_enrich)
+    if args.cmd == "examples":
+        return cmd_examples(args.xlsx, args.tab, args.root, args.rule_kind)
     parser.error(f"unknown command: {args.cmd!r}")
     return 2
+
+
+# ── Porcelain: composite commands that orchestrate the surgical ones ─────────
+
+
+def cmd_helpers(
+    source: Path, root: Path, batch_size: int, skip_enrich: bool,
+) -> int:
+    """End-to-end helper refresh: sync → enrich-use-when → rebuild.
+
+    Use after pulling new avni-models source or hand-editing helper files.
+    Pass `--skip-enrich` to avoid the Haiku cost when you only want a fast
+    sync + rebuild (e.g. when you'll annotate manually later).
+
+    Each step exits non-zero on a hard failure; the chain stops at the first
+    failing step so you can fix and retry without re-running successful work.
+    """
+    log.info("helpers: step 1/3 — sync from avni-models")
+    rc = cmd_sync(source, root)
+    if rc:
+        log.error("helpers: sync failed; stopping")
+        return rc
+
+    if skip_enrich:
+        log.info("helpers: step 2/3 — enrich-use-when SKIPPED (--skip-enrich)")
+    else:
+        log.info("helpers: step 2/3 — enrich-use-when via Haiku")
+        rc = cmd_enrich_use_when(source, root, batch_size, dry_run=False)
+        if rc:
+            log.error("helpers: enrich-use-when failed; stopping")
+            return rc
+
+    log.info("helpers: step 3/3 — rebuild embedding cache")
+    rc = cmd_rebuild(root)
+    if rc:
+        log.error("helpers: rebuild failed")
+        return rc
+
+    log.info("helpers: done")
+    return 0
+
+
+def cmd_examples(xlsx: Path, tab: str, root: Path, rule_kind: str) -> int:
+    """End-to-end example refresh: ingest-examples → rebuild.
+
+    Use after editing the curated rules xlsx tab. Cheap to re-run — the
+    rebuild step is content-hash-based, so unchanged examples are not
+    re-embedded.
+    """
+    log.info("examples: step 1/2 — ingest-examples from xlsx")
+    rc = cmd_ingest_examples(xlsx, tab, root, rule_kind)
+    if rc:
+        log.error("examples: ingest failed; stopping")
+        return rc
+
+    log.info("examples: step 2/2 — rebuild embedding cache")
+    rc = cmd_rebuild(root)
+    if rc:
+        log.error("examples: rebuild failed")
+        return rc
+
+    log.info("examples: done")
+    return 0
 
 
 # ── `sync` ────────────────────────────────────────────────────────────────────
