@@ -47,7 +47,17 @@ For each surviving rule (one per confirmed cluster), write a one-sentence `Promp
 
 Show all intents in a numbered list. Wait for the user to accept or edit before moving on.
 
-### 6. Write the curated tab
+### 6. Normalise rule JS before writing
+
+Each picked representative is copied **verbatim except for two narrow cleanups** that are pure noise / known transcription bugs in the source spreadsheet. Apply both, deterministically, to every `Rule` cell before writing it to the curated tab:
+
+a. **Strip leading `//SAMPLE RULE EXAMPLE` / `//SAMPLE EDIT FORM RULE` markers.** The marker is metadata about provenance, not part of the rule. Leaving it in teaches the LLM to emit the same marker. Match (case-insensitive) the first line if it matches `^\s*//\s*SAMPLE\s+(RULE\s+EXAMPLE|EDIT\s+FORM\s+RULE)\s*$` and drop it (including its trailing newline).
+
+b. **Repair the `use strict';` directive.** The source corpus consistently has the opening `"` (or `'`) missing — the stored bytes read `use strict';` which is a JS syntax error (`use` and `strict` are two adjacent identifiers). Replace `^[\t ]*use strict';` with `"use strict";` at the start of any line. Do NOT touch already-valid forms (`"use strict";` or `'use strict';`).
+
+These are the only allowed transformations. **No semantic edits**, no helper substitution, no body rewriting. Anything else stays as the cluster representative had it. If a cluster's representative has additional defects beyond these two (e.g. a real logic bug, dead code, an unsupported helper), flag it in the report but leave the cell unchanged.
+
+### 7. Write the curated tab
 
 Use `openpyxl` to write a new tab `List to automate (curated)` in the **same workbook** with columns:
 
@@ -57,7 +67,7 @@ Use `openpyxl` to write a new tab `List to automate (curated)` in the **same wor
 - Preserve cell wrapping / text formatting where reasonable.
 - If `List to automate (curated)` already exists: ask before overwriting; offer a numbered variant `List to automate (curated 2)` as an option.
 
-### 7. Report
+### 8. Report
 
 Print a short summary:
 
@@ -65,11 +75,12 @@ Print a short summary:
 - Rules kept: K (one per cluster)
 - Rules dropped as duplicates: D
 - Sample of the first 3 prompts.
+- Normalisation counts: `//SAMPLE` markers dropped, `use strict';` directives repaired.
 
 Suggest the user `git diff` the xlsx before committing (the file is git-tracked).
 
 ## Constraints
 
 - Never modify the `List to automate` tab in place — always write to a new tab.
-- Don't invent rules or modify rule JS during curation. Picking a representative ≠ rewriting it.
-- If a rule looks broken or doesn't compile mentally, flag it in the report but don't drop it silently.
+- The only allowed JS transformations are the two in §6 (drop the leading `//SAMPLE` marker line; repair `use strict';` → `"use strict";`). No semantic edits, no helper substitution, no body rewriting. Picking a representative ≠ rewriting it.
+- If a rule has defects beyond those two, flag them in the §8 report and leave the cell unchanged.

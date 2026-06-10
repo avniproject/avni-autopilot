@@ -7,7 +7,6 @@ concepts: []
 source_org: "JSCS"
 ---
 ```js
-//SAMPLE RULE EXAMPLE
 "use strict";
 ({ params, imports }) => {
   const programEncounter = params.entity;
