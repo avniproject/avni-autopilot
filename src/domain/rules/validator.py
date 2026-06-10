@@ -10,6 +10,7 @@ specs/VISIT_SCHEDULE_RULE_SDD.md §2, §7.3).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import esprima
@@ -25,6 +26,20 @@ log = logging.getLogger(__name__)
 _ENCOUNTER_TYPE_PROPERTY_KEYS: frozenset[str] = frozenset({
     "encounterType",
 })
+
+# RuleCondition chain methods used for answer grounding (§7 of
+# CONCEPT_ANSWER_GROUNDING_SDD.md).
+_VALUE_IN_METHODS: frozenset[str] = frozenset({
+    "valueInEncounter",
+    "valueInRegistration",
+    "valueInEntireEnrolment",
+    "valueInLastEncounter",
+})
+_CONTAINS_ANSWER_METHODS: frozenset[str] = frozenset({
+    "containsAnswerConceptName",
+    "containsAnyAnswerConceptName",
+})
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 
 def validate_and_decide(
@@ -91,6 +106,8 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
         warnings.append(f"off-bundle concept names: {bad_concepts}")
     if bad_encounters:
         warnings.append(f"off-bundle encounter types: {bad_encounters}")
+
+    warnings.extend(_check_answer_grounding(tree, spec))
 
     return (not warnings), warnings
 
@@ -208,4 +225,125 @@ def _property_key_name(key: Any) -> str | None:
     if key_type == "Literal":
         v = getattr(key, "value", None)
         return v if isinstance(v, str) else None
+    return None
+
+
+# ── Answer grounding (CONCEPT_ANSWER_GROUNDING_SDD §7) ────────────────────────
+
+
+def _check_answer_grounding(tree: Any, spec: RuleSpec) -> list[str]:
+    """Validate `containsAnswerConceptName(...)` literals against the bundle.
+
+    Walks RuleCondition chains: every `containsAnswer*(...)` call is paired
+    with its anchoring `valueIn*(concept)` call by traversing the callee
+    chain. The answer literals are checked against
+    `spec.concept_answers[concept]` (case-insensitive). Skips UUID-shaped
+    args (the rule API accepts both names and UUIDs; we only validate names).
+    No-op when `spec.concept_answers` is empty.
+    """
+    if not spec.concept_answers:
+        return []
+
+    answers_by_concept: dict[str, set[str]] = {
+        concept.casefold(): {a.casefold() for a in options}
+        for concept, options in spec.concept_answers.items()
+    }
+    valid_listing_by_concept: dict[str, list[str]] = {
+        concept.casefold(): list(options)
+        for concept, options in spec.concept_answers.items()
+    }
+
+    off_list: dict[str, set[str]] = {}
+    for call in _iter_call_expressions(tree):
+        if _method_name(call) not in _CONTAINS_ANSWER_METHODS:
+            continue
+        concept = _find_anchoring_concept(call)
+        if concept is None or _UUID_RE.match(concept):
+            continue
+        valid = answers_by_concept.get(concept.casefold())
+        if valid is None:
+            # Concept isn't in this rule's grounding scope — non-coded
+            # concept, or out-of-scope form. Skip rather than reject.
+            continue
+        for answer in _string_args(call):
+            if _UUID_RE.match(answer):
+                continue
+            if answer.casefold() not in valid:
+                off_list.setdefault(concept, set()).add(answer)
+
+    warnings: list[str] = []
+    for concept, bad in off_list.items():
+        valid_listing = valid_listing_by_concept[concept.casefold()]
+        warnings.append(
+            f"off-bundle answer(s) {sorted(bad)} for concept {concept!r} — "
+            f"expected one of: {valid_listing}"
+        )
+    return warnings
+
+
+def _iter_call_expressions(node: Any):
+    """Yield every CallExpression in the AST."""
+    if isinstance(node, list):
+        for child in node:
+            yield from _iter_call_expressions(child)
+        return
+    node_type = getattr(node, "type", None)
+    if node_type is None:
+        return
+    if node_type == "CallExpression":
+        yield node
+    for key, child in vars(node).items():
+        if key == "type":
+            continue
+        if isinstance(child, list) or hasattr(child, "type"):
+            yield from _iter_call_expressions(child)
+
+
+def _method_name(call: Any) -> str | None:
+    """Method name of a `something.method(...)` call, or None."""
+    callee = getattr(call, "callee", None)
+    if callee is None or getattr(callee, "type", None) != "MemberExpression":
+        return None
+    prop = getattr(callee, "property", None)
+    if prop is None or getattr(prop, "type", None) != "Identifier":
+        return None
+    return prop.name
+
+
+def _string_args(call: Any) -> list[str]:
+    """Return every Literal string argument of a call."""
+    out: list[str] = []
+    for arg in (getattr(call, "arguments", None) or []):
+        if getattr(arg, "type", None) == "Literal":
+            v = getattr(arg, "value", None)
+            if isinstance(v, str):
+                out.append(v)
+    return out
+
+
+def _find_anchoring_concept(call: Any) -> str | None:
+    """Walk back the receiver chain of `call` to find a `valueIn*(concept)` call.
+
+    For `foo().when.valueInRegistration('X').containsAnswerConceptName('Y')`,
+    starting at the containsAnswerConceptName call, this returns `'X'`.
+    """
+    cur = call
+    # Cap depth defensively in case of weird shapes.
+    for _ in range(64):
+        callee = getattr(cur, "callee", None)
+        if callee is None or getattr(callee, "type", None) != "MemberExpression":
+            return None
+        obj = getattr(callee, "object", None)
+        # Walk past nested MemberExpressions (e.g. `.and.when`)
+        while obj is not None and getattr(obj, "type", None) == "MemberExpression":
+            obj = getattr(obj, "object", None)
+        if obj is None or getattr(obj, "type", None) != "CallExpression":
+            return None
+        if _method_name(obj) in _VALUE_IN_METHODS:
+            args = getattr(obj, "arguments", None) or []
+            if args and getattr(args[0], "type", None) == "Literal":
+                v = getattr(args[0], "value", None)
+                return v if isinstance(v, str) else None
+            return None
+        cur = obj
     return None

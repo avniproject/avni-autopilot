@@ -327,6 +327,7 @@ def generate_rules(state: BundleState) -> dict:
             rule_spec = _build_rule_spec(
                 form_spec, kind, intent,
                 available_encounter_types, available_programs,
+                all_forms=spec.forms,
             )
             result = generator.generate(rule_spec)
             ok, raw_warnings = validate_and_decide(result, rule_spec)
@@ -362,14 +363,22 @@ def _build_rule_spec(
     intent: str,
     available_encounter_types: list[str],
     available_programs: list[str],
+    all_forms: list[Any] | None = None,
 ) -> RuleSpec:
-    """Compose a RuleSpec from a FormSpec and the bundle's vocabulary."""
+    """Compose a RuleSpec from a FormSpec and the bundle's vocabulary.
+
+    `all_forms` is the full list of `FormSpec` in the bundle — used to
+    resolve cross-form references (registration + enrolment) for
+    `concept_answers` per CONCEPT_ANSWER_GROUNDING_SDD.md §5.
+    """
     available_concepts = sorted({
         field.name
         for section in (form_spec.sections or [])
         for field in (section.fields or [])
         if field.name
     })
+    in_scope_forms = _forms_in_scope_for(form_spec, all_forms or [form_spec])
+    concept_answers = _collect_concept_answers(in_scope_forms)
     return RuleSpec(
         rule_kind=kind,
         intent=intent,
@@ -381,7 +390,79 @@ def _build_rule_spec(
         available_concepts=available_concepts,
         available_encounter_types=available_encounter_types,
         available_programs=available_programs,
+        concept_answers=concept_answers,
     )
+
+
+# Form types that participate in a program (so an enrolment form is in
+# scope for cross-form answer grounding). Mirrors generators._PROGRAM_FORM_TYPES.
+_PROGRAM_FORM_TYPES_FOR_GROUNDING: frozenset[str] = frozenset({
+    "ProgramEnrolment", "ProgramExit",
+    "ProgramEncounter", "ProgramEncounterCancellation",
+})
+
+
+def _forms_in_scope_for(target: Any, all_forms: list[Any]) -> list[Any]:
+    """Return target + its registration form + its enrolment form (when applicable).
+
+    Matches the resolution table in CONCEPT_ANSWER_GROUNDING_SDD.md §5: a rule
+    can ground its answer literals against any coded concept the rule can
+    actually reach at runtime via `programEncounter.programEnrolment.individual`.
+    """
+    in_scope: list[Any] = [target]
+    target_type = getattr(target, "formType", "")
+
+    if target_type in _PROGRAM_FORM_TYPES_FOR_GROUNDING and target.program:
+        enrolment = next(
+            (f for f in all_forms
+             if getattr(f, "formType", "") == "ProgramEnrolment"
+             and getattr(f, "program", None) == target.program
+             and f is not target),
+            None,
+        )
+        if enrolment is not None:
+            in_scope.append(enrolment)
+
+    if target_type != "IndividualProfile" and target.subjectType:
+        registration = next(
+            (f for f in all_forms
+             if getattr(f, "formType", "") == "IndividualProfile"
+             and getattr(f, "subjectType", None) == target.subjectType
+             and f is not target),
+            None,
+        )
+        if registration is not None:
+            in_scope.append(registration)
+
+    return in_scope
+
+
+def _collect_concept_answers(forms: list[Any]) -> dict[str, list[str]]:
+    """Merge coded-field answer lists across in-scope forms.
+
+    On the rare collision (same concept name, different answer lists across
+    forms — usually an authoring smell), the result is the union and a
+    warning is logged so the drift surfaces.
+    """
+    merged: dict[str, list[str]] = {}
+    for form in forms:
+        for section in (form.sections or []):
+            for field in (section.fields or []):
+                if getattr(field, "dataType", None) != "Coded":
+                    continue
+                options = list(getattr(field, "options", None) or [])
+                if not options:
+                    continue
+                existing = merged.get(field.name)
+                if existing is None:
+                    merged[field.name] = options
+                elif set(existing) != set(options):
+                    log.warning(
+                        f"coded concept {field.name!r} has different answer "
+                        f"lists across forms; merging as union"
+                    )
+                    merged[field.name] = list(dict.fromkeys(existing + options))
+    return merged
 
 
 # ── Node 6: write JSON files + ZIP bundle ─────────────────────────────────────

@@ -44,6 +44,11 @@ class RuleSpec(BaseModel):
     available_concepts: list[str] = Field(default_factory=list)
     available_encounter_types: list[str] = Field(default_factory=list)
     available_programs: list[str] = Field(default_factory=list)
+    # Coded-concept answer allowlist, keyed by concept name and merged across
+    # every form a rule on this form can read from at runtime (target form +
+    # registration + enrolment when applicable). Empty when no coded fields
+    # are in scope. See CONCEPT_ANSWER_GROUNDING_SDD.md §5.
+    concept_answers: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class RuleResult(BaseModel):

@@ -638,7 +638,9 @@ def load_bundle_snapshot(bundle_path: str) -> dict:
 def list_bundle_fields(bundle_path: str) -> dict:
     """Return a compact summary of every form's sections + fields.
 
-    Useful for the agent to ground edit operations in real names.
+    Useful for the agent to ground edit operations + rule intents in real
+    names. Coded fields include their `answers` list so the agent can echo
+    exact answer strings back to the user before generating rules.
     """
     with _open_bundle(bundle_path) as workdir:
         forms = _load_forms(workdir)
@@ -647,14 +649,20 @@ def list_bundle_fields(bundle_path: str) -> dict:
             form = forms[fname]
             sections = []
             for g in form.get("formElementGroups", []):
-                fields = [
-                    {
+                fields = []
+                for e in g.get("formElements", []):
+                    concept = e.get("concept") or {}
+                    field: dict = {
                         "name": e.get("name"),
-                        "dataType": e.get("concept", {}).get("dataType"),
+                        "dataType": concept.get("dataType"),
                         "voided": bool(e.get("voided", False)),
                     }
-                    for e in g.get("formElements", [])
-                ]
+                    if concept.get("dataType") == "Coded":
+                        field["answers"] = [
+                            a.get("name") for a in (concept.get("answers") or [])
+                            if a.get("name") and not a.get("voided")
+                        ]
+                    fields.append(field)
                 sections.append({"name": g.get("name"), "fields": fields})
             out_forms.append({
                 "file": fname,
@@ -711,6 +719,10 @@ def load_form_rule_context(bundle_path: str, form_name: str) -> dict | None:
             None,
         )
 
+        concept_answers = _collect_concept_answers_for(
+            forms, mappings, mapping, target_form,
+        )
+
         return {
             "form_type": target_form.get("formType", ""),
             "subject_type": _name_from_uuid(
@@ -728,8 +740,82 @@ def load_form_rule_context(bundle_path: str, form_name: str) -> dict | None:
             "available_concepts": concepts,
             "available_encounter_types": sorted(encounter_names),
             "available_programs": sorted(program_names),
+            "concept_answers": concept_answers,
             "_for_internal_use_subject_types": sorted(subject_names),
         }
+
+
+# Mirrors `_PROGRAM_FORM_TYPES_FOR_GROUNDING` in pipeline.nodes — see
+# CONCEPT_ANSWER_GROUNDING_SDD.md §5.
+_PROGRAM_FORM_TYPES_FOR_GROUNDING: frozenset[str] = frozenset({
+    "ProgramEnrolment", "ProgramExit",
+    "ProgramEncounter", "ProgramEncounterCancellation",
+})
+
+
+def _collect_concept_answers_for(
+    forms: dict[str, dict],
+    mappings: list[dict],
+    target_mapping: dict | None,
+    target_form: dict,
+) -> dict[str, list[str]]:
+    """Merge coded-field answer lists across the target form + registration
+    + enrolment (when applicable).
+
+    Reads each in-scope form's `formElementGroups[*].formElements[*].concept`
+    block — coded fields carry their answers as `answers[*].name`.
+    """
+    in_scope_uuids: set[str] = {target_form.get("uuid", "")}
+    target_type = target_form.get("formType", "")
+    target_subject_uuid = target_mapping.get("subjectTypeUUID") if target_mapping else None
+    target_program_uuid = target_mapping.get("programUUID") if target_mapping else None
+
+    if target_type in _PROGRAM_FORM_TYPES_FOR_GROUNDING and target_program_uuid:
+        enrolment_uuid = next(
+            (m.get("formUUID") for m in mappings
+             if m.get("formType") == "ProgramEnrolment"
+             and m.get("programUUID") == target_program_uuid),
+            None,
+        )
+        if enrolment_uuid:
+            in_scope_uuids.add(enrolment_uuid)
+
+    if target_type != "IndividualProfile" and target_subject_uuid:
+        registration_uuid = next(
+            (m.get("formUUID") for m in mappings
+             if m.get("formType") == "IndividualProfile"
+             and m.get("subjectTypeUUID") == target_subject_uuid),
+            None,
+        )
+        if registration_uuid:
+            in_scope_uuids.add(registration_uuid)
+
+    merged: dict[str, list[str]] = {}
+    for form in forms.values():
+        if form.get("uuid") not in in_scope_uuids:
+            continue
+        for group in (form.get("formElementGroups") or []):
+            for element in (group.get("formElements") or []):
+                if element.get("voided"):
+                    continue
+                concept = element.get("concept") or {}
+                if concept.get("dataType") != "Coded":
+                    continue
+                name = element.get("name") or concept.get("name")
+                if not name:
+                    continue
+                options = [
+                    a.get("name") for a in (concept.get("answers") or [])
+                    if a.get("name") and not a.get("voided")
+                ]
+                if not options:
+                    continue
+                existing = merged.get(name)
+                if existing is None:
+                    merged[name] = options
+                elif set(existing) != set(options):
+                    merged[name] = list(dict.fromkeys(existing + options))
+    return merged
 
 
 def write_form_rule(

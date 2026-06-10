@@ -76,7 +76,13 @@ Hard constraints:
      These appear as `encounterType: '<name>'` property values in
      `scheduleBuilder.add({{...}})` calls and as the first string argument to
      methods like `hasEncounterOfType('<name>')`.
-  6. If the intent cannot be expressed within these constraints, return an
+  6. When using `containsAnswerConceptName(...)` or
+     `containsAnyAnswerConceptName(...)`, the string argument MUST match an
+     exact entry under the relevant concept in CONCEPT_ANSWERS. Never pass
+     the user's informal phrasing verbatim — look up the right answer
+     string. Example: if the user says "supporting family" and the concept's
+     answers include "can support my family", use "can support my family".
+  7. If the intent cannot be expressed within these constraints, return an
      empty `js` string and set `confidence` to "low".
 
 Self-report `confidence` ("high" / "medium" / "low"):
@@ -126,6 +132,7 @@ def build_user_prompt(
         available_concepts=_format_list(spec.available_concepts),
         available_encounter_types=_format_list(spec.available_encounter_types),
         available_programs=_format_list(spec.available_programs),
+        concept_answers=_format_concept_answers(spec.concept_answers),
         helpers_text=helpers_text or "(none retrieved)",
         examples_text=examples_text or "(none retrieved)",
     )
@@ -147,6 +154,9 @@ AVAILABLE_ENCOUNTER_TYPES
 AVAILABLE_PROGRAMS
 {available_programs}
 
+CONCEPT_ANSWERS
+{concept_answers}
+
 HELPERS
 {helpers_text}
 
@@ -162,3 +172,19 @@ def _format_list(items: list[str]) -> str:
     if not items:
         return "(empty)"
     return "\n".join(f"- {item}" for item in items)
+
+
+def _format_concept_answers(answers: dict[str, list[str]]) -> str:
+    """Render the per-concept answer allowlist for the user prompt.
+
+    Empty when no coded concepts are in scope — the LLM then knows it
+    shouldn't emit `containsAnswerConceptName(...)` at all.
+    """
+    if not answers:
+        return "(no coded concepts on this form or its registration/enrolment)"
+    lines: list[str] = []
+    for concept, options in answers.items():
+        lines.append(f"- {concept}")
+        for opt in options:
+            lines.append(f'    * "{opt}"')
+    return "\n".join(lines)

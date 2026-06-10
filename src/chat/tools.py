@@ -198,10 +198,17 @@ def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
 @tool
 def list_bundle_fields(bundle_path: str) -> dict:
     """Inspect an existing bundle (ZIP or unpacked directory) and return a
-    compact summary of every form, section, and field.
+    compact summary of every form, section, and field. Coded fields include
+    their `answers` list.
 
-    Use this BEFORE calling `edit_bundle_fields` so your edit operations
-    reference real names (case and punctuation matter — match is exact).
+    Use this BEFORE any tool that takes bundle names as arguments
+    (`edit_bundle_fields`, `set_visit_schedule_rule`, …) so your call uses
+    real names from the bundle. The user often types informally — "supporting
+    family", "marital", "baseline form" — but the bundle stores exact
+    phrasings — "can support my family", "Marital status", "Baseline for
+    Women". Match is EXACT downstream (case + punctuation), so ground your
+    args against this tool's output first, then echo the resolved names back
+    to the user when confirming what you're about to do.
 
     Args:
         bundle_path: Path to a bundle ZIP file or an unpacked bundle directory
@@ -263,8 +270,18 @@ def set_visit_schedule_rule(
     types), calls the rule generator, validates the produced JS, and on
     success writes it into the form JSON before re-zipping atomically.
 
-    On validation failure (parse error, ungrounded symbol, off-bundle concept)
-    nothing is written and the warnings are returned for the user to act on.
+    Before calling this, ground the user's intent against the bundle. The
+    user usually phrases informally — short form names, paraphrased field
+    names, casual answer wording. Call `list_bundle_fields` first to
+    discover exact form names, field/concept names, encounter type names,
+    and coded-answer strings. Echo the resolved names back to the user
+    when confirming so they catch any mis-mapping before the rule is
+    written. The validator rejects any off-bundle reference, so grounding
+    upfront avoids a generation cycle.
+
+    On validation failure (parse error, off-bundle concept, encounter
+    type, or answer) nothing is written and the warnings are returned for
+    the user to act on.
 
     Args:
         bundle_path: Path to a bundle ZIP file or an unpacked bundle directory.
@@ -297,6 +314,7 @@ def set_visit_schedule_rule(
         available_concepts=context["available_concepts"],
         available_encounter_types=context["available_encounter_types"],
         available_programs=context["available_programs"],
+        concept_answers=context.get("concept_answers", {}),
     )
 
     result = _rule_generator.generate(spec)
