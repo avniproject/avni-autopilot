@@ -29,6 +29,32 @@ _KIND_META: dict[RuleKind, RuleKindMeta] = {
             "`scheduleBuilder.getAll()`"
         ),
     ),
+    RuleKind.VALIDATION: RuleKindMeta(
+        return_type_description=(
+            "an array of validation error objects produced by "
+            "`imports.common.createValidationError(messageKey)` — single arg. "
+            "`messageKey` is either a literal error message (prototype use) or "
+            "an i18n key registered in avni-webapp's translations. Return an "
+            "empty array when nothing is wrong."
+        ),
+    ),
+    RuleKind.EDIT_FORM: RuleKindMeta(
+        return_type_description=(
+            "an object `{ eligible: { value: boolean, message?: string } }`. "
+            "`eligible.value: false` blocks editing; `message` is the reason "
+            "shown to the user. A legacy `{ editable: boolean }` form is still "
+            "accepted by Avni but should NOT be emitted — always produce the "
+            "nested `eligible` object."
+        ),
+    ),
+    RuleKind.DECISION: RuleKindMeta(
+        return_type_description=(
+            "an object `{ encounterDecisions, registrationDecisions, "
+            "enrolmentDecisions }`, each a (possibly empty) array of "
+            "`{ name, value }` decision entries. Most rules only touch one of "
+            "the three arrays — leave the others empty."
+        ),
+    ),
 }
 
 
@@ -99,6 +125,9 @@ will reject any output that fails parsing, IIFE shape, or symbol grounding.
 
 _RETURN_EXPRESSION_BY_KIND: dict[RuleKind, str] = {
     RuleKind.VISIT_SCHEDULE: "scheduleBuilder.getAll()",
+    RuleKind.VALIDATION:     "validationResults",
+    RuleKind.EDIT_FORM:      "{ eligible: { value: true } }",
+    RuleKind.DECISION:       "decisions",
 }
 
 

@@ -17,7 +17,7 @@ import esprima
 from esprima.error_handler import Error as EsprimaError
 
 from domain.rules.accessors import CONCEPT_ACCESSORS, ENCOUNTER_TYPE_ACCESSORS
-from domain.rules.rule_spec import RuleResult, RuleSpec
+from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
 
 log = logging.getLogger(__name__)
 
@@ -101,15 +101,19 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
         if name.casefold() not in available_encounters
     )
 
-    warnings: list[str] = []
+    # Hard warnings (grounding failures) — these block the write.
+    hard_warnings: list[str] = []
     if bad_concepts:
-        warnings.append(f"off-bundle concept names: {bad_concepts}")
+        hard_warnings.append(f"off-bundle concept names: {bad_concepts}")
     if bad_encounters:
-        warnings.append(f"off-bundle encounter types: {bad_encounters}")
+        hard_warnings.append(f"off-bundle encounter types: {bad_encounters}")
+    hard_warnings.extend(_check_answer_grounding(tree, spec))
 
-    warnings.extend(_check_answer_grounding(tree, spec))
+    # Soft warnings (return-shape mismatches) — surface to the caller but
+    # do not block writes. See SDD §5.3.
+    soft_warnings = _check_return_shape(tree, spec)
 
-    return (not warnings), warnings
+    return (not hard_warnings), hard_warnings + soft_warnings
 
 
 def _lowered(names: list[str]) -> set[str]:
@@ -347,3 +351,227 @@ def _find_anchoring_concept(call: Any) -> str | None:
             return None
         cur = obj
     return None
+
+
+# ── Per-kind return-shape checks (FORM_LEVEL_RULES_SDD §5.3) ─────────────────
+
+
+_DECISION_ARRAY_KEYS: frozenset[str] = frozenset({
+    "encounterDecisions",
+    "registrationDecisions",
+    "enrolmentDecisions",
+})
+
+
+def _check_return_shape(tree: Any, spec: RuleSpec) -> list[str]:
+    """Soft per-kind return-shape sanity check.
+
+    Returns warnings only — never blocks the write. The grounding checks
+    above are the only hard gate. See FORM_LEVEL_RULES_SDD §5.3.
+    """
+    if spec.rule_kind == RuleKind.VISIT_SCHEDULE:
+        return []  # Relies on the system-prompt rubric, no AST check.
+
+    arrow = _find_iife(tree)
+    if arrow is None:
+        return []  # IIFE-shape failure already surfaced as a hard reject.
+
+    returns = _collect_return_statements(arrow)
+    if not returns:
+        return [f"{spec.rule_kind.value}: no return statement found"]
+
+    if spec.rule_kind == RuleKind.VALIDATION:
+        return _check_validation_shape(returns, tree)
+    if spec.rule_kind == RuleKind.EDIT_FORM:
+        return _check_edit_form_shape(returns)
+    if spec.rule_kind == RuleKind.DECISION:
+        return _check_decision_shape(returns, tree)
+    return []
+
+
+def _collect_return_statements(arrow_fn: Any) -> list[Any]:
+    """Every ReturnStatement reachable from an arrow function's body.
+
+    Concise-body arrows (`(args) => expr`) have no return statement node —
+    the body itself is the return value. We synthesise a single fake-return
+    pointer so the shape checks can treat both cases uniformly.
+    """
+    body = getattr(arrow_fn, "body", None)
+    if body is None:
+        return []
+    if getattr(body, "type", None) != "BlockStatement":
+        # Concise body — wrap so `getattr(r, "argument", None)` returns it.
+        return [_ConciseReturnAdapter(body)]
+    returns: list[Any] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, list):
+            for child in node:
+                visit(child)
+            return
+        if not hasattr(node, "type"):
+            return
+        if node.type == "ReturnStatement":
+            returns.append(node)
+        for key, value in vars(node).items():
+            if key == "type":
+                continue
+            if isinstance(value, list) or hasattr(value, "type"):
+                visit(value)
+
+    visit(body)
+    return returns
+
+
+class _ConciseReturnAdapter:
+    """Adapter so callers can treat a concise-body expression like a return."""
+
+    type = "ReturnStatement"
+
+    def __init__(self, expression: Any) -> None:
+        self.argument = expression
+
+
+def _check_validation_shape(returns: list[Any], tree: Any) -> list[str]:
+    """validationRule: return is array-shaped; createValidationError args are string-literals."""
+    warnings: list[str] = []
+    array_like = {"ArrayExpression", "Identifier", "CallExpression"}
+    if not any(_return_arg_type(r) in array_like for r in returns):
+        warnings.append(
+            "validationRule: top-level return doesn't resolve to an "
+            "array-shaped value. Expected an ArrayExpression literal, an "
+            "Identifier (e.g. `validationResults`), or a CallExpression that "
+            "yields an array."
+        )
+
+    for call in _iter_call_expressions(tree):
+        if _method_name(call) != "createValidationError":
+            continue
+        args = getattr(call, "arguments", None) or []
+        if not args:
+            warnings.append(
+                "validationRule: `createValidationError(...)` called without arguments — "
+                "must take a single string messageKey."
+            )
+            break
+        first = args[0]
+        if getattr(first, "type", None) != "Literal" or not isinstance(
+            getattr(first, "value", None), str
+        ):
+            warnings.append(
+                "validationRule: `createValidationError(...)` first argument is not a "
+                "string literal — pass the message key directly so it can be grounded."
+            )
+            break
+    return warnings
+
+
+def _check_edit_form_shape(returns: list[Any]) -> list[str]:
+    """editFormRule: prefer `{ eligible: { value, message? } }`; flag legacy shapes."""
+    has_preferred = False
+    has_legacy_eligible_bool = False
+    has_legacy_editable = False
+
+    for ret in returns:
+        arg = getattr(ret, "argument", None)
+        if arg is None or getattr(arg, "type", None) != "ObjectExpression":
+            continue
+        for prop in (getattr(arg, "properties", None) or []):
+            key_name = _property_key_name(getattr(prop, "key", None))
+            value = getattr(prop, "value", None)
+            if key_name == "eligible":
+                if getattr(value, "type", None) == "ObjectExpression":
+                    for inner in (getattr(value, "properties", None) or []):
+                        if _property_key_name(getattr(inner, "key", None)) == "value":
+                            has_preferred = True
+                            break
+                elif getattr(value, "type", None) == "Literal" and isinstance(
+                    getattr(value, "value", None), bool
+                ):
+                    has_legacy_eligible_bool = True
+            elif key_name == "editable":
+                has_legacy_editable = True
+
+    if not (has_preferred or has_legacy_eligible_bool or has_legacy_editable):
+        return [
+            "editFormRule: top-level return doesn't carry an `eligible` property "
+            "in the expected shape — expected `{ eligible: { value: boolean, "
+            "message?: string } }`."
+        ]
+    if has_legacy_eligible_bool or has_legacy_editable:
+        return [
+            "editFormRule: legacy return shape detected — prefer "
+            "`{ eligible: { value, message } }` over `{ eligible: boolean }` "
+            "or `{ editable: boolean }`."
+        ]
+    return []
+
+
+def _check_decision_shape(returns: list[Any], tree: Any) -> list[str]:
+    """decisionRule: return is the container object; body touches at least one decisions array."""
+    warnings: list[str] = []
+    for ret in returns:
+        arg = getattr(ret, "argument", None)
+        if arg is None:
+            continue
+        arg_type = getattr(arg, "type", None)
+        if arg_type == "ArrayExpression":
+            warnings.append(
+                "decisionRule: top-level return is an ArrayExpression, but "
+                "Avni expects the decisions container "
+                "`{ encounterDecisions, registrationDecisions, enrolmentDecisions }` "
+                "— not a flat list."
+            )
+            break
+        if arg_type not in {"ObjectExpression", "Identifier", "CallExpression"}:
+            warnings.append(
+                f"decisionRule: top-level return resolves to {arg_type!r}; "
+                f"expected an ObjectExpression or an Identifier holding one."
+            )
+            break
+
+    touched: set[str] = set()
+    for node in _iter_all_nodes(tree):
+        node_type = getattr(node, "type", None)
+        if node_type == "MemberExpression":
+            prop = getattr(node, "property", None)
+            if prop is not None and getattr(prop, "type", None) == "Identifier":
+                name = getattr(prop, "name", None)
+                if name in _DECISION_ARRAY_KEYS:
+                    touched.add(name)
+        elif node_type == "Property":
+            key_name = _property_key_name(getattr(node, "key", None))
+            if key_name in _DECISION_ARRAY_KEYS:
+                touched.add(key_name)
+
+    if not touched:
+        warnings.append(
+            "decisionRule: rule body doesn't reference any of "
+            "`encounterDecisions / registrationDecisions / enrolmentDecisions` — "
+            "decision rules must populate at least one of these arrays on the "
+            "returned container."
+        )
+    return warnings
+
+
+def _return_arg_type(ret: Any) -> str | None:
+    arg = getattr(ret, "argument", None)
+    if arg is None:
+        return None
+    return getattr(arg, "type", None)
+
+
+def _iter_all_nodes(node: Any):
+    """Yield every AST node — used by per-kind shape checks for body scans."""
+    if isinstance(node, list):
+        for child in node:
+            yield from _iter_all_nodes(child)
+        return
+    if not hasattr(node, "type"):
+        return
+    yield node
+    for key, value in vars(node).items():
+        if key == "type":
+            continue
+        if isinstance(value, list) or hasattr(value, "type"):
+            yield from _iter_all_nodes(value)

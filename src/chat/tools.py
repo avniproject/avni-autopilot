@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import time
+from typing import Literal
 
 from langchain_core.tools import tool
 from langgraph.types import Command
@@ -260,36 +261,64 @@ def edit_bundle_fields(bundle_path: str, operations: list[dict]) -> dict:
 
 
 @tool
-def set_visit_schedule_rule(
-    bundle_path: str, form_name: str, intent: str,
+def set_form_rule(
+    bundle_path: str,
+    form_name: str,
+    rule_kind: Literal[
+        "visitScheduleRule",
+        "validationRule",
+        "editFormRule",
+        "decisionRule",
+    ],
+    intent: str,
 ) -> dict:
-    """Generate the `visitScheduleRule` JS for one form from a natural-language intent.
+    """Generate JS for a form-level rule and write it into the bundle.
+
+    `rule_kind` picks which Avni rule field on the form JSON is updated:
+
+      - "visitScheduleRule"  → when the next visit should be scheduled
+      - "validationRule"     → block-save messages when the form has bad data
+      - "editFormRule"       → who/when the form can be edited (eligibility)
+      - "decisionRule"       → values to write into concepts at submit time
 
     Loads the bundle, builds a RuleSpec from the form's context (formType,
-    subject/program/encounter associations, available concepts and encounter
-    types), calls the rule generator, validates the produced JS, and on
-    success writes it into the form JSON before re-zipping atomically.
+    subject/program/encounter associations, available concepts, encounter
+    types, and coded-concept answers across the target + registration +
+    enrolment forms), calls the rule generator, validates the produced JS,
+    and on success writes it into the form JSON before re-zipping atomically.
 
     Before calling this, ground the user's intent against the bundle. The
     user usually phrases informally — short form names, paraphrased field
-    names, casual answer wording. Call `list_bundle_fields` first to
-    discover exact form names, field/concept names, encounter type names,
-    and coded-answer strings. Echo the resolved names back to the user
-    when confirming so they catch any mis-mapping before the rule is
-    written. The validator rejects any off-bundle reference, so grounding
-    upfront avoids a generation cycle.
+    names, casual answer wording. Call `list_bundle_fields` first to discover
+    exact form names, field/concept names, encounter type names, and
+    coded-answer strings. Echo the resolved names back to the user when
+    confirming so they catch any mis-mapping before the rule is written.
 
-    On validation failure (parse error, off-bundle concept, encounter
-    type, or answer) nothing is written and the warnings are returned for
-    the user to act on.
+    On validation failure (parse error, off-bundle concept, encounter type,
+    or answer) nothing is written and the warnings are returned for the user
+    to act on.
 
     Args:
         bundle_path: Path to a bundle ZIP file or an unpacked bundle directory.
         form_name: Exact name of the form (matches `form.name` in the bundle).
-        intent: Natural-language description of the desired schedule, e.g.
-            "schedule the next follow-up 30 days after this visit unless the
-            participant has exited the program".
+        rule_kind: One of "visitScheduleRule", "validationRule",
+            "editFormRule", "decisionRule".
+        intent: Natural-language description of what the rule should DO, not
+            how. e.g. "block saving when age < 18 or > 60" for a validation
+            rule, "only the user who created the form can edit it" for an
+            edit-form rule.
     """
+    try:
+        kind = RuleKind(rule_kind)
+    except ValueError:
+        return {
+            "status": "error",
+            "error": (
+                f"unknown rule_kind {rule_kind!r}; expected one of: "
+                f"{[k.value for k in RuleKind]}"
+            ),
+        }
+
     try:
         context = load_form_rule_context(bundle_path, form_name)
     except FileNotFoundError as exc:
@@ -304,7 +333,7 @@ def set_visit_schedule_rule(
         }
 
     spec = RuleSpec(
-        rule_kind=RuleKind.VISIT_SCHEDULE,
+        rule_kind=kind,
         intent=intent,
         form_name=form_name,
         form_type=context["form_type"],
@@ -324,12 +353,12 @@ def set_visit_schedule_rule(
         return {
             "status": "rejected",
             "form_name": form_name,
-            "rule_kind": RuleKind.VISIT_SCHEDULE.value,
+            "rule_kind": kind.value,
             "confidence": result.confidence,
             "warnings": warnings,
         }
 
-    if not write_form_rule(bundle_path, form_name, RuleKind.VISIT_SCHEDULE.value, result.js):
+    if not write_form_rule(bundle_path, form_name, kind.value, result.js):
         return {
             "status": "error",
             "error": f"form was found earlier but write_form_rule could not relocate it: {form_name!r}",
@@ -338,7 +367,7 @@ def set_visit_schedule_rule(
     return {
         "status": "done",
         "form_name": form_name,
-        "rule_kind": RuleKind.VISIT_SCHEDULE.value,
+        "rule_kind": kind.value,
         "confidence": result.confidence,
         "used_helpers": result.used_helpers,
         "referenced_concepts": result.referenced_concepts,
@@ -354,5 +383,5 @@ TOOLS = [
     resume_bundle,
     list_bundle_fields,
     edit_bundle_fields,
-    set_visit_schedule_rule,
+    set_form_rule,
 ]

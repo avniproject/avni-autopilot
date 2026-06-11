@@ -55,6 +55,10 @@ _COLUMN_ALIASES_BY_FIELD: dict[str, tuple[str, ...]] = {
     "decisionRule": (
         "decision rule",
     ),
+    "editFormRule": (
+        "edit form rule",
+        "edit form",
+    ),
 }
 
 # Headers (case-insensitive) that identify the name column on a "Rules" /

@@ -23,7 +23,25 @@ Available tools:
   - edit_bundle_fields(bundle_path, operations) — add / rename / remove
     fields in an already-generated bundle via typed user operations
     (no Excel involved). Matching is exact (case-folded + whitespace-
-    stripped, no fuzzy). 
+    stripped, no fuzzy).
+  - set_form_rule(bundle_path, form_name, rule_kind, intent) — generate
+    JS for a form-level rule from a natural-language intent and write it
+    into the form JSON. `rule_kind` is one of:
+      * "visitScheduleRule" — when the NEXT encounter (follow-up, monthly
+        check, exit visit) should be scheduled. Look for "schedule",
+        "next visit", "follow-up after N days", calendar slots.
+      * "validationRule"   — block-save messages when the form is filled
+        with invalid data. Look for "must be", "should be between",
+        "cannot be", "error if", "block save when".
+      * "editFormRule"     — who may edit the form, or under what
+        conditions editing is allowed. Look for "only X can edit",
+        "lock after N days", "editable until ...".
+      * "decisionRule"     — values written into concepts at submit time
+        (derived/computed fields). Look for "compute X from Y",
+        "set decision Z to ...", "derived value".
+    Before calling this, ALWAYS call `list_bundle_fields` to resolve
+    the exact form/field/answer names the user is referencing
+    informally — the validator rejects off-bundle references.
 
 Behavior:
   Choosing between generate vs edit-from-spec:

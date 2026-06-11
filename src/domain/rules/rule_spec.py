@@ -17,13 +17,17 @@ from pydantic import BaseModel, Field
 class RuleKind(str, Enum):
     """The Avni rule field a generated JS function targets.
 
-    Each kind maps to a target JSON field, an entity-param the JS receives via
-    `params.entity`, and an expected return type. Only `VISIT_SCHEDULE` is wired
-    today; other kinds get added when their helpers/examples are populated. See
-    SDD §8 for the extension pattern.
+    Each kind maps to a target JSON field on the form JSON, an entity-param
+    the JS receives via `params.entity`, and an expected return type.
+    Per-kind metadata (return-type description, return-expression hint,
+    return-shape validator) lives in `prompts.py` and `validator.py`.
+    See specs/FORM_LEVEL_RULES_SDD.md.
     """
 
     VISIT_SCHEDULE = "visitScheduleRule"
+    VALIDATION = "validationRule"
+    EDIT_FORM = "editFormRule"
+    DECISION = "decisionRule"
 
 
 class RuleSpec(BaseModel):

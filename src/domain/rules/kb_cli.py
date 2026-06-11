@@ -6,8 +6,11 @@ Day-to-day commands (porcelain):
                     + rebuild). Use after pulling new avni-models source or
                     hand-editing helper files. Pass --skip-enrich to avoid
                     the Haiku cost.
-  examples          Refresh example corpus end-to-end (ingest-examples +
-                    rebuild). Use after editing the curated rules xlsx tab.
+  examples          Refresh one rule-kind's example corpus (ingest-examples
+                    + rebuild). Use after editing one curated tab.
+  examples-all      Ingest every wired RuleKind's curated tab from
+                    `rules_ai_automation.xlsx` and rebuild once. Use for
+                    first-time setup or after bulk edits across tabs.
 
 Surgical commands (plumbing, run individually when you know what you need):
 
@@ -120,6 +123,13 @@ def main(argv: list[str] | None = None) -> int:
                             default=RuleKind.VISIT_SCHEDULE.value,
                             help="Subdirectory under examples/ and frontmatter value.")
 
+    p_examples_all = sub.add_parser(
+        "examples-all",
+        help="Ingest curated tabs for every wired RuleKind and rebuild once.",
+    )
+    p_examples_all.add_argument("--xlsx", type=Path, default=_XLSX_DEFAULT)
+    p_examples_all.add_argument("--root", type=Path, default=_RULES_ROOT)
+
     args = parser.parse_args(argv)
 
     if args.cmd == "sync":
@@ -134,8 +144,20 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_helpers(args.source, args.root, args.batch_size, args.skip_enrich)
     if args.cmd == "examples":
         return cmd_examples(args.xlsx, args.tab, args.root, args.rule_kind)
+    if args.cmd == "examples-all":
+        return cmd_examples_all(args.xlsx, args.root)
     parser.error(f"unknown command: {args.cmd!r}")
     return 2
+
+
+# Each RuleKind's curated tab inside `requirements/rules_ai_automation.xlsx`.
+# See FORM_LEVEL_RULES_SDD §7.
+_INGEST_MANIFEST: dict[RuleKind, str] = {
+    RuleKind.VISIT_SCHEDULE: "VS rule (curated)",
+    RuleKind.VALIDATION:     "Validation rule (curated)",
+    RuleKind.EDIT_FORM:      "Edit form rule (curated)",
+    RuleKind.DECISION:       "Decision rule (curated)",
+}
 
 
 # ── Porcelain: composite commands that orchestrate the surgical ones ─────────
@@ -198,6 +220,40 @@ def cmd_examples(xlsx: Path, tab: str, root: Path, rule_kind: str) -> int:
         return rc
 
     log.info("examples: done")
+    return 0
+
+
+def cmd_examples_all(xlsx: Path, root: Path) -> int:
+    """Ingest curated tabs for every wired RuleKind and rebuild once.
+
+    Iterates `_INGEST_MANIFEST`, calling `cmd_ingest_examples` for each
+    rule kind / tab pair. Skips any kind whose tab is missing from the
+    workbook (logged as a warning). Single `cmd_rebuild` at the end —
+    avoids re-embedding the catalog four times.
+
+    See FORM_LEVEL_RULES_SDD §7.
+    """
+    if not xlsx.exists():
+        log.error(f"xlsx not found: {xlsx}")
+        return 2
+
+    total_kinds = len(_INGEST_MANIFEST)
+    for i, (kind, tab) in enumerate(_INGEST_MANIFEST.items(), start=1):
+        log.info(f"examples-all: step {i}/{total_kinds + 1} — {kind.value} from tab {tab!r}")
+        rc = cmd_ingest_examples(xlsx, tab, root, kind.value)
+        if rc:
+            log.warning(
+                f"examples-all: ingest failed for {kind.value!r} "
+                f"(tab {tab!r}); continuing with remaining kinds"
+            )
+
+    log.info(f"examples-all: step {total_kinds + 1}/{total_kinds + 1} — rebuild embedding cache")
+    rc = cmd_rebuild(root)
+    if rc:
+        log.error("examples-all: rebuild failed")
+        return rc
+
+    log.info("examples-all: done")
     return 0
 
 
