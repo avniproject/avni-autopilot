@@ -58,8 +58,8 @@ log = logging.getLogger("rules.kb")
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _AVNI_MODELS_DEFAULT = _REPO_ROOT.parent / "avni-models" / "src"
-_XLSX_DEFAULT = _REPO_ROOT / "requirements" / "Self-service improvement.xlsx"
-_CURATED_TAB_DEFAULT = "List to automate (curated)"
+_XLSX_DEFAULT = _REPO_ROOT / "requirements" / "rules_ai_automation.xlsx"
+_CURATED_TAB_DEFAULT = "VS rule (curated)"
 _RULES_ROOT = _REPO_ROOT / "resources" / "rules"
 
 

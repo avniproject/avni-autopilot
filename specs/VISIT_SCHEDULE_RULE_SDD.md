@@ -22,7 +22,7 @@ The goal is **good-enough JS that compiles and runs against the Avni rule API**,
 ### In scope
 
 - A `Scheduling Rule` column convention for the modelling document (per encounter type row).
-- A **rule knowledge base** indexed in a local vector store: helper-function signatures + docstrings, plus curated few-shot examples taken from the `List to automate (curated)` tab of `requirements/Self-service improvement.xlsx`.
+- A **rule knowledge base** indexed in a local vector store: helper-function signatures + docstrings, plus curated few-shot examples taken from the `VS rule (curated)` tab of `requirements/rules_ai_automation.xlsx`.
 - A `RuleSpec` Pydantic model that carries the natural-language intent + bundle-grounded context (form, subject type, program, encounter type, available concepts, visit types in scope).
 - A `generate_rule(rule_spec, rule_kind)` function that retrieves relevant helpers/examples, prompts Claude, and returns a JS string + confidence + grounding notes.
 - A new pipeline node `generate_rules` **after** `generate_form_mappings` that fills `visitScheduleRule` on each form JSON it can ground.
@@ -45,7 +45,7 @@ The goal is **good-enough JS that compiles and runs against the Avni rule API**,
 
 ## 3. Motivation — why a knowledge base + few-shot, not pure prompting
 
-`requirements/Self-service improvement.xlsx → List to automate (curated)` contains ~12 deduplicated visit-schedule rules drawn from implementation teams across `JSS`, `JSCS`, and other orgs — one canonical rule per distinct idiom, each paired with a natural-language `Prompt` column. The raw `List to automate` tab (~80 rules) is the source; `/curate-rules` (see `.claude/commands/curate-rules.md`) produces the curated tab by clustering on idiom and writing intents in the voice a user would type. The vocabulary is small:
+`requirements/rules_ai_automation.xlsx → VS rule (curated)` contains ~12 deduplicated visit-schedule rules drawn from implementation teams across `JSS`, `JSCS`, and other orgs — one canonical rule per distinct idiom, each paired with a natural-language `Prompt` column. The raw `VS rule` tab (~80 rules) is the source; `/curate-rules` (see `.claude/commands/curate-rules.md`) produces the curated tab by clustering on idiom and writing intents in the voice a user would type. The vocabulary is small:
 
 - `imports.rulesConfig.VisitScheduleBuilder({individual | programEnrolment | programEncounter | encounter})`
 - `imports.moment(...).add(N, 'days' | 'months').toDate()`
@@ -57,7 +57,7 @@ A pure-prompt approach (just hand Claude the docs URL and intent) gets the shape
 
 1. **Bundle context** — concepts, encounter types, programs, subject types are passed verbatim in the prompt. The model must pick from this list.
 2. **Helper KB** — a static catalog of Avni rule API methods (name, signature, one-line description, "use when…" hint) lives in `resources/rules/helpers/`. Top-K relevant helpers are retrieved per intent and injected.
-3. **Few-shot KB** — the rules in `List to automate (curated)` (one per distinct idiom, each with a paired natural-language `Prompt`) become a retrieval corpus. Top-K most-similar examples are pulled per intent and shown as in-context examples.
+3. **Few-shot KB** — the rules in `VS rule (curated)` (one per distinct idiom, each with a paired natural-language `Prompt`) become a retrieval corpus. Top-K most-similar examples are pulled per intent and shown as in-context examples.
 
 This is the "store helpers + examples; vectorise only at query time" path from `specs/rule_generation.md`. We pay the embedding cost only when generating, not on every bundle build.
 
@@ -317,7 +317,7 @@ source_org: JSS
 ```
 ```
 
-Population: examples are drawn from the `List to automate (curated)` tab of `requirements/Self-service improvement.xlsx`, produced by `/curate-rules` (see `.claude/commands/curate-rules.md`). That command deduplicates the raw `List to automate` tab into one canonical rule per distinct idiom and writes a natural-language `Prompt` column for each. Each row of the curated tab becomes one Markdown file with the frontmatter shape above — `ORG name` → `source_org`, `Form name` → the file slug, `Prompt` → `intent`, `Rule` → the fenced JS block. The `entity_param` and `encounter_types` fields are derived from the rule's JS body at generation time.
+Population: examples are drawn from the `VS rule (curated)` tab of `requirements/rules_ai_automation.xlsx`, produced by `/curate-rules` (see `.claude/commands/curate-rules.md`). That command deduplicates the raw `VS rule` tab into one canonical rule per distinct idiom and writes a natural-language `Prompt` column for each. Each row of the curated tab becomes one Markdown file with the frontmatter shape above — `ORG name` → `source_org`, `Form name` → the file slug, `Prompt` → `intent`, `Rule` → the fenced JS block. The `entity_param` and `encounter_types` fields are derived from the rule's JS body at generation time.
 
 ### 6.3 Retrieval
 
@@ -494,7 +494,7 @@ Every warning is namespaced `rules.<rule_kind>.<form>: <reason>` and flows into 
 | `resources/rules/helpers/entities/*.json` | generated | Per-entity helper catalog (one file per avni-models class: `individual`, `program_enrolment`, `program_encounter`, `abstract_encounter`, `observation`, `concept`). Produced by `python -m rules.kb sync` against an avni-models checkout. |
 | `resources/rules/helpers/imports/*.json` | new | Hand-curated `imports.*` namespace catalogs (`visit_schedule`, `rule_condition`, `moment`, `lodash`). |
 | `src/domain/rules/kb_sync.py` | new | CLI entry for `python -m rules.kb sync` — extracts public method surface from avni-models source. |
-| `resources/rules/examples/visit_schedule/*.md` | generated | Built from `requirements/Self-service improvement.xlsx → List to automate (curated)`. Re-run `/curate-rules` to refresh the source tab; a small ingestion step writes one Markdown per curated row. |
+| `resources/rules/examples/visit_schedule/*.md` | generated | Built from `requirements/rules_ai_automation.xlsx → VS rule (curated)`. Re-run `/curate-rules` to refresh the source tab; a small ingestion step writes one Markdown per curated row. |
 | `resources/rules/.embeddings.json` | generated | Embedding cache (gitignored). |
 
 New runtime dependency: `esprima` (JS parser for Python — pure-python, no Node toolchain).

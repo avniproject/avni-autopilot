@@ -32,7 +32,7 @@ Behavior must not change. Outputs (`visitScheduleRule` JSON content, warning tex
 
 ### Precondition
 
-`pytest` passes on `main` at commit `03faff7`. The refactor is verified by `pytest` still passing and by a before/after diff of the generated `visitScheduleRule` strings on the existing `requirements/Self-service improvement.xlsx` example corpus.
+`pytest` passes on `main` at commit `03faff7`. The refactor is verified by `pytest` still passing and by a before/after diff of the generated `visitScheduleRule` strings on the existing `requirements/rules_ai_automation.xlsx` example corpus.
 
 ---
 
@@ -174,7 +174,7 @@ No new runtime dependency. `pyyaml` is already a transitive dep.
 Run after each phase:
 
 1. `pytest` — all existing tests pass.
-2. **Regression harness:** regenerate `visitScheduleRule` against every row of the `List to automate (curated)` tab in `requirements/Self-service improvement.xlsx`. Diff before vs after — must be byte-identical for Phases A–C. For Phase D3, manually review the diff (drop FORM block); revert D3 if the JS content changes substantively.
+2. **Regression harness:** regenerate `visitScheduleRule` against every row of the `VS rule (curated)` tab in `requirements/rules_ai_automation.xlsx`. Diff before vs after — must be byte-identical for Phases A–C. For Phase D3, manually review the diff (drop FORM block); revert D3 if the JS content changes substantively.
 3. **Catalog re-sync sanity:** `python -m rules.kb sync --dry-run` against an unchanged avni-models checkout should produce zero changes to `resources/rules/helpers/entities/*.json`.
 
 ---
