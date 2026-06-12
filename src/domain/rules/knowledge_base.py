@@ -72,7 +72,7 @@ class HelperEntry(BaseModel):
     key: str                # stable id used in the embedding cache
     name: str               # e.g. "Individual.findLatestObservationFromPreviousEncounters"
     signature: str
-    applies_to: tuple[str, ...]
+    applies_to: tuple[str, ...]  # empty = applies to every RuleKind
     use_when: str
     example_snippet: str
     source_file: str        # relative path, for debugging
@@ -160,7 +160,10 @@ class KnowledgeBase:
         top_k_examples: int = _TOP_K_EXAMPLES,
     ) -> RetrievedContext:
         """Embed the query and return top-K helpers + examples for this rule kind."""
-        helpers_scope = [h for h in self.helpers if spec.rule_kind.value in h.applies_to]
+        helpers_scope = [
+            h for h in self.helpers
+            if not h.applies_to or spec.rule_kind.value in h.applies_to
+        ]
         examples_scope = [e for e in self.examples if e.rule_kind == spec.rule_kind.value]
 
         if not helpers_scope and not examples_scope:

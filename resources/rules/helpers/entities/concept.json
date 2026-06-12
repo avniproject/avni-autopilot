@@ -2,459 +2,306 @@
   {
     "name": "Concept.Media",
     "signature": "concept.Media()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule needs to access all media files (image, video, audio) attached to the concept.",
     "example_snippet": ""
   },
   {
     "name": "Concept.abnormalAnswers",
     "signature": "concept.abnormalAnswers()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation or summary rule flags concept answers marked as abnormal.",
     "example_snippet": ""
   },
   {
     "name": "Concept.addAnswer",
     "signature": "concept.addAnswer(concept)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal mutation \u2014 adds a new concept answer; rarely called from rules.",
     "example_snippet": ""
   },
   {
     "name": "Concept.answers",
     "signature": "concept.answers()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule accesses raw list of ConceptAnswer objects for this concept.",
     "example_snippet": ""
   },
   {
     "name": "Concept.associateChild",
     "signature": "concept.associateChild(child, childEntityClass, childResource, entityService)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal framework method \u2014 associates child ConceptAnswers during deserialization; not called from rules.",
     "example_snippet": ""
   },
   {
     "name": "Concept.cloneForReference",
     "signature": "concept.cloneForReference()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal utility \u2014 returns concept itself; rarely needed in rule logic.",
     "example_snippet": ""
   },
   {
     "name": "Concept.datatype",
     "signature": "concept.datatype()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule checks the data type (text, numeric, coded) of this concept.",
     "example_snippet": ""
   },
   {
     "name": "Concept.fromResource",
     "signature": "concept.fromResource(conceptResource, entityService)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal deserialization \u2014 builds Concept from server resource; framework use only.",
     "example_snippet": ""
   },
   {
     "name": "Concept.getAnswerWithConceptName",
     "signature": "concept.getAnswerWithConceptName(answerName)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule retrieves a specific answer option by its concept name.",
     "example_snippet": ""
   },
   {
     "name": "Concept.getAnswerWithConceptUuid",
     "signature": "concept.getAnswerWithConceptUuid(answerConceptUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule retrieves a specific answer option by its concept UUID.",
     "example_snippet": ""
   },
   {
     "name": "Concept.getAnswers",
     "signature": "concept.getAnswers()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule accesses sorted, non-voided answer options for display or validation.",
     "example_snippet": ""
   },
   {
     "name": "Concept.getImageMedia",
     "signature": "concept.getImageMedia()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule filters to image media only from the concept's media collection.",
     "example_snippet": ""
   },
   {
     "name": "Concept.getImageUrl",
     "signature": "concept.getImageUrl()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Eligibility or summary rule retrieves the primary image URL for display.",
     "example_snippet": ""
   },
   {
     "name": "Concept.getPossibleAnswerConcept",
     "signature": "concept.getPossibleAnswerConcept(nameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule finds an answer option matching a name or UUID.",
     "example_snippet": ""
   },
   {
     "name": "Concept.getValueWrapperFor",
     "signature": "concept.getValueWrapperFor(obsValue)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule wraps an observation value into the appropriate typed container for processing.",
     "example_snippet": ""
   },
   {
     "name": "Concept.getVideoMedia",
     "signature": "concept.getVideoMedia()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule filters to video media only from the concept's media collection.",
     "example_snippet": ""
   },
   {
     "name": "Concept.getVideoUrl",
     "signature": "concept.getVideoUrl()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Eligibility or summary rule retrieves the primary video URL for display.",
     "example_snippet": ""
   },
   {
     "name": "Concept.hasAnswersWithMedia",
     "signature": "concept.hasAnswersWithMedia()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule checks whether any answer option has associated media.",
     "example_snippet": ""
   },
   {
     "name": "Concept.hasImage",
     "signature": "concept.hasImage()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule checks whether the concept has attached image media.",
     "example_snippet": ""
   },
   {
     "name": "Concept.hasMedia",
     "signature": "concept.hasMedia()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rule checks whether concept or its answers have any attached media.",
     "example_snippet": ""
   },
   {
     "name": "Concept.hasVideo",
     "signature": "concept.hasVideo()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Eligibility or summary rules need to check whether video media has been captured.",
     "example_snippet": ""
   },
   {
     "name": "Concept.hiAbsolute",
     "signature": "concept.hiAbsolute()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rules compare numeric observation values against absolute high thresholds.",
     "example_snippet": ""
   },
   {
     "name": "Concept.hiNormal",
     "signature": "concept.hiNormal()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rules compare numeric observation values against normal high thresholds.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isAbnormal",
     "signature": "concept.isAbnormal(value)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rules flag observations as abnormal based on numeric ranges or coded answer definitions.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isAboveHiAbsolute",
     "signature": "concept.isAboveHiAbsolute(value)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rules reject numeric observations exceeding absolute upper limits.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isAboveHiNormal",
     "signature": "concept.isAboveHiNormal(value)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rules warn when numeric observations exceed normal upper thresholds.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isBelowLowAbsolute",
     "signature": "concept.isBelowLowAbsolute(value)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rules reject numeric observations below absolute lower limits.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isBelowLowNormal",
     "signature": "concept.isBelowLowNormal(value)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rules warn when numeric observations fall below normal lower thresholds.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isCodedConcept",
     "signature": "concept.isCodedConcept()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules check whether a field accepts multiple-choice (coded) answers.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isDurationConcept",
     "signature": "concept.isDurationConcept()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules determine if a field captures duration values.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isEncounterConcept",
     "signature": "concept.isEncounterConcept()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules check whether a field references encounter entities.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isIdConcept",
     "signature": "concept.isIdConcept()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules determine if a field stores identifier values.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isMediaConcept",
     "signature": "concept.isMediaConcept()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules check whether a field captures image, video, or file attachments.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isMediaSelectConcept",
     "signature": "concept.isMediaSelectConcept()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules determine if a field accepts media selection (image, video, file).",
     "example_snippet": ""
   },
   {
     "name": "Concept.isMobileNo",
     "signature": "concept.isMobileNo()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal metadata check \u2014 confirms field records primary or alternate contact number.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isPhoneNumberConcept",
     "signature": "concept.isPhoneNumberConcept()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules check whether a field stores phone number data.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isPrimitive",
     "signature": "concept.isPrimitive()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules distinguish simple data types (text, numeric, date) from complex structures.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isQuestionGroup",
     "signature": "concept.isQuestionGroup()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules check whether a field groups related sub-questions.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isSelectConcept",
     "signature": "concept.isSelectConcept()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules determine if a field allows selection from predefined options or entities.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isSubjectConcept",
     "signature": "concept.isSubjectConcept()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules check whether a field references subject (beneficiary) entities.",
     "example_snippet": ""
   },
   {
     "name": "Concept.isType",
     "signature": "concept.isType(type)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rule checks if concept has specific datatype (e.g., numeric, coded, text).",
     "example_snippet": ""
   },
   {
     "name": "Concept.keyValues",
     "signature": "concept.keyValues()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Eligibility or summary rule retrieves coded concept's key-value pairs for conditional logic.",
     "example_snippet": ""
   },
   {
     "name": "Concept.lowAbsolute",
     "signature": "concept.lowAbsolute()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rule checks if numeric observation exceeds concept's absolute lower bound.",
     "example_snippet": ""
   },
   {
     "name": "Concept.lowNormal",
     "signature": "concept.lowNormal()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Summary rule displays or validation rule checks observation against concept's normal lower range.",
     "example_snippet": ""
   },
   {
     "name": "Concept.media",
     "signature": "concept.media()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Summary rule retrieves concept's associated media files (images, documents) for display.",
     "example_snippet": ""
   },
   {
     "name": "Concept.name",
     "signature": "concept.name()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Any rule accesses concept's display name for labels or logging.",
     "example_snippet": ""
   },
   {
     "name": "Concept.recordByKey",
     "signature": "concept.recordByKey(key)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation or eligibility rule looks up coded concept answer by its key identifier.",
     "example_snippet": ""
   },
   {
     "name": "Concept.recordValueByKey",
     "signature": "concept.recordValueByKey(key)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Eligibility or summary rule retrieves the value of a coded concept answer by key.",
     "example_snippet": ""
   },
   {
     "name": "Concept.translatedFieldValue",
     "signature": "concept.translatedFieldValue()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal \u2014 returns concept name for framework localization; rarely called directly from rules.",
     "example_snippet": ""
   },
   {
     "name": "Concept.unit",
     "signature": "concept.unit()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Summary rule displays measurement unit with numeric observation values.",
     "example_snippet": ""
   },
   {
     "name": "Concept.violatesRange",
     "signature": "concept.violatesRange(value)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rule rejects observation if it falls outside concept's absolute min/max bounds.",
     "example_snippet": ""
   }

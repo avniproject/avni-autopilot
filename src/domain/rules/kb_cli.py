@@ -488,13 +488,18 @@ def _merge_helpers(
         prior = existing.get(name, {})
         annot_use_when, annot_snippet = _annotation_for(name)
         derived_signature = f"{var_name}.{method}({params})" if params else f"{var_name}.{method}()"
-        merged.append({
+        entry: dict[str, Any] = {
             "name": name,
             "signature": prior.get("signature") or derived_signature,
-            "applies_to": prior.get("applies_to") or [RuleKind.VISIT_SCHEDULE.value],
             "use_when": prior.get("use_when") or annot_use_when,
             "example_snippet": prior.get("example_snippet") or annot_snippet,
-        })
+        }
+        # `applies_to` is optional: omitted = applies to every RuleKind. Only
+        # carry it forward when the prior catalog narrowed scope intentionally
+        # (e.g. `imports/visit_schedule.json`).
+        if prior.get("applies_to"):
+            entry["applies_to"] = prior["applies_to"]
+        merged.append(entry)
     # Keep any hand-written rows whose method is no longer detectable in source —
     # they may have been added intentionally despite a non-trivial declaration.
     for name, entry in existing.items():

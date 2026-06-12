@@ -2,56 +2,48 @@
   {
     "name": "moment",
     "signature": "imports.moment(date?)",
-    "applies_to": ["visitScheduleRule", "validationRule"],
     "use_when": "Construct a moment from a JS Date / ISO string. Chain to compute offsets.",
     "example_snippet": "const m = imports.moment(programEncounter.encounterDateTime);"
   },
   {
     "name": "moment.add",
     "signature": "moment(date).add(n, unit)",
-    "applies_to": ["visitScheduleRule", "validationRule"],
     "use_when": "Add N units to a date. Units: 'days', 'weeks', 'months', 'years' (and short forms 'd', 'M', 'y').",
     "example_snippet": "const earliestDate = imports.moment(programEncounter.encounterDateTime).add(90, 'days').toDate();"
   },
   {
     "name": "moment.subtract",
     "signature": "moment(date).subtract(n, unit)",
-    "applies_to": ["visitScheduleRule", "validationRule"],
     "use_when": "Subtract N units from a date.",
     "example_snippet": "const earliestDate = imports.moment(individual.registrationDate).subtract(1, 'months').toDate();"
   },
   {
     "name": "moment.startOf",
     "signature": "moment(date).startOf(unit)",
-    "applies_to": ["visitScheduleRule", "validationRule"],
     "use_when": "Snap to the start of a unit: 'day', 'month', 'year', 'week'.",
     "example_snippet": "const firstOfMonth = imports.moment(date).startOf('month').toDate();"
   },
   {
     "name": "moment.endOf",
     "signature": "moment(date).endOf(unit)",
-    "applies_to": ["visitScheduleRule", "validationRule"],
     "use_when": "Snap to the end of a unit. Common for setting maxDate to end-of-month.",
     "example_snippet": "const maxDate = imports.moment(date).endOf('month').toDate();"
   },
   {
     "name": "moment.month",
     "signature": "moment(date).month()  // 0..11",
-    "applies_to": ["visitScheduleRule"],
     "use_when": "Read or set the month index (Jan = 0). Use for fixed-month scheduling (e.g. Feb / Aug slots).",
     "example_snippet": "if (imports.moment(date).month() < 7) { /* before August */ }"
   },
   {
     "name": "moment.format",
     "signature": "moment(date).format(pattern)",
-    "applies_to": ["visitScheduleRule"],
     "use_when": "Render the date as a string. Used to append month/year to visit names (e.g. 'MMM YYYY').",
     "example_snippet": "const suffix = imports.moment(date).format('MMM YYYY');"
   },
   {
     "name": "moment.toDate",
     "signature": "moment(date).toDate()  // -> JS Date",
-    "applies_to": ["visitScheduleRule", "validationRule"],
     "use_when": "Convert back to a native Date. scheduleBuilder.add expects Date for earliestDate / maxDate.",
     "example_snippet": "scheduleBuilder.add({ ..., earliestDate: imports.moment(...).toDate() });"
   }

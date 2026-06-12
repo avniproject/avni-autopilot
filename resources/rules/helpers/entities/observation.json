@@ -2,162 +2,108 @@
   {
     "name": "Observation.cloneForEdit",
     "signature": "observation.cloneForEdit()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Encounters and forms need a mutable copy of an observation for editing without affecting the original.",
     "example_snippet": ""
   },
   {
     "name": "Observation.concept",
     "signature": "observation.concept()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules access the observation's concept metadata to determine data type, answers, or abnormality thresholds.",
     "example_snippet": ""
   },
   {
     "name": "Observation.create",
     "signature": "observation.create(concept, value, abnormal = false)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Eligibility and validation rules instantiate new observations programmatically with concept, value, and abnormality flag.",
     "example_snippet": ""
   },
   {
     "name": "Observation.getMobileNo",
     "signature": "observation.getMobileNo()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns phone number string when observation concept is a mobile number; internal utility for contact extraction.",
     "example_snippet": ""
   },
   {
     "name": "Observation.getReadableValue",
     "signature": "observation.getReadableValue()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Summary and decision rules display human-readable observation values, resolving coded answers and question groups.",
     "example_snippet": ""
   },
   {
     "name": "Observation.getValue",
     "signature": "observation.getValue()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Rules extract the raw observation value for conditional logic, comparisons, or further processing.",
     "example_snippet": ""
   },
   {
     "name": "Observation.getValueWrapper",
     "signature": "observation.getValueWrapper()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal accessor that parses and wraps valueJSON \u2014 rarely called directly from rules.",
     "example_snippet": ""
   },
   {
     "name": "Observation.hasNoAnswer",
     "signature": "observation.hasNoAnswer()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rules check if an observation is empty before requiring further action or raising errors.",
     "example_snippet": ""
   },
   {
     "name": "Observation.isAbnormal",
     "signature": "observation.isAbnormal()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Summary and decision rules determine abnormality by consulting the concept's thresholds or explicit flag.",
     "example_snippet": ""
   },
   {
     "name": "Observation.isForMedia",
     "signature": "observation.isForMedia(mediaName)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rules verify that media observation references a specific media file or asset name.",
     "example_snippet": ""
   },
   {
     "name": "Observation.isMobileNumberObs",
     "signature": "observation.isMobileNumberObs()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Eligibility and decision rules identify mobile number observations for contact validation or SMS workflows.",
     "example_snippet": ""
   },
   {
     "name": "Observation.isPhoneNumberVerificationRequired",
     "signature": "observation.isPhoneNumberVerificationRequired(filteredFormElements)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation rules check if phone number observation requires verification based on concept configuration and form elements.",
     "example_snippet": ""
   },
   {
     "name": "Observation.setValue",
     "signature": "observation.setValue(valueWrapper)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal mutation that overwrites observation value \u2014 rarely called directly from rules.",
     "example_snippet": ""
   },
   {
     "name": "Observation.shallowClone",
     "signature": "observation.shallowClone()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Encounters and forms create a lightweight copy preserving concept and raw value for comparison or storage.",
     "example_snippet": ""
   },
   {
     "name": "Observation.toResource",
     "signature": "observation.toResource()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Serializes observation to API-compatible format with concept UUID and wrapped value \u2014 internal export utility.",
     "example_snippet": ""
   },
   {
     "name": "Observation.toggleMultiSelectAnswer",
     "signature": "observation.toggleMultiSelectAnswer(answerUUID)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Form interactions add or remove coded answers from multi-select observations \u2014 internal state mutation.",
     "example_snippet": ""
   },
   {
     "name": "Observation.toggleSingleSelectAnswer",
     "signature": "observation.toggleSingleSelectAnswer(answerUUID)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Form interactions toggle single-select coded answer on or off \u2014 internal state mutation.",
     "example_snippet": ""
   },
   {
     "name": "Observation.valueJSON",
     "signature": "observation.valueJSON()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Accessor returning raw JSON-serialized observation value \u2014 rarely called directly from rules.",
     "example_snippet": ""
   }

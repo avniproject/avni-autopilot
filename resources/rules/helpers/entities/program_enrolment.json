@@ -2,693 +2,462 @@
   {
     "name": "ProgramEnrolment.addApprovalDescendantsWithLatestStatus",
     "signature": "programEnrolment.addApprovalDescendantsWithLatestStatus(approvalStatus_status, list)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Eligibility or validation rule needs to collect all approval statuses for encounters and checklists.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.addChecklist",
     "signature": "programEnrolment.addChecklist(checklist)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal mutation \u2014 replaces checklist with matching UUID in the list; rarely called from rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.addEncounter",
     "signature": "programEnrolment.addEncounter(programEncounter)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal mutation \u2014 appends a programme encounter if UUID is not already present; rarely called from rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.addEncounters",
     "signature": "programEnrolment.addEncounters(...programEncounters)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal mutation \u2014 appends multiple programme encounters; rarely called from rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.addObservation",
     "signature": "programEnrolment.addObservation(observation)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal mutation \u2014 appends an observation to enrolment observations; rarely called from rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.allEncounterTypes",
     "signature": "programEnrolment.allEncounterTypes()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns deduplicated list of all encounter types in enrolment.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.approvalStatuses",
     "signature": "programEnrolment.approvalStatuses()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Eligibility or validation rule retrieves all approval status records for enrolment.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.associateChild",
     "signature": "programEnrolment.associateChild(child, childEntityClass, childResource, entityService)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal framework plumbing \u2014 associates child entities (encounters, checklists, approvals) to parent enrolment.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.checklists",
     "signature": "programEnrolment.checklists()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns all non-voided checklists for the enrolment.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.cloneForEdit",
     "signature": "programEnrolment.cloneForEdit()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal serialization \u2014 creates edit-ready copy with cloned checklists and locations; framework use.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.createEmptyInstance",
     "signature": "programEnrolment.createEmptyInstance({individual, program} = {})",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal factory \u2014 creates new enrolment instance with empty collections and UUID; framework use.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.createdBy",
     "signature": "programEnrolment.createdBy()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns username of the user who created enrolment.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.createdByUUID",
     "signature": "programEnrolment.createdByUUID()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns UUID of the user who created enrolment.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.encounters",
     "signature": "programEnrolment.encounters()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns all non-voided programme encounters in enrolment.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.enrolmentDateTime",
     "signature": "programEnrolment.enrolmentDateTime()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns enrolment start date-time for schedule, eligibility, or validation rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.enrolmentLocation",
     "signature": "programEnrolment.enrolmentLocation()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns Point location where enrolment was registered.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.everScheduledEncounters",
     "signature": "programEnrolment.everScheduledEncounters()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns all encounters scheduled (have earliestVisitDateTime) and not cancelled.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.everScheduledEncountersOfType",
     "signature": "programEnrolment.everScheduledEncountersOfType(encounterTypeName)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns ever-scheduled encounters matching the specified encounter type name.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.exitLocation",
     "signature": "programEnrolment.exitLocation()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns Point location where enrolment was exited.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findEncounter",
     "signature": "programEnrolment.findEncounter(encounterTypeName, encounterName)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns encounter by type name and encounter name; validation or summary rule use.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findExitObservation",
     "signature": "programEnrolment.findExitObservation(conceptNameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Retrieve a program exit observation by concept name or UUID to check exit conditions.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findGroupedObservation",
     "signature": "programEnrolment.findGroupedObservation(parentConceptNameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Extract grouped child observations within a parent concept for multi-part eligibility checks.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findLastEncounterOfType",
     "signature": "programEnrolment.findLastEncounterOfType(currentEncounter, encounterTypes = [])",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Locate the most recent encounter before current to reference prior visit data in rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findLatestObservationFromEncounters",
     "signature": "programEnrolment.findLatestObservationFromEncounters(conceptNameOrUuid, currentEncounter, checkInEnrolment = false)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Retrieve the latest observation value across enrolment and current encounter for comparisons.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findLatestObservationFromPreviousEncounters",
     "signature": "programEnrolment.findLatestObservationFromPreviousEncounters(conceptNameOrUuid, currentEncounter, parentConceptNameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Get the most recent observation from past encounters, optionally within grouped concepts.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findLatestObservationInEntireEnrolment",
     "signature": "programEnrolment.findLatestObservationInEntireEnrolment(conceptNameOrUuid, currentEncounter)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Fetch the most recent observation across all enrolment encounters, including current.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findLatestPreviousEncounterWithObservationForConcept",
     "signature": "programEnrolment.findLatestPreviousEncounterWithObservationForConcept(currentEncounter, conceptNameOrUuid, parentConceptNameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Find the most recent prior encounter containing a specific concept observation.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findLatestPreviousEncounterWithValueForConcept",
     "signature": "programEnrolment.findLatestPreviousEncounterWithValueForConcept(currentEncounter, conceptNameOrUuid, valueConceptName)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Locate the latest prior encounter with a specific observation answer concept value.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findMediaObservations",
     "signature": "programEnrolment.findMediaObservations()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Collect all media observations from enrolment and exit data \u2014 internal mutation, rarely called from rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findNthLastEncounterOfType",
     "signature": "programEnrolment.findNthLastEncounterOfType(currentEncounter, encounterTypes = [], n = 0)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Retrieve the Nth previous encounter of a given type for multi-step historical analysis.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findObservation",
     "signature": "programEnrolment.findObservation(conceptNameOrUuid, parentConceptNameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Retrieve an observation by concept name or UUID, optionally nested under a parent concept.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findObservationInEntireEnrolment",
     "signature": "programEnrolment.findObservationInEntireEnrolment(conceptNameOrUuid, currentEncounter, latest = false, parentConceptNameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Search for observations across all enrolment encounters, optionally returning the latest match.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findObservationInLastEncounter",
     "signature": "programEnrolment.findObservationInLastEncounter(conceptNameOrUuid, currentEncounter, parentConceptNameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Fetch an observation from the most recent encounter of the same type.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.findObservationValueInEntireEnrolment",
     "signature": "programEnrolment.findObservationValueInEntireEnrolment(conceptNameOrUuid, checkInEnrolment)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Return readable observation value and date from entire enrolment history, defaulting to enrolment date.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.fromResource",
     "signature": "programEnrolment.fromResource(resource, entityService)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Deserialize a program enrolment from REST resource with linked program and individual \u2014 internal framework method.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.getAllScheduledVisits",
     "signature": "programEnrolment.getAllScheduledVisits(currentEncounter)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Return upcoming scheduled encounters excluding current, formatted for visit schedule rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.getChecklists",
     "signature": "programEnrolment.getChecklists()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Retrieve enrolment checklists for summary or validation \u2014 internal framework accessor.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.getEncounters",
     "signature": "programEnrolment.getEncounters(removeCancelledEncounters)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "All encounters in this enrolment. Pass `true` to include voided/cancelled.",
     "example_snippet": "const encs = programEnrolment.getEncounters(true);"
   },
   {
     "name": "ProgramEnrolment.getEncountersOfType",
     "signature": "programEnrolment.getEncountersOfType(encounterTypeName, removeCancelledEncounters)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "All encounters of the given encounter-type name in this enrolment.",
     "example_snippet": "const followups = programEnrolment.getEncountersOfType('Followup');"
   },
   {
     "name": "ProgramEnrolment.getEntityTypeName",
     "signature": "programEnrolment.getEntityTypeName()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Return the program name as the entity type identifier \u2014 internal framework accessor.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.getName",
     "signature": "programEnrolment.getName()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Return literal 'ProgramEnrolment' string \u2014 internal framework identifier.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.getObservationReadableValue",
     "signature": "programEnrolment.getObservationReadableValue(conceptNameOrUuid, parentConceptNameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Retrieve the human-readable value of an observation by concept name or UUID.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.getObservationReadableValueInEntireEnrolment",
     "signature": "programEnrolment.getObservationReadableValueInEntireEnrolment(conceptNameOrUuid, programEncounter)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Read the human-readable observed value of a concept across the whole enrolment.",
     "example_snippet": "const result = programEnrolment.getObservationReadableValueInEntireEnrolment('Electrophoresis result');"
   },
   {
     "name": "ProgramEnrolment.getObservationValue",
     "signature": "programEnrolment.getObservationValue(conceptNameOrUuid, parentConceptNameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Retrieve a single observation value for a concept during eligibility or summary rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.getObservationsForConceptName",
     "signature": "programEnrolment.getObservationsForConceptName(conceptNameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Collect all observation values and timestamps for a concept across all encounters.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.getSchemaName",
     "signature": "programEnrolment.getSchemaName()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal schema lookup\u2014rarely called from rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.hasAnyOfEncounterTypes",
     "signature": "programEnrolment.hasAnyOfEncounterTypes(encounterTypeNames = [])",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Check if enrolment contains encounters matching any supplied encounter type names.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.hasChecklist",
     "signature": "programEnrolment.hasChecklist()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Determine if this enrolment has associated checklists for eligibility or summary.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.hasCompletedEncounterOfType",
     "signature": "programEnrolment.hasCompletedEncounterOfType(encounterTypeName)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "True when an encounter of the given type has been completed (has `encounterDateTime`).",
     "example_snippet": "if (!programEnrolment.hasCompletedEncounterOfType('Baseline')) { /* schedule it */ }"
   },
   {
     "name": "ProgramEnrolment.hasEncounter",
     "signature": "programEnrolment.hasEncounter(encounterTypeName, encounterName)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "True when an encounter of the given name exists in this enrolment.",
     "example_snippet": "if (programEnrolment.hasEncounter('SCD Followup Jan 2024')) { return scheduleBuilder.getAll(); }"
   },
   {
     "name": "ProgramEnrolment.hasEncounterOfType",
     "signature": "programEnrolment.hasEncounterOfType(encounterTypeName)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Verify that a specific encounter type exists within the enrolment.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.hasEncounterWithObservationValueAfterDate",
     "signature": "programEnrolment.hasEncounterWithObservationValueAfterDate(encounterTypeName, afterDate, conceptNameOrUuid, value)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Check if encounter of type with matching observation value exists after a given date.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.hasObservation",
     "signature": "programEnrolment.hasObservation(conceptNameOrUuid)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Verify an observation exists for a concept during eligibility or validation rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.individual",
     "signature": "programEnrolment.individual()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Access the enrolled individual entity for attribute or decision lookups.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.isActive",
     "signature": "programEnrolment.isActive()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns true when enrolment has no exit date for active eligibility checks.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.isRejectedEntity",
     "signature": "programEnrolment.isRejectedEntity()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns true when latest approval status is rejected\u2014use in eligibility rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.lastFulfilledEncounter",
     "signature": "programEnrolment.lastFulfilledEncounter(...encounterTypeNames)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Retrieve the most recent encounter, optionally filtered by encounter type names.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.lastModifiedBy",
     "signature": "programEnrolment.lastModifiedBy()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal audit property\u2014rarely called from rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.lastModifiedByUUID",
     "signature": "programEnrolment.lastModifiedByUUID()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal audit property\u2014rarely called from rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.latestEntityApprovalStatus",
     "signature": "programEnrolment.latestEntityApprovalStatus()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Fetch the newest approval status record by timestamp for review checks.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.nonVoidedEncounters",
     "signature": "programEnrolment.nonVoidedEncounters()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Filter to active (non-voided) encounters for rule logic and eligibility.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.numberOfEncountersOfType",
     "signature": "programEnrolment.numberOfEncountersOfType(encounterTypeName)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Count non-voided encounters of a specific type for frequency or schedule rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.observationExistsInEntireEnrolment",
     "signature": "programEnrolment.observationExistsInEntireEnrolment(conceptNameOrUuid, currentEncounter)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Check if observation exists anywhere in enrolment, excluding current encounter.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.observations",
     "signature": "programEnrolment.observations()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal entity list conversion\u2014rarely called from rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.program",
     "signature": "programEnrolment.program()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Access the enrolled program entity for program-level rules or metadata.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.programExitDateTime",
     "signature": "programEnrolment.programExitDateTime()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Eligibility or summary rules check whether a beneficiary has exited a program.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.programExitObservations",
     "signature": "programEnrolment.programExitObservations()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Validation or summary rules access observations recorded at program exit.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.replaceMediaObservation",
     "signature": "programEnrolment.replaceMediaObservation(originalValue, newValue, conceptUUID)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal mutation for media observation updates \u2014 rarely called directly from rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.replaceObservation",
     "signature": "programEnrolment.replaceObservation(originalValue, newValue)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal mutation updating observations in both enrolment and exit stages \u2014 framework use.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.scheduledEncounters",
     "signature": "programEnrolment.scheduledEncounters()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Visit schedule rules retrieve pending encounters without completion or cancellation dates.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.scheduledEncountersOfType",
     "signature": "programEnrolment.scheduledEncountersOfType(encounterTypeName)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Encounters of the given type that are scheduled but not yet completed.",
     "example_snippet": "const pending = programEnrolment.scheduledEncountersOfType('Followup');"
   },
   {
     "name": "ProgramEnrolment.setLatestEntityApprovalStatus",
     "signature": "programEnrolment.setLatestEntityApprovalStatus(entityApprovalStatus)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal mutation recording approval status \u2014 framework plumbing, not rule-facing.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.toJSON",
     "signature": "programEnrolment.toJSON()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Serialization for internal storage \u2014 framework use, not called from rule logic.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.toResource",
     "signature": "programEnrolment.toResource()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Serialization for API/network transport \u2014 framework use, not called from rules.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.updateAudit",
     "signature": "programEnrolment.updateAudit(userInfo, isNew)",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Internal mutation stamping audit fields \u2014 framework plumbing, not rule-facing.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.validateEnrolment",
     "signature": "programEnrolment.validateEnrolment()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns validation errors if enrolment date is empty, invalid, before registration, or future.",
     "example_snippet": ""
   },
   {
     "name": "ProgramEnrolment.validateExit",
     "signature": "programEnrolment.validateExit()",
-    "applies_to": [
-      "visitScheduleRule"
-    ],
     "use_when": "Returns validation errors if exit date is empty, invalid, before enrolment, or future.",
     "example_snippet": ""
   }

@@ -2,77 +2,66 @@
   {
     "name": "RuleCondition.constructor",
     "signature": "new imports.rulesConfig.RuleCondition({ individual | programEnrolment | programEncounter | encounter })",
-    "applies_to": ["visitScheduleRule", "encounterEligibilityCheckRule", "enrolmentEligibilityCheckRule"],
     "use_when": "Begin a fluent condition chain over the given entity. Always followed by `.when.<accessor>(...)` and terminated with `.matches()`.",
     "example_snippet": "const condition = new imports.rulesConfig.RuleCondition({ programEncounter }).when.valueInEncounter(conceptUuid).notDefined.matches();"
   },
   {
     "name": "RuleCondition.when.valueInEncounter",
     "signature": ".when.valueInEncounter(conceptUuid)",
-    "applies_to": ["visitScheduleRule", "encounterEligibilityCheckRule"],
     "use_when": "Open a clause on a concept's observed value on the current encounter. Argument is a concept UUID string. Chain with .defined / .notDefined / .containsAnswerConceptName / etc.",
     "example_snippet": ".when.valueInEncounter('e500ef46-...').notDefined.matches()"
   },
   {
     "name": "RuleCondition.when.valueInRegistration",
     "signature": ".when.valueInRegistration(conceptUuid)",
-    "applies_to": ["visitScheduleRule", "encounterEligibilityCheckRule", "enrolmentEligibilityCheckRule"],
     "use_when": "Open a clause on a concept's observed value on the subject's registration form.",
     "example_snippet": ".when.valueInRegistration(conceptUuid).containsAnswerConceptName(answerUuid).matches()"
   },
   {
     "name": "RuleCondition.containsAnswerConceptName",
     "signature": ".containsAnswerConceptName(answerConceptUuid, ...)",
-    "applies_to": ["visitScheduleRule", "encounterEligibilityCheckRule"],
     "use_when": "Match when the observed value contains the named answer concept(s). Pass one or more answer concept UUIDs.",
     "example_snippet": ".containsAnswerConceptName('a1b2c3-...')"
   },
   {
     "name": "RuleCondition.containsAnyAnswerConceptName",
     "signature": ".containsAnyAnswerConceptName(answerConceptUuid, ...)",
-    "applies_to": ["visitScheduleRule", "encounterEligibilityCheckRule"],
     "use_when": "Match when the observed value contains ANY of the listed answer concepts.",
     "example_snippet": ".containsAnyAnswerConceptName('a1...', 'a2...')"
   },
   {
     "name": "RuleCondition.defined",
     "signature": ".defined",
-    "applies_to": ["visitScheduleRule", "encounterEligibilityCheckRule"],
     "use_when": "Match when the observed value is present on the entity. Chain after a `.when.value*` clause.",
     "example_snippet": ".when.valueInRegistration(uuid).defined.matches()"
   },
   {
     "name": "RuleCondition.notDefined",
     "signature": ".notDefined",
-    "applies_to": ["visitScheduleRule", "encounterEligibilityCheckRule"],
     "use_when": "Match when the observed value is absent. Common for follow-up scheduling gated on 'not yet recorded'.",
     "example_snippet": ".when.valueInEncounter(uuid).notDefined.matches()"
   },
   {
     "name": "RuleCondition.ageInYears",
     "signature": ".when.ageInYears.<comparator>(n)",
-    "applies_to": ["visitScheduleRule", "encounterEligibilityCheckRule"],
     "use_when": "Compare the subject's age in years. Comparators: lessThan, greaterThan, lessThanOrEqualTo, greaterThanOrEqualTo, equals.",
     "example_snippet": ".when.ageInYears.lessThan(24).matches()"
   },
   {
     "name": "RuleCondition.ageInMonths",
     "signature": ".when.ageInMonths.<comparator>(n)",
-    "applies_to": ["visitScheduleRule", "encounterEligibilityCheckRule"],
     "use_when": "Compare the subject's age in months. Useful for infant scheduling.",
     "example_snippet": ".when.ageInMonths.greaterThanOrEqualTo(6).matches()"
   },
   {
     "name": "RuleCondition.and.when",
     "signature": ".and.when(...)",
-    "applies_to": ["visitScheduleRule", "encounterEligibilityCheckRule"],
     "use_when": "Chain another clause with AND semantics.",
     "example_snippet": ".when.ageInYears.greaterThanOrEqualTo(18).and.when.valueInRegistration(uuid).defined.matches()"
   },
   {
     "name": "RuleCondition.matches",
     "signature": ".matches() -> boolean",
-    "applies_to": ["visitScheduleRule", "encounterEligibilityCheckRule", "enrolmentEligibilityCheckRule"],
     "use_when": "Terminate the condition chain. Returns a boolean ready to gate a scheduleBuilder.add(...).",
     "example_snippet": "if (condition) { scheduleBuilder.add({ ... }); }"
   }
