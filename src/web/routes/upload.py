@@ -44,6 +44,40 @@ ALLOWED_UPLOAD_SUFFIXES = {".xlsx", ".xls"}
 # enough that 10 MB workbooks copy in ~10 reads.
 COPY_CHUNK_SIZE = 1024 * 1024
 
+# Per-session filename for the avni-server error response captured on a
+# failed relay. Overwritten on every failed upload — only the most recent
+# attempt is retrievable.
+UPLOAD_ERROR_LOG_FILENAME = "upload_error.log"
+
+
+def _write_upload_error_log(
+    workdir: Path,
+    *,
+    status_code: int,
+    body: str,
+    context: str,
+) -> Path | None:
+    """Persist a failed-relay error payload to the session workdir.
+
+    Returns the path on success, None if the write failed (best-effort —
+    a failed log write must not mask the original upload failure). The
+    file is exposed via `GET /sessions/{id}/upload-error-log` so users
+    can inspect the full avni-server response, not just the SSE preview.
+    """
+    target = workdir / UPLOAD_ERROR_LOG_FILENAME
+    try:
+        header = (
+            f"# avni-ai-web :: upload-to-avni error log\n"
+            f"# context: {context}\n"
+            f"# http_status: {status_code}\n"
+            f"# ---\n"
+        )
+        target.write_text(header + body, encoding="utf-8")
+    except OSError as exc:
+        log.warning(f"could not write upload error log to {target}: {exc}")
+        return None
+    return target
+
 
 def _get_store(request: Request) -> SessionStore:
     return request.app.state.store
@@ -174,9 +208,20 @@ async def upload_to_avni(
                 )
     except httpx.HTTPError as exc:
         log.warning(f"upload-to-avni network error sid={session_id}: {exc}")
+        error_log = _write_upload_error_log(
+            session.workdir,
+            status_code=0,
+            body=str(exc),
+            context=f"network error to {url}",
+        )
         session.bus.publish(
             "upload.done",
-            {"job_id": "", "status": "failed", "details": str(exc)},
+            {
+                "job_id": "",
+                "status": "failed",
+                "details": str(exc),
+                "error_log_available": error_log is not None,
+            },
         )
         raise HTTPException(
             status_code=502,
@@ -190,13 +235,29 @@ async def upload_to_avni(
             detail={"error": "avni-server rejected the token", "code": "E_AUTH"},
         )
     if response.status_code >= 400:
+        # `details` is the truncated preview shown inline; the full response
+        # body is persisted to disk and exposed via GET /upload-error-log so
+        # operators can grab the complete avni-server payload (stack traces,
+        # per-record reasons) without it bloating the SSE event.
         details = response.text[:500]
+        full_body = response.text
         log.warning(
             f"upload-to-avni avni-server {response.status_code} sid={session_id}: {details}"
         )
+        error_log = _write_upload_error_log(
+            session.workdir,
+            status_code=response.status_code,
+            body=full_body,
+            context=f"avni-server returned HTTP {response.status_code}",
+        )
         session.bus.publish(
             "upload.done",
-            {"job_id": "", "status": "failed", "details": details},
+            {
+                "job_id": "",
+                "status": "failed",
+                "details": details,
+                "error_log_available": error_log is not None,
+            },
         )
         raise HTTPException(
             status_code=502,
@@ -207,8 +268,94 @@ async def upload_to_avni(
             },
         )
 
-    job_id = response.text.strip()
-    session.bus.publish(
-        "upload.done", {"job_id": job_id, "status": "ok"},
+    # avni-server's /import/new returns the literal string "true" on
+    # acceptance — NOT the job UUID. The UUID must be discovered by polling
+    # /import/status, where the newly-submitted job appears at the head of
+    # the list. Match by fileName so a concurrent upload from the same
+    # user doesn't get attributed here.
+    job_uuid = await _fetch_latest_job_uuid(
+        base_url=settings.avni_server_base_url,
+        headers=headers,
+        file_name=file_path.name,
     )
-    return {"job_id": job_id, "status": "ok"}
+    session.bus.publish(
+        "upload.done", {"job_id": job_uuid or "", "status": "ok"},
+    )
+    return {"job_id": job_uuid or "", "status": "ok"}
+
+
+async def _fetch_latest_job_uuid(
+    *,
+    base_url: str,
+    headers: dict[str, str],
+    file_name: str,
+    retries: int = 3,
+    retry_delay_sec: float = 0.5,
+) -> str | None:
+    """Look up the most recent import job whose fileName matches the upload.
+
+    Returns the job's UUID, or None on any failure (the upload itself has
+    already succeeded by this point — a missing UUID just means the user
+    can't download the per-row error CSV via the inline button, which
+    degrades to the "View jobs" page rather than blocking the flow).
+
+    A small retry loop covers the case where /import/status hasn't yet
+    reflected the just-submitted job.
+    """
+    import asyncio
+
+    url = f"{base_url.rstrip('/')}/import/status"
+    params = {"size": 10}
+    for attempt in range(retries):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url, params=params, headers=headers)
+            if resp.status_code >= 400:
+                log.warning(
+                    f"import/status returned {resp.status_code}: {resp.text[:200]}"
+                )
+                return None
+            payload = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning(f"import/status fetch failed: {exc}")
+            return None
+        for entry in payload.get("content") or []:
+            if entry.get("fileName") == file_name and entry.get("uuid"):
+                return entry["uuid"]
+        if attempt + 1 < retries:
+            await asyncio.sleep(retry_delay_sec)
+    log.warning(
+        f"could not locate import job for fileName={file_name!r} after {retries} attempts"
+    )
+    return None
+
+
+# ── GET /sessions/{id}/upload-error-log ───────────────────────────────────────
+
+
+@router.get("/sessions/{session_id}/upload-error-log")
+async def get_upload_error_log(
+    session_id: str,
+    store: SessionStore = Depends(_get_store),
+):
+    """Return the avni-server response body captured on the last failed relay.
+
+    Available only after `POST /upload-to-avni` returned a non-2xx; 404
+    otherwise. Use this for failures of the relay itself — for the
+    per-row error CSV produced by an accepted import job, hit avni-server's
+    `/import/errorfile?jobUuid=<id>` directly.
+    """
+    from fastapi.responses import FileResponse
+
+    session = _require_session(session_id, store)
+    log_path = session.workdir / UPLOAD_ERROR_LOG_FILENAME
+    if not log_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "E_NO_ERROR_LOG", "message": "no upload error log on this session"},
+        )
+    return FileResponse(
+        path=log_path,
+        media_type="text/plain",
+        filename="upload_error.log",
+    )

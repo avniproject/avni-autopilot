@@ -26,6 +26,30 @@ from typing import TYPE_CHECKING, Optional
 from web.events import EventBus
 
 
+log = logging.getLogger(__name__)
+
+
+def _purge_org_dir(dir_path: Path, patterns: tuple[str, ...]) -> None:
+    """Best-effort wipe of files matching any glob pattern in dir_path.
+
+    Used at session-allocate time to ensure the shared input/output dir
+    for an org carries no leftovers from a previous session for the same
+    org. Silently skips on missing dir or per-file IOErrors — purge is an
+    isolation optimisation, not a correctness gate.
+    """
+    if not dir_path.exists():
+        return
+    for pattern in patterns:
+        for path in dir_path.glob(pattern):
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink()
+            except OSError as exc:
+                log.warning(f"purge skipped {path}: {exc}")
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -48,7 +72,6 @@ if TYPE_CHECKING:
     # Used only for type hints.
     from web.chat_service import ChatService
 
-log = logging.getLogger(__name__)
 
 REAPER_INTERVAL_SEC = 60.0
 
@@ -118,8 +141,23 @@ class SessionStore:
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
-    def create(self, org_name: str, username: str, auth_token: str) -> ChatSession:
-        """Allocate a session id, create its workdir, and register the record."""
+    def create(
+        self,
+        org_name: str,
+        username: str,
+        auth_token: str,
+        shared_input_root: Optional[Path] = None,
+        shared_output_root: Optional[Path] = None,
+    ) -> ChatSession:
+        """Allocate a session id, create its workdir, and register the record.
+
+        When `shared_input_root` / `shared_output_root` are supplied, the
+        org-named subdir under each is wiped of leftover .xlsx (input) or
+        bundle artefacts (output) so the new session starts from a clean
+        slate. Without this, files dropped during a previous session for
+        the same org would be parsed alongside the current session's
+        uploads — producing mixed-content bundles.
+        """
         session_id = secrets.token_urlsafe(16)
         workdir = self._root_dir / session_id
         workdir.mkdir(parents=True, exist_ok=True)
@@ -132,6 +170,10 @@ class SessionStore:
             auth_token=auth_token,
             workdir=workdir,
         )
+        if shared_input_root is not None:
+            _purge_org_dir(shared_input_root / session.org_slug, ("*.xlsx", "*.xls"))
+        if shared_output_root is not None:
+            _purge_org_dir(shared_output_root / session.org_slug, ("*",))
         self._sessions[session_id] = session
         log.info(f"session created sid={session_id} org={org_name!r}")
         return session

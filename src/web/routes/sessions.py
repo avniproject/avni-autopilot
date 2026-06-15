@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
@@ -61,10 +62,16 @@ async def create_session(
             detail={"error": exc.message, "code": "E_AUTH"},
         ) from exc
 
+    # Pass the shared roots so the store can wipe the org's input/output
+    # subdirs of any leftovers from a previous session — without this, a new
+    # session's uploads get parsed alongside the previous session's files
+    # for the same org.
     session = store.create(
         org_name=info.organisation_name,
         username=info.username,
         auth_token=token,
+        shared_input_root=Path(settings.input_root),
+        shared_output_root=Path(settings.output_root),
     )
     session.chat_service = ChatService(session)
 
@@ -85,6 +92,28 @@ async def create_session(
         "org_name": session.org_name,
         "expires_at": _expiry_iso(settings.ai_session_max_hours),
     }
+
+
+@router.get("/sessions/{session_id}")
+async def get_session(
+    session_id: str,
+    store: SessionStore = Depends(_get_store),
+) -> dict[str, Any]:
+    """Lightweight liveness check.
+
+    Returns the session's `session_id` + `org_name` when the session is
+    still in the store; 404 with `E_NO_SESSION` otherwise. The browser
+    calls this on assistant-open to verify a sessionStorage-cached id
+    before reconnecting the SSE stream — without it, the stream opens
+    against a reaped session and every subsequent POST fails.
+    """
+    session = store.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "E_NO_SESSION", "message": "session not found"},
+        )
+    return {"session_id": session_id, "org_name": session.org_name}
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
