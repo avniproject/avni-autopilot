@@ -21,7 +21,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
-from domain.rules.knowledge_base import KnowledgeBase
+from domain.rules.knowledge_base import KnowledgeBase, RetrievedContext
 from domain.rules.prompts import (
     build_system_prompt,
     build_user_prompt,
@@ -79,8 +79,25 @@ class RuleGenerator:
         """True when ANTHROPIC_API_KEY is set and the structured model is bound."""
         return self._has_key and self._model is not None
 
-    def generate(self, spec: RuleSpec) -> RuleResult:
+    @property
+    def kb(self) -> KnowledgeBase:
+        """Read-only handle to the underlying KnowledgeBase.
+
+        Exposed so the pipeline can call `kb.retrieve_batch(specs)` for all
+        rules in a bundle in one Voyage request — see `pipeline.nodes.generate_rules`.
+        """
+        return self._kb
+
+    def generate(
+        self, spec: RuleSpec, context: "RetrievedContext | None" = None,
+    ) -> RuleResult:
         """Produce a `RuleResult` for one rule intent.
+
+        If `context` is provided, the retrieve step is skipped — used by the
+        pipeline's batch path (`generate_rules` calls `kb.retrieve_batch`
+        once for all forms, then passes each context here). Single-rule
+        callers (the chat `set_form_rule` tool) leave `context=None` and
+        retrieve runs inline as before.
 
         Failures (missing API key, KB retrieval error, Anthropic call error)
         return a `RuleResult` with empty `js` and a `warnings` entry — never
@@ -89,11 +106,14 @@ class RuleGenerator:
         if not self.is_available():
             return _empty(spec, "ANTHROPIC_API_KEY not set; rule generation skipped")
 
-        try:
-            ctx = self._kb.retrieve(spec)
-        except Exception as exc:  # noqa: BLE001
-            log.warning(f"KB retrieve failed for form {spec.form_name!r}: {exc}")
-            return _empty(spec, f"KB retrieval failed: {exc}")
+        if context is None:
+            try:
+                ctx = self._kb.retrieve(spec)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(f"KB retrieve failed for form {spec.form_name!r}: {exc}")
+                return _empty(spec, f"KB retrieval failed: {exc}")
+        else:
+            ctx = context
 
         helpers_text = self._kb.render_helpers(ctx.helpers)
         examples_text = self._kb.render_examples(ctx.examples)

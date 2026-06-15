@@ -177,6 +177,55 @@ class KnowledgeBase:
         examples_ranked = _top_k(query_vec, examples_scope, vectors, top_k_examples)
         return RetrievedContext(helpers=helpers_ranked, examples=examples_ranked)
 
+    def retrieve_batch(
+        self,
+        specs: list[RuleSpec],
+        top_k_helpers: int = _TOP_K_HELPERS,
+        top_k_examples: int = _TOP_K_EXAMPLES,
+    ) -> list[RetrievedContext]:
+        """Vectorise every query text in ONE Voyage call, score each spec individually.
+
+        Used by the pipeline's `generate_rules` node so a bundle with N rules
+        consumes a single embedding request instead of N — critical on
+        Voyage's free tier (3 RPM) and a small speedup on standard rates.
+
+        Output is positionally aligned with `specs`: `result[i]` is the
+        context for `specs[i]`. Specs whose rule_kind has neither helpers
+        nor examples in the catalog get an empty `RetrievedContext`.
+
+        Vectors are bit-identical to repeated `retrieve` calls — the batch
+        only changes call orchestration, not the model's output.
+        """
+        if not specs:
+            return []
+
+        # Materialise the catalog vectors once; subsequent loops are cheap.
+        vectors = self._ensure_catalog_vectors()
+
+        # Embed every query in one request. Indexing keeps the result aligned
+        # with the input spec list even if some specs have empty scopes.
+        query_texts = [_query_text(spec) for spec in specs]
+        query_vecs = self._embed_queries(query_texts)
+
+        out: list[RetrievedContext] = []
+        for spec, query_vec in zip(specs, query_vecs):
+            helpers_scope = [
+                h for h in self.helpers
+                if not h.applies_to or spec.rule_kind.value in h.applies_to
+            ]
+            examples_scope = [
+                e for e in self.examples if e.rule_kind == spec.rule_kind.value
+            ]
+            if not helpers_scope and not examples_scope:
+                log.warning(f"KB empty for rule_kind={spec.rule_kind.value!r}")
+                out.append(RetrievedContext())
+                continue
+            out.append(RetrievedContext(
+                helpers=_top_k(query_vec, helpers_scope, vectors, top_k_helpers),
+                examples=_top_k(query_vec, examples_scope, vectors, top_k_examples),
+            ))
+        return out
+
     def render_helpers(self, helpers: list[HelperEntry]) -> str:
         """Format helper entries for injection into the user prompt."""
         if not helpers:
@@ -333,6 +382,14 @@ class KnowledgeBase:
         emb = self._embedder or _default_embedder()
         vecs = emb.embed([text], input_type="query")
         return np.asarray(vecs[0], dtype=np.float32)
+
+    def _embed_queries(self, texts: list[str]) -> list[np.ndarray]:
+        """Batch sibling of `_embed_query` — vectorises a list in ONE request."""
+        if not texts:
+            return []
+        emb = self._embedder or _default_embedder()
+        vecs = emb.embed(texts, input_type="query")
+        return [np.asarray(v, dtype=np.float32) for v in vecs]
 
 
 # ── Embedder protocol + default impl ──────────────────────────────────────────

@@ -72,6 +72,28 @@ class Settings:
     # Relative paths resolve against the project root.
     log_file: str = _env("LOG_FILE", os.path.join(_PROJECT_ROOT, "logs", "avni.log"))
 
+    # ── Web service (avni-ai-web) — read by src/web/ only ────────────────────
+    # Base URL of the avni-server instance the service forwards auth checks
+    # and bundle uploads to (e.g. https://staging.avniproject.org). Required
+    # for the web service; unused by the chat REPL or the rules CLI.
+    avni_server_base_url: str = _env("AVNI_SERVER_BASE_URL", "https://staging.avniproject.org")
+    # Origin the React UI is served from — used for the FastAPI CORS allowlist.
+    # In dev this is typically http://localhost:6010 (avni-webapp's default
+    # port). Comma-separate to allow multiple origins.
+    ai_webapp_origin: str = _env("AI_WEBAPP_ORIGIN", "http://localhost:6010")
+    # Where per-session input + output bundles are written. One subdirectory
+    # per session id. Cleaned up by the reaper on session expiry.
+    ai_session_dir: str = _env("AI_SESSION_DIR", os.path.join("/tmp", "avni-ai"))
+    # Idle threshold (minutes) after which an inactive session is reaped.
+    ai_session_idle_min: int = _env_int("AI_SESSION_IDLE_MIN", 30)
+    # Absolute session lifetime (hours). Sessions older than this are reaped
+    # even if active — defence against runaway tabs.
+    ai_session_max_hours: int = _env_int("AI_SESSION_MAX_HOURS", 2)
+    # Port the FastAPI service listens on locally. Default 8090 to dodge
+    # avni-server's 8080 on a dev machine; ALBs in front of it map
+    # 443/80 → this port (per DEPLOYMENT_SDD §5).
+    ai_web_port: int = _env_int("AI_WEB_PORT", 8090)
+
 
 settings = Settings()
 

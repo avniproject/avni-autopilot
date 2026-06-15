@@ -312,7 +312,10 @@ def generate_rules(state: BundleState) -> dict:
                  state["org_name"])
         return {"parse_warnings": warnings}
 
-    written = 0
+    # Pass 1 — collect every (form, kind, rule_spec) tuple, dropping
+    # unknown kinds with a namespaced warning. Building specs is cheap
+    # and lets us batch the expensive embedding step that follows.
+    pending: list[tuple[Any, str, RuleSpec]] = []
     for form_spec in forms_with_intents:
         for kind_value, intent in form_spec.rule_intents.items():
             try:
@@ -323,36 +326,52 @@ def generate_rules(state: BundleState) -> dict:
                     f"unknown rule kind, skipped"
                 )
                 continue
-
             rule_spec = _build_rule_spec(
                 form_spec, kind, intent,
                 available_encounter_types, available_programs,
                 all_forms=spec.forms,
             )
-            result = generator.generate(rule_spec)
-            ok, raw_warnings = validate_and_decide(result, rule_spec)
+            pending.append((form_spec, kind_value, rule_spec))
 
-            for warning in raw_warnings:
-                warnings.append(
-                    f"rules.{kind_value}.{form_spec.name}: {warning}"
-                )
+    # Pass 2 — vectorise every query in ONE Voyage request. Critical for
+    # free-tier users (3 RPM) so N rules don't burn N rate-limit slots.
+    contexts: list[Any]
+    try:
+        contexts = generator.kb.retrieve_batch([rs for _, _, rs in pending])
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"KB batch retrieve failed: {exc}")
+        warnings.append(f"rules: batch retrieval failed ({exc})")
+        contexts = [None] * len(pending)
 
-            if not ok:
-                continue
+    # Pass 3 — per-rule Sonnet call + validate + write. Generation stays
+    # serial because each prompt is form-specific (different system prompt,
+    # different available concepts) — batching there would hurt quality.
+    written = 0
+    for (form_spec, kind_value, rule_spec), ctx in zip(pending, contexts):
+        result = generator.generate(rule_spec, context=ctx)
+        ok, raw_warnings = validate_and_decide(result, rule_spec)
 
-            target = forms_by_name.get(form_spec.name)
-            if target is None:
-                warnings.append(
-                    f"rules.{kind_value}.{form_spec.name}: "
-                    f"form JSON not found in state; cannot write"
-                )
-                continue
-            target["content"][kind_value] = result.js
-            written += 1
+        for warning in raw_warnings:
+            warnings.append(
+                f"rules.{kind_value}.{form_spec.name}: {warning}"
+            )
+
+        if not ok:
+            continue
+
+        target = forms_by_name.get(form_spec.name)
+        if target is None:
+            warnings.append(
+                f"rules.{kind_value}.{form_spec.name}: "
+                f"form JSON not found in state; cannot write"
+            )
+            continue
+        target["content"][kind_value] = result.js
+        written += 1
 
     log.info(
-        "[%s] Rules: %d form(s) had intents, %d rule(s) written.",
-        state["org_name"], len(forms_with_intents), written,
+        "[%s] Rules: %d form(s) had intents, %d rule(s) generated, %d written.",
+        state["org_name"], len(forms_with_intents), len(pending), written,
     )
     return {"forms_json": forms_json, "parse_warnings": warnings}
 

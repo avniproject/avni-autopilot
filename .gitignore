@@ -39,3 +39,6 @@ resources/rules/.embeddings.json
 
 # Logs
 logs/
+
+# Input requirements to claude
+requirements

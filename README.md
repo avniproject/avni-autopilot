@@ -89,6 +89,66 @@ Conversation state is held in-memory by a `MemorySaver` checkpointer keyed by `t
 
 ---
 
+## Running as a service (`avni-ai-web`)
+
+A FastAPI service exposes the same chat agent over HTTP + Server-Sent Events, so a browser can drive bundle generation against a hosted instance. This is the backend half of [`specs/AVNI_WEBAPP_INTEGRATION_SDD.md`](specs/AVNI_WEBAPP_INTEGRATION_SDD.md); the React side lives in `avni-webapp`.
+
+### Required configuration
+
+In addition to `ANTHROPIC_API_KEY` (and optionally `VOYAGE_API_KEY` for rule generation), set:
+
+```
+AVNI_SERVER_BASE_URL=https://staging.avniproject.org   # token check + bundle upload
+AI_WEBAPP_ORIGIN=http://localhost:6010                  # CORS allowlist for the React UI
+```
+
+Optional knobs (defaults shown):
+
+```
+AI_SESSION_DIR=/tmp/avni-ai      # per-session input + output ZIPs live here
+AI_SESSION_IDLE_MIN=30            # idle reap threshold (minutes)
+AI_SESSION_MAX_HOURS=2            # absolute reap threshold (hours)
+AI_WEB_PORT=8080                  # the FastAPI process listens here
+```
+
+### Run
+
+```bash
+avni-ai-web
+# → uvicorn serving web.app:app on 0.0.0.0:8080
+```
+
+Hit `GET /health` to verify liveness. Browse `GET /docs` for an OpenAPI view of every endpoint.
+
+### What it does
+
+For each browser-allocated session, the service:
+
+1. Verifies the user's avni-server auth token (`GET /web/userInfo`) and binds the session to the org returned. The browser never picks an org.
+2. Accepts xlsx uploads into the session's working directory.
+3. Wraps the existing chat ReAct agent — the same one `avni-chat` uses — and streams its `agent.message`, `tool.call`, `tool.result`, `hitl.pending`, and `bundle.ready` events to the browser over SSE.
+4. On `POST /sessions/{id}/upload-to-avni`, relays the generated ZIP to avni-server's existing Metadata-Zip import endpoint, reusing the admin's auth token captured at session start.
+
+Sessions are in-memory and single-process by design — see SDD §8 for the trade-off, `specs/DEPLOYMENT_SDD.md` for the AWS shape, and SDD §11 for the v2 migration path to a persistent checkpointer.
+
+### Endpoints
+
+```
+POST   /sessions                          create + verify token
+DELETE /sessions/{session_id}             tear down
+POST   /sessions/{session_id}/upload      multipart xlsx
+POST   /sessions/{session_id}/message     one user turn
+POST   /sessions/{session_id}/resolve     respond to a HITL interrupt
+GET    /sessions/{session_id}/events      SSE stream (Last-Event-ID resume)
+GET    /sessions/{session_id}/bundle      download ZIP
+POST   /sessions/{session_id}/upload-to-avni    auto-upload to avni-server
+GET    /health                            operational liveness
+```
+
+The `avni-chat` REPL and the `avni-rules-kb` CLI are unaffected by the service — they continue to read their own env vars and ignore the `AI_*` settings.
+
+---
+
 ### Editing fields in an existing bundle
 
 A bundle ZIP can be edited directly through the chat agent.
@@ -109,9 +169,18 @@ Matching is **exact** (case-folded and whitespace-stripped, no fuzzy match). The
 
 ---
 
-### Setting a visit-schedule rule on an already-built bundle
+### Setting a form-level rule on an already-built bundle
 
-`set_visit_schedule_rule` is the chat tool counterpart for rules. Use it when you want to add or change a visit-schedule rule on a bundle you've already generated — same shape as field editing.
+`set_form_rule` is the chat tool counterpart for rules. Use it when you want to add or change a form-level rule on a bundle you've already generated — same shape as field editing. Four kinds are supported today, picked by the `rule_kind` argument:
+
+| `rule_kind` | When to use |
+|---|---|
+| `visitScheduleRule` | Schedule the next encounter (follow-up cadence, calendar slots, exit visits). |
+| `validationRule` | Block save with an error when the form is filled with invalid data. |
+| `editFormRule` | Gate who may edit the form, or under what conditions editing is allowed. |
+| `decisionRule` | Compute and write derived values into concepts at submit time. |
+
+The agent picks the right kind from your phrasing — "schedule …" → `visitScheduleRule`, "must be / cannot be …" → `validationRule`, "only X can edit …" → `editFormRule`, "compute / set …" → `decisionRule`.
 
 ```
 you> set the visit schedule rule on Baseline for Women in
@@ -125,7 +194,7 @@ agent> I'll match 'supporting family' → 'can support my family',
        'more confident' → 'It makes me feel more confident and independent'.
        Confirm?
 you> yes
-  ⚙ set_visit_schedule_rule({"bundle_path": "...", "form_name": "Baseline for Women", "intent": "..."})
+  ⚙ set_form_rule({"bundle_path": "...", "form_name": "Baseline for Women", "rule_kind": "visitScheduleRule", "intent": "..."})
 agent> Rule written. Confidence: high. Used helpers: VisitScheduleBuilder.add, RuleCondition.valueInRegistration, …
 ```
 
@@ -135,32 +204,41 @@ The agent's `list_bundle_fields` call surfaces exact coded-concept answers so th
 
 ### Rule generation as part of the pipeline
 
-When the scoping workbook includes a `Rules` (or `Form Rules`) tab, `generate_rules` (the new node after `generate_form_mappings` — see the pipeline graph below) generates each form's `visitScheduleRule` JS as part of the normal bundle build. No extra commands; running `generate <org>` in the chat picks it up automatically.
+When the scoping workbook includes a `Rules` (or `Form Rules`) tab, `generate_rules` (the new node after `generate_form_mappings` — see the pipeline graph below) generates each form's rule JS as part of the normal bundle build. No extra commands; running `generate <org>` in the chat picks it up automatically.
 
-Tab format — one row per form, columns named like:
+Tab format — one row per form, one column per rule kind. Any subset of the supported columns may appear:
 
-| Form name | Visit Schedule Rule |
-|---|---|
-| `ANC Followup` | "schedule next visit 30 days later" |
-| `ANC Followup Cancellation` | "reschedule unless cancel reason is exit" |
-| `Pregnancy Exit` | "return empty" |
+| Form name | Visit Schedule Rule | Validation Rule | Edit Form Rule | Decision Rule |
+|---|---|---|---|---|
+| `ANC Followup` | "schedule next visit 30 days later" | "weight must be between 30 and 120 kg" | | |
+| `Adult Registration` | | "age must be between 18 and 60" | "only the user who created the record can edit" | "set Age Group to Adult when age ≥ 18" |
+| `Pregnancy Exit` | "return empty" | | | |
 
-Optional columns `Encounter Eligibility Rule` / `Validation Rule` / others are parsed today but not generated yet — the parser drops them onto `FormSpec.rule_intents`; the generator skips kinds it doesn't yet know how to write.
+All four kinds — `visitScheduleRule`, `validationRule`, `editFormRule`, `decisionRule` — flow end-to-end through the generator, validator, and writer. Other rule columns (`Encounter Eligibility Rule`, `Subject Summary Rule`, etc.) are still parsed onto `FormSpec.rule_intents` but skipped by the generator until wired.
 
-Cells are natural-language intent — no syntax required. Forms not listed in the tab keep their `visitScheduleRule` as `""` (today's behaviour for every rule field).
+Cells are natural-language intent — no syntax required. Forms not listed in the tab, or columns left blank, keep the corresponding rule field as `""`.
 
-**Knowledge base CLI** (`avni-rules-kb`) maintains the helper + example catalog the rule generator consults. Two everyday commands cover the common cases:
+**Knowledge base CLI** (`avni-rules-kb`) maintains the helper + example catalog the rule generator consults. Three everyday commands cover the common cases:
 
 ```bash
-avni-rules-kb helpers     # after pulling new avni-models source or editing helper files
-                          # runs: sync → enrich-use-when → rebuild
-                          # add --skip-enrich to skip the Haiku annotation cost
+avni-rules-kb helpers       # after pulling new avni-models source or editing helper files
+                            # runs: sync → enrich-use-when → rebuild
+                            # add --skip-enrich to skip the Haiku annotation cost
 
-avni-rules-kb examples    # after editing the curated rules xlsx tab
-                          # runs: ingest-examples → rebuild
+avni-rules-kb examples      # refresh ONE rule kind's example corpus
+                            # runs: ingest-examples → rebuild
+                            # defaults: --rule-kind visitScheduleRule
+                            #           --tab "VS rule (curated)"
+
+avni-rules-kb examples-all   # refresh ALL wired rule kinds in one pass
+                            # ingests curated tabs for visitScheduleRule,
+                            # validationRule, editFormRule, decisionRule
+                            # and rebuilds embeddings once at the end
 ```
 
 The catalog lives at `resources/rules/`; the embedding cache is content-hash-invalidated, so subsequent runs only re-embed entries that changed.
+
+Helper entries with no `applies_to` field match every rule kind — only intentionally narrow scopes (e.g. `imports/visit_schedule.json`, where `VisitScheduleBuilder` is genuinely VS-only) need to declare it explicitly.
 
 The four underlying sub-commands — `sync`, `enrich-use-when`, `ingest-examples`, `rebuild` — remain available for surgical / CI use (`avni-rules-kb --help`).
 
