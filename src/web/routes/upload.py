@@ -44,9 +44,6 @@ ALLOWED_UPLOAD_SUFFIXES = {".xlsx", ".xls"}
 # enough that 10 MB workbooks copy in ~10 reads.
 COPY_CHUNK_SIZE = 1024 * 1024
 
-# Per-session filename for the avni-server error response captured on a
-# failed relay. Overwritten on every failed upload — only the most recent
-# attempt is retrievable.
 UPLOAD_ERROR_LOG_FILENAME = "upload_error.log"
 
 
@@ -57,13 +54,8 @@ def _write_upload_error_log(
     body: str,
     context: str,
 ) -> Path | None:
-    """Persist a failed-relay error payload to the session workdir.
-
-    Returns the path on success, None if the write failed (best-effort —
-    a failed log write must not mask the original upload failure). The
-    file is exposed via `GET /sessions/{id}/upload-error-log` so users
-    can inspect the full avni-server response, not just the SSE preview.
-    """
+    """Persist a failed-relay error payload. Returns the path on success,
+    None if the write failed — must not mask the original upload error."""
     target = workdir / UPLOAD_ERROR_LOG_FILENAME
     try:
         header = (
@@ -235,10 +227,9 @@ async def upload_to_avni(
             detail={"error": "avni-server rejected the token", "code": "E_AUTH"},
         )
     if response.status_code >= 400:
-        # `details` is the truncated preview shown inline; the full response
-        # body is persisted to disk and exposed via GET /upload-error-log so
-        # operators can grab the complete avni-server payload (stack traces,
-        # per-record reasons) without it bloating the SSE event.
+        # `details` is the truncated preview shown inline in the SSE event;
+        # the full body is persisted via _write_upload_error_log for the
+        # `GET /upload-error-log` download.
         details = response.text[:500]
         full_body = response.text
         log.warning(
@@ -269,10 +260,8 @@ async def upload_to_avni(
         )
 
     # avni-server's /import/new returns the literal string "true" on
-    # acceptance — NOT the job UUID. The UUID must be discovered by polling
-    # /import/status, where the newly-submitted job appears at the head of
-    # the list. Match by fileName so a concurrent upload from the same
-    # user doesn't get attributed here.
+    # acceptance — not the job UUID. Discover the UUID via /import/status,
+    # matching by fileName so a concurrent upload doesn't get attributed.
     job_uuid = await _fetch_latest_job_uuid(
         base_url=settings.avni_server_base_url,
         headers=headers,
@@ -292,15 +281,11 @@ async def _fetch_latest_job_uuid(
     retries: int = 3,
     retry_delay_sec: float = 0.5,
 ) -> str | None:
-    """Look up the most recent import job whose fileName matches the upload.
+    """Look up the import job UUID for `file_name` via /import/status.
 
-    Returns the job's UUID, or None on any failure (the upload itself has
-    already succeeded by this point — a missing UUID just means the user
-    can't download the per-row error CSV via the inline button, which
-    degrades to the "View jobs" page rather than blocking the flow).
-
-    A small retry loop covers the case where /import/status hasn't yet
-    reflected the just-submitted job.
+    Returns None on any failure — the upload has already succeeded by this
+    point, so a missing UUID only blocks the inline error-file download.
+    Retries cover the case where /import/status hasn't yet caught up.
     """
     import asyncio
 
@@ -338,13 +323,9 @@ async def get_upload_error_log(
     session_id: str,
     store: SessionStore = Depends(_get_store),
 ):
-    """Return the avni-server response body captured on the last failed relay.
-
-    Available only after `POST /upload-to-avni` returned a non-2xx; 404
-    otherwise. Use this for failures of the relay itself — for the
-    per-row error CSV produced by an accepted import job, hit avni-server's
-    `/import/errorfile?jobUuid=<id>` directly.
-    """
+    """Return the avni-server response body captured on the last failed
+    relay; 404 otherwise. For per-row errors from an accepted import job,
+    use avni-server's `/import/errorfile?jobUuid=<id>` instead."""
     from fastapi.responses import FileResponse
 
     session = _require_session(session_id, store)

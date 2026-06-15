@@ -62,10 +62,6 @@ async def create_session(
             detail={"error": exc.message, "code": "E_AUTH"},
         ) from exc
 
-    # Pass the shared roots so the store can wipe the org's input/output
-    # subdirs of any leftovers from a previous session — without this, a new
-    # session's uploads get parsed alongside the previous session's files
-    # for the same org.
     session = store.create(
         org_name=info.organisation_name,
         username=info.username,
@@ -99,14 +95,8 @@ async def get_session(
     session_id: str,
     store: SessionStore = Depends(_get_store),
 ) -> dict[str, Any]:
-    """Lightweight liveness check.
-
-    Returns the session's `session_id` + `org_name` when the session is
-    still in the store; 404 with `E_NO_SESSION` otherwise. The browser
-    calls this on assistant-open to verify a sessionStorage-cached id
-    before reconnecting the SSE stream — without it, the stream opens
-    against a reaped session and every subsequent POST fails.
-    """
+    """Liveness check used by the browser to validate a cached session id
+    before reconnecting SSE; 404s with `E_NO_SESSION` if reaped."""
     session = store.get(session_id)
     if session is None:
         raise HTTPException(

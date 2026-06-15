@@ -1172,12 +1172,9 @@ def parse_form_df(
 def _load_xlsx(path: Path) -> list[tuple[str, pd.DataFrame]]:
     """Load all sheets from an Excel file. Returns [(sheet_name, df), ...].
 
-    For .xlsx files, also blanks cells whose source has strikethrough
-    formatting — the convention is that a struck-through field name has
-    been removed from scope and must not be treated as a live field.
-    pandas' read_excel discards formatting, so a parallel openpyxl pass
-    identifies the struck coordinates and nulls them in the DataFrame
-    before the downstream parser sees the values.
+    Strikethrough cells are blanked: pandas' read_excel discards formatting,
+    so an openpyxl side-pass identifies them and nulls the corresponding
+    DataFrame entries. Convention: a struck-through field is out of scope.
     """
     xf = pd.ExcelFile(path)
     sheets: list[tuple[str, pd.DataFrame]] = []
@@ -1205,11 +1202,10 @@ def _load_xlsx(path: Path) -> list[tuple[str, pd.DataFrame]]:
 def _struck_cell_coords_per_sheet(path: Path) -> dict[str, set[tuple[int, int]]]:
     """Return `{sheet_name: {(row_idx, col_idx), …}}` for strikethrough cells.
 
-    Row / column indices are 0-based to match pandas (openpyxl is 1-based,
-    so the offset is applied here). Silent on workbook-open failures —
-    strikethrough handling is best-effort and must not block parsing.
+    Indices are 0-based (openpyxl is 1-based — offset applied below).
+    Best-effort: workbook-open failures return an empty dict.
     """
-    import openpyxl  # local import: only paid when an .xlsx is parsed
+    import openpyxl
 
     out: dict[str, set[tuple[int, int]]] = {}
     try:

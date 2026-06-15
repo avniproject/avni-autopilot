@@ -30,12 +30,11 @@ log = logging.getLogger(__name__)
 
 
 def _purge_org_dir(dir_path: Path, patterns: tuple[str, ...]) -> None:
-    """Best-effort wipe of files matching any glob pattern in dir_path.
+    """Best-effort wipe of files matching `patterns` under `dir_path`.
 
-    Used at session-allocate time to ensure the shared input/output dir
-    for an org carries no leftovers from a previous session for the same
-    org. Silently skips on missing dir or per-file IOErrors — purge is an
-    isolation optimisation, not a correctness gate.
+    Best-effort because per-file IOErrors are logged and skipped — purge
+    is an isolation optimisation across sessions for the same org, not a
+    correctness gate.
     """
     if not dir_path.exists():
         return
@@ -152,11 +151,8 @@ class SessionStore:
         """Allocate a session id, create its workdir, and register the record.
 
         When `shared_input_root` / `shared_output_root` are supplied, the
-        org-named subdir under each is wiped of leftover .xlsx (input) or
-        bundle artefacts (output) so the new session starts from a clean
-        slate. Without this, files dropped during a previous session for
-        the same org would be parsed alongside the current session's
-        uploads — producing mixed-content bundles.
+        org's subdir under each is wiped — prevents the previous session's
+        uploads being parsed alongside the new session's files.
         """
         session_id = secrets.token_urlsafe(16)
         workdir = self._root_dir / session_id

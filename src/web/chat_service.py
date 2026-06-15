@@ -211,15 +211,10 @@ class ChatService:
         if context is None:
             return False
 
-        # Wait for the interrupt-emitting turn to fully settle before queuing
-        # the resume. LangGraph's astream can still be flushing trailing
-        # chunks (final agent message, checkpoint write) by the time the
-        # user clicks Apply — without this await, `send_message`'s busy
-        # guard would race and reject the resolution as E_BUSY.
-        # The prior turn is by definition done with what it can do — it's
-        # only paused for the input we're about to give it — so awaiting
-        # is safe; we swallow any exception so a previously-failed turn
-        # doesn't block the resume.
+        # Let the interrupt-emitting turn finish flushing before queuing the
+        # resume — otherwise `send_message`'s busy guard races and rejects
+        # the resolution as E_BUSY. Exception is swallowed so a failed prior
+        # turn doesn't permanently block resolution.
         if self._running_task and not self._running_task.done():
             try:
                 await self._running_task
