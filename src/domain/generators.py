@@ -387,6 +387,20 @@ def make_forms_and_concepts(forms: list) -> dict:
     forms_out: list[dict] = []
     mapping_specs: list[dict] = []
 
+    # Composite keys that already have a cancellation form authored in the
+    # source spec. Auto-generation is skipped for these so we don't emit two
+    # form mappings for the same (subject, program, encounter) triple —
+    # avni-server's check_form_mapping_uniqueness rejects the second.
+    cancellation_keys = {
+        (
+            f.subjectType or "",
+            f.program or "",
+            f.encounterType or "",
+        )
+        for f in forms
+        if f.formType in _CANCELLATION_FORM_TYPES
+    }
+
     for form_spec in forms:
         sections = form_spec.sections or []
 
@@ -410,8 +424,14 @@ def make_forms_and_concepts(forms: list) -> dict:
                 "encounter_type": encounter_type,
             })
 
-        # Auto-generate cancellation form for encounter-type forms
-        if form_spec.formType in ("ProgramEncounter", "Encounter"):
+        # Auto-generate cancellation form for encounter-type forms, unless
+        # the source already provides one for this (subject, program,
+        # encounter) triple.
+        parent_key = (subject_type, program, encounter_type)
+        if (
+            form_spec.formType in ("ProgramEncounter", "Encounter")
+            and parent_key not in cancellation_keys
+        ):
             c_name, c_type, c_dict = _build_cancellation_form(
                 form_spec.name, form_spec.formType, concepts_registry
             )
@@ -457,6 +477,11 @@ _PROGRAM_FORM_TYPES = {
 _ENCOUNTER_FORM_TYPES = {
     "Encounter", "IndividualEncounterCancellation",
     "ProgramEncounter", "ProgramEncounterCancellation",
+}
+
+_CANCELLATION_FORM_TYPES = {
+    "ProgramEncounterCancellation",
+    "IndividualEncounterCancellation",
 }
 
 
