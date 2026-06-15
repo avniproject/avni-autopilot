@@ -1170,17 +1170,67 @@ def parse_form_df(
 
 
 def _load_xlsx(path: Path) -> list[tuple[str, pd.DataFrame]]:
-    """Load all sheets from an Excel file. Returns [(sheet_name, df), ...]."""
+    """Load all sheets from an Excel file. Returns [(sheet_name, df), ...].
+
+    For .xlsx files, also blanks cells whose source has strikethrough
+    formatting — the convention is that a struck-through field name has
+    been removed from scope and must not be treated as a live field.
+    pandas' read_excel discards formatting, so a parallel openpyxl pass
+    identifies the struck coordinates and nulls them in the DataFrame
+    before the downstream parser sees the values.
+    """
     xf = pd.ExcelFile(path)
-    sheets = []
+    sheets: list[tuple[str, pd.DataFrame]] = []
+    struck_by_sheet: dict[str, set[tuple[int, int]]] = (
+        _struck_cell_coords_per_sheet(path)
+        if path.suffix.lower() == ".xlsx"
+        else {}
+    )
     for name in xf.sheet_names:
         try:
             df = pd.read_excel(xf, sheet_name=name, header=None)
-            if not df.empty:
-                sheets.append((name, df))
+            if df.empty:
+                continue
+            struck = struck_by_sheet.get(name)
+            if struck:
+                for (r, c) in struck:
+                    if r < df.shape[0] and c < df.shape[1]:
+                        df.iat[r, c] = pd.NA
+            sheets.append((name, df))
         except Exception as e:
             logger.warning("Failed to read sheet '%s' in %s: %s", name, path, e)
     return sheets
+
+
+def _struck_cell_coords_per_sheet(path: Path) -> dict[str, set[tuple[int, int]]]:
+    """Return `{sheet_name: {(row_idx, col_idx), …}}` for strikethrough cells.
+
+    Row / column indices are 0-based to match pandas (openpyxl is 1-based,
+    so the offset is applied here). Silent on workbook-open failures —
+    strikethrough handling is best-effort and must not block parsing.
+    """
+    import openpyxl  # local import: only paid when an .xlsx is parsed
+
+    out: dict[str, set[tuple[int, int]]] = {}
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    except Exception as exc:
+        logger.warning("openpyxl could not open %s for strikethrough scan: %s", path, exc)
+        return out
+    try:
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            struck: set[tuple[int, int]] = set()
+            for row in ws.iter_rows():
+                for cell in row:
+                    font = getattr(cell, "font", None)
+                    if font is not None and getattr(font, "strike", False):
+                        struck.add((cell.row - 1, cell.column - 1))
+            if struck:
+                out[sheet_name] = struck
+    finally:
+        wb.close()
+    return out
 
 
 def _load_file(path: Path) -> list[tuple[str, pd.DataFrame]]:
