@@ -9,6 +9,7 @@ hits — see `avni-webapp/src/upload/api.js`). Failure modes: SDD §9.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,41 @@ ALLOWED_UPLOAD_SUFFIXES = {".xlsx", ".xls"}
 COPY_CHUNK_SIZE = 1024 * 1024
 
 UPLOAD_ERROR_LOG_FILENAME = "upload_error.log"
+
+
+def _record_relay_failure(
+    session: ChatSession,
+    *,
+    session_id: str,
+    status_code: int,
+    body: str,
+    details: str,
+    context: str,
+) -> None:
+    """Persist + publish a failed `upload-to-avni` relay.
+
+    Writes the full avni-server body to the session workdir, logs a
+    truncated preview, and emits the `upload.done` event with the
+    `error_log_available` flag the UI uses to enable the log download.
+    """
+    log.warning(
+        f"upload-to-avni failure sid={session_id} status={status_code}: {details}"
+    )
+    error_log = _write_upload_error_log(
+        session.workdir,
+        status_code=status_code,
+        body=body,
+        context=context,
+    )
+    session.bus.publish(
+        "upload.done",
+        {
+            "job_id": "",
+            "status": "failed",
+            "details": details,
+            "error_log_available": error_log is not None,
+        },
+    )
 
 
 def _write_upload_error_log(
@@ -199,21 +235,13 @@ async def upload_to_avni(
                     files={"file": (file_path.name, fh, "application/zip")},
                 )
     except httpx.HTTPError as exc:
-        log.warning(f"upload-to-avni network error sid={session_id}: {exc}")
-        error_log = _write_upload_error_log(
-            session.workdir,
+        _record_relay_failure(
+            session,
+            session_id=session_id,
             status_code=0,
             body=str(exc),
+            details=str(exc),
             context=f"network error to {url}",
-        )
-        session.bus.publish(
-            "upload.done",
-            {
-                "job_id": "",
-                "status": "failed",
-                "details": str(exc),
-                "error_log_available": error_log is not None,
-            },
         )
         raise HTTPException(
             status_code=502,
@@ -227,28 +255,14 @@ async def upload_to_avni(
             detail={"error": "avni-server rejected the token", "code": "E_AUTH"},
         )
     if response.status_code >= 400:
-        # `details` is the truncated preview shown inline in the SSE event;
-        # the full body is persisted via _write_upload_error_log for the
-        # `GET /upload-error-log` download.
         details = response.text[:500]
-        full_body = response.text
-        log.warning(
-            f"upload-to-avni avni-server {response.status_code} sid={session_id}: {details}"
-        )
-        error_log = _write_upload_error_log(
-            session.workdir,
+        _record_relay_failure(
+            session,
+            session_id=session_id,
             status_code=response.status_code,
-            body=full_body,
+            body=response.text,
+            details=details,
             context=f"avni-server returned HTTP {response.status_code}",
-        )
-        session.bus.publish(
-            "upload.done",
-            {
-                "job_id": "",
-                "status": "failed",
-                "details": details,
-                "error_log_available": error_log is not None,
-            },
         )
         raise HTTPException(
             status_code=502,
@@ -287,8 +301,6 @@ async def _fetch_latest_job_uuid(
     point, so a missing UUID only blocks the inline error-file download.
     Retries cover the case where /import/status hasn't yet caught up.
     """
-    import asyncio
-
     url = f"{base_url.rstrip('/')}/import/status"
     params = {"size": 10}
     for attempt in range(retries):
