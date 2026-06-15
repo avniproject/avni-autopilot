@@ -89,7 +89,7 @@ class RuleGenerator:
         return self._kb
 
     def generate(
-        self, spec: RuleSpec, context: "RetrievedContext | None" = None,
+        self, spec: RuleSpec, context: RetrievedContext | None = None,
     ) -> RuleResult:
         """Produce a `RuleResult` for one rule intent.
 

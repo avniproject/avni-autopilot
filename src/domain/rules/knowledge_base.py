@@ -160,22 +160,7 @@ class KnowledgeBase:
         top_k_examples: int = _TOP_K_EXAMPLES,
     ) -> RetrievedContext:
         """Embed the query and return top-K helpers + examples for this rule kind."""
-        helpers_scope = [
-            h for h in self.helpers
-            if not h.applies_to or spec.rule_kind.value in h.applies_to
-        ]
-        examples_scope = [e for e in self.examples if e.rule_kind == spec.rule_kind.value]
-
-        if not helpers_scope and not examples_scope:
-            log.warning(f"KB empty for rule_kind={spec.rule_kind.value!r}")
-            return RetrievedContext()
-
-        vectors = self._ensure_catalog_vectors()
-        query_vec = self._embed_query(_query_text(spec))
-
-        helpers_ranked = _top_k(query_vec, helpers_scope, vectors, top_k_helpers)
-        examples_ranked = _top_k(query_vec, examples_scope, vectors, top_k_examples)
-        return RetrievedContext(helpers=helpers_ranked, examples=examples_ranked)
+        return self.retrieve_batch([spec], top_k_helpers, top_k_examples)[0]
 
     def retrieve_batch(
         self,
@@ -199,32 +184,37 @@ class KnowledgeBase:
         if not specs:
             return []
 
-        # Materialise the catalog vectors once; subsequent loops are cheap.
         vectors = self._ensure_catalog_vectors()
+        query_vecs = self._embed_queries([_query_text(s) for s in specs])
 
-        # Embed every query in one request. Indexing keeps the result aligned
-        # with the input spec list even if some specs have empty scopes.
-        query_texts = [_query_text(spec) for spec in specs]
-        query_vecs = self._embed_queries(query_texts)
+        return [
+            self._score_one(s, qv, vectors, top_k_helpers, top_k_examples)
+            for s, qv in zip(specs, query_vecs)
+        ]
 
-        out: list[RetrievedContext] = []
-        for spec, query_vec in zip(specs, query_vecs):
-            helpers_scope = [
-                h for h in self.helpers
-                if not h.applies_to or spec.rule_kind.value in h.applies_to
-            ]
-            examples_scope = [
-                e for e in self.examples if e.rule_kind == spec.rule_kind.value
-            ]
-            if not helpers_scope and not examples_scope:
-                log.warning(f"KB empty for rule_kind={spec.rule_kind.value!r}")
-                out.append(RetrievedContext())
-                continue
-            out.append(RetrievedContext(
-                helpers=_top_k(query_vec, helpers_scope, vectors, top_k_helpers),
-                examples=_top_k(query_vec, examples_scope, vectors, top_k_examples),
-            ))
-        return out
+    def _score_one(
+        self,
+        spec: RuleSpec,
+        query_vec: np.ndarray,
+        vectors: dict[str, np.ndarray],
+        top_k_helpers: int,
+        top_k_examples: int,
+    ) -> RetrievedContext:
+        """Filter the catalog to this rule_kind, then rank by cosine similarity."""
+        helpers_scope = [
+            h for h in self.helpers
+            if not h.applies_to or spec.rule_kind.value in h.applies_to
+        ]
+        examples_scope = [
+            e for e in self.examples if e.rule_kind == spec.rule_kind.value
+        ]
+        if not helpers_scope and not examples_scope:
+            log.warning(f"KB empty for rule_kind={spec.rule_kind.value!r}")
+            return RetrievedContext()
+        return RetrievedContext(
+            helpers=_top_k(query_vec, helpers_scope, vectors, top_k_helpers),
+            examples=_top_k(query_vec, examples_scope, vectors, top_k_examples),
+        )
 
     def render_helpers(self, helpers: list[HelperEntry]) -> str:
         """Format helper entries for injection into the user prompt."""
@@ -378,13 +368,13 @@ class KnowledgeBase:
         emb = self._embedder or _default_embedder()
         return lambda texts: emb.embed(texts, input_type="document")
 
-    def _embed_query(self, text: str) -> np.ndarray:
-        emb = self._embedder or _default_embedder()
-        vecs = emb.embed([text], input_type="query")
-        return np.asarray(vecs[0], dtype=np.float32)
-
     def _embed_queries(self, texts: list[str]) -> list[np.ndarray]:
-        """Batch sibling of `_embed_query` — vectorises a list in ONE request."""
+        """Vectorise N query strings in ONE embedder request.
+
+        The single-query path (`retrieve(spec)`) calls this with a one-element
+        list — keeps the wire format consistent and gives single-call callers
+        the same retry / batching behaviour as the pipeline-level batch.
+        """
         if not texts:
             return []
         emb = self._embedder or _default_embedder()
