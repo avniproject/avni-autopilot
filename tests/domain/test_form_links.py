@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 
 from domain.form_links import (
+    Decision,
     EntityCatalog,
     FormLinkResult,
     FormLinkResults,
@@ -334,9 +335,9 @@ def test_apply_review_decisions_accept_skip_keep(ekam_catalog) -> None:
     linked, dropped, warnings = apply_review_decisions(
         forms, deferred, ekam_catalog,
         resolutions={
-            "Awareness": "accept",
-            "Maybe junk?": "skip",
-            "Untouched": "keep_default",
+            "Awareness": Decision.ACCEPT,
+            "Maybe junk?": Decision.SKIP,
+            "Untouched": Decision.KEEP,
         },
     )
     names = [f.name for f in linked]
@@ -502,7 +503,7 @@ def test_classify_forms_roundtrip_named_ekam_failures(ekam_catalog) -> None:
     # And the deferred case applies cleanly when the operator accepts it.
     final, _, _ = apply_review_decisions(
         linked, deferred, ekam_catalog,
-        resolutions={"Refferal Enrolment Hospital for": "accept"},
+        resolutions={"Refferal Enrolment Hospital for": Decision.ACCEPT},
     )
     final_by_name = {f.name: f for f in final}
     target = final_by_name["Refferal Enrolment Hospital for"]

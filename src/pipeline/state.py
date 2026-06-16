@@ -25,10 +25,8 @@ class BundleState(TypedDict):
     bundle_path: str                        # only used in edit_from_spec mode
     diff_ops: list[dict]                    # computed by diff_against_bundle
     edit_result: dict                       # set by apply_diff_edits (an EditResult dump)
-    # Form ↔ entity linking (FORM_ENTITY_LINKING_SDD)
+    # Form ↔ entity linking
     form_link_warnings: list[str]
-    # Low-confidence / junk-on-form-like classifications awaiting HITL review.
-    # Each entry is a card dict (see `domain.form_links.build_pending_cards`).
     pending_form_links: list[dict]
     # LLM enrichment
     user_instructions: str | None           # passed through from chat tool

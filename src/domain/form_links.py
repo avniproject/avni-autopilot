@@ -1,31 +1,30 @@
 """Form-to-entity linking via LLM classification.
 
-Replaces the keyword-based ladder in `parser._resolve_form_subject_types`
-with a single Claude Haiku pass that matches every form sheet to its
-declared entity in the modelling doc.
+A single Claude Haiku pass matches every form sheet in the parser's output
+to its declared entity in the modelling doc (subject types, programs,
+program encounters, encounters). Replaces the deterministic keyword
+ladder formerly in `parser._resolve_form_subject_types`.
 
 Public surface:
 
   classify_forms(forms, entity_spec, sheet_names, llm_helper)
-      Returns (link_results, warnings). Run after `parse_documents`.
+      Returns (link_results, warnings).
 
-  apply_form_link_results(forms, link_results)
-      Returns (linked_forms, dropped_sheets, warnings). Stamps formType /
-      subjectType / program / encounterType onto each FormSpec; drops
-      sheets the LLM classified as junk; warns on sheets the LLM did not
-      classify at all.
+  apply_form_link_results(forms, link_results, catalog, ...)
+      Returns a `LinkApplyOutcome` (linked_forms, dropped, warnings, deferred).
+
+  apply_review_decisions(forms, deferred, catalog, resolutions)
+      Applies HITL user choices to deferred (review-needed) results.
 
   build_entity_catalog(entity_spec)
-      Pure conversion from `EntitySpec` to the structured dict that feeds
-      both the prompt and the validator. Lifted out so tests can stub
-      the catalog independently of any xlsx.
+      Pure conversion from EntitySpec → EntityCatalog (used by prompt + validator).
 
   validate_result(result, catalog)
-      Per-row validation: confidence enum, pool membership, formType
-      consistency. Returns (ok, error_message).
+      Per-row validation: pool membership + formType reference consistency.
 
-This phase covers the pure-function layer; the Claude Haiku call lives in
-`classify_forms`'s `llm_helper.link_forms(...)` call, wired in phase 3.
+  build_pending_cards(deferred, orphans) + cards_to_deferred(cards)
+      Inverses across the LangGraph state serialization boundary.
+
 See specs/FORM_ENTITY_LINKING_SDD.md.
 """
 
@@ -33,7 +32,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Literal
+from enum import StrEnum
+from itertools import chain
+from typing import Callable, Iterable, Iterator, Literal, NamedTuple
 
 from pydantic import BaseModel, Field
 
@@ -42,19 +43,13 @@ from models import EntitySpec, FormSpec
 log = logging.getLogger(__name__)
 
 
-# A sheet name is "form-like" (and so warrants HITL review when the LLM
-# classifies it as junk) when it has more than 15 characters and is not of
-# the form `Sheet\d+` (Excel's auto-generated default). Tunable via the
-# SDD §5.6 false-positive guard.
+# Sheet-name heuristic — the >15-char and not-`Sheet\d+` choices match
+# Excel's defaults: anything shorter or generated is almost certainly
+# not a real form, so junk-classifying it should not gate a HITL pause.
 _GENERIC_SHEET_NAME_RE = re.compile(r"^Sheet\d+$", re.IGNORECASE)
 
 
 def is_form_like_sheet_name(name: str) -> bool:
-    """Return True when the sheet name looks like a real form (not a default).
-
-    Used to surface a HITL card when the LLM marks a long, named sheet as
-    junk — those false positives are the easiest for an operator to spot.
-    """
     s = (name or "").strip()
     if len(s) <= 15:
         return False
@@ -76,8 +71,6 @@ FormTypeLiteral = Literal[
 
 
 class FormLinkResult(BaseModel):
-    """One row of the LLM's classification output."""
-
     sheet_name: str
     form_type: FormTypeLiteral | None = None
     subject_type: str | None = None
@@ -88,21 +81,34 @@ class FormLinkResult(BaseModel):
 
 
 class FormLinkResults(BaseModel):
-    """Container for the LLM's batched classification output.
+    """Container for the batched classification output.
 
-    `with_structured_output` binds to a single model; wrapping the list in a
-    container model lets the Haiku call return all sheet classifications in
-    one shot.
+    `with_structured_output` binds to a single model — wrapping the list in
+    this container lets one Haiku call return all sheet classifications.
     """
-
     results: list[FormLinkResult]
 
 
-# ── Form-type consistency tables ──────────────────────────────────────────────
+class Decision(StrEnum):
+    ACCEPT = "accept"
+    SKIP = "skip"
+    KEEP = "keep_default"
 
 
-# For each formType, which (subject_type, program, encounter_type) references
-# must be non-null. `False` means the field must be null. `True` means non-null.
+class LinkApplyOutcome(NamedTuple):
+    linked_forms: list[FormSpec]
+    dropped: list[str]
+    warnings: list[str]
+    deferred: list[FormLinkResult]
+
+
+# ── Form-type consistency table ───────────────────────────────────────────────
+
+
+# Required-reference signature per formType: which of
+# (subject_type, program, encounter_type) must be non-null. The table-driven
+# check beats inline `if`s because the seven shapes share three boolean
+# axes — a single tuple comparison covers all of them.
 _REQUIRED_REFS: dict[FormTypeLiteral, tuple[bool, bool, bool]] = {
     "IndividualProfile":              (True,  False, False),
     "ProgramEnrolment":                (True,  True,  False),
@@ -120,10 +126,9 @@ _REQUIRED_REFS: dict[FormTypeLiteral, tuple[bool, bool, bool]] = {
 class EntityCatalog(BaseModel):
     """Structured pools fed to the prompt and the validator.
 
-    Each pool is a list of `(canonical_name, hint_dict)` tuples. The
-    canonical name is what the LLM must return verbatim; the hint dict
-    carries the raw form-source columns + cross-references so the model
-    has the operator's wording as context without changing the pool keys.
+    Each pool entry is `(canonical_name, hint_dict)`. The hint dict carries
+    operator wording (raw form-source columns, cross-refs) without polluting
+    the pool keys the LLM must return verbatim.
     """
 
     subject_types: list[tuple[str, dict[str, str | None]]] = Field(default_factory=list)
@@ -131,9 +136,11 @@ class EntityCatalog(BaseModel):
     program_encounters: list[tuple[str, dict[str, str | None]]] = Field(default_factory=list)
     encounters: list[tuple[str, dict[str, str | None]]] = Field(default_factory=list)
 
+    def all_encounters(self) -> Iterator[tuple[str, dict[str, str | None]]]:
+        return chain(self.program_encounters, self.encounters)
+
 
 def build_entity_catalog(entity_spec: EntitySpec) -> EntityCatalog:
-    """Convert an `EntitySpec` into the catalog the LLM and validator share."""
     cat = EntityCatalog()
     for st in entity_spec.subject_types:
         cat.subject_types.append((
@@ -169,32 +176,28 @@ def build_entity_catalog(entity_spec: EntitySpec) -> EntityCatalog:
     return cat
 
 
-# ── Pool membership helpers ───────────────────────────────────────────────────
+# ── Pool lookup ───────────────────────────────────────────────────────────────
 
 
 def _norm(s: str | None) -> str:
-    """Case-insensitive, whitespace-stripped key for pool membership."""
     return (s or "").strip().lower()
 
 
-def _in_pool(name: str | None, pool: list[tuple[str, dict]]) -> bool:
-    if name is None:
-        return True
-    key = _norm(name)
-    return any(_norm(canonical) == key for canonical, _ in pool)
+def _lookup(
+    name: str | None, pool: Iterable[tuple[str, dict]],
+) -> str | None:
+    """Canonical spelling for `name` in `pool`, or None on miss.
 
-
-def _canonical(name: str | None, pool: list[tuple[str, dict]]) -> str | None:
-    """Resolve a (possibly differently-cased) LLM-returned name to the pool's
-    canonical spelling. Returns the input unchanged on miss — caller is
-    responsible for rejecting via `_in_pool` first."""
+    `None` input returns `None` (absent-is-allowed). `None` from a non-`None`
+    input means off-pool — validator and stamp both treat that as a failure.
+    """
     if name is None:
         return None
     key = _norm(name)
     for canonical, _ in pool:
         if _norm(canonical) == key:
             return canonical
-    return name
+    return None
 
 
 # ── Validator ─────────────────────────────────────────────────────────────────
@@ -204,7 +207,6 @@ def validate_result(
     result: FormLinkResult, catalog: EntityCatalog,
 ) -> tuple[bool, str]:
     """Return (ok, error_message). Error is empty when ok."""
-    # Junk classification — every entity field must also be null.
     if result.form_type is None:
         if result.subject_type or result.program or result.encounter_type:
             return False, (
@@ -213,35 +215,29 @@ def validate_result(
             )
         return True, ""
 
-    # Pool membership.
-    if not _in_pool(result.subject_type, catalog.subject_types):
-        return False, f"subject_type {result.subject_type!r} not in subject pool"
-    encounter_pool = catalog.program_encounters + catalog.encounters
-    if not _in_pool(result.encounter_type, encounter_pool):
-        return False, f"encounter_type {result.encounter_type!r} not in encounter pool"
-    if not _in_pool(result.program, catalog.programs):
-        return False, f"program {result.program!r} not in program pool"
+    for field, value, pool in (
+        ("subject_type", result.subject_type, catalog.subject_types),
+        ("encounter_type", result.encounter_type, catalog.all_encounters()),
+        ("program", result.program, catalog.programs),
+    ):
+        if value is not None and _lookup(value, pool) is None:
+            label = field.replace("_", " ") + " pool"
+            return False, f"{field} {value!r} not in {label.replace(' pool', '')} pool"
 
-    # formType consistency: required fields must match (True ↔ non-null).
-    needs_subject, needs_program, needs_encounter = _REQUIRED_REFS[result.form_type]
-    actual_subject = result.subject_type is not None
-    actual_program = result.program is not None
-    actual_encounter = result.encounter_type is not None
-    if needs_subject != actual_subject:
-        return False, (
-            f"{result.form_type}: subject_type "
-            f"{'required' if needs_subject else 'must be null'}"
-        )
-    if needs_program != actual_program:
-        return False, (
-            f"{result.form_type}: program "
-            f"{'required' if needs_program else 'must be null'}"
-        )
-    if needs_encounter != actual_encounter:
-        return False, (
-            f"{result.form_type}: encounter_type "
-            f"{'required' if needs_encounter else 'must be null'}"
-        )
+    needs = _REQUIRED_REFS[result.form_type]
+    actuals = (
+        result.subject_type is not None,
+        result.program is not None,
+        result.encounter_type is not None,
+    )
+    for field, need, actual in zip(
+        ("subject_type", "program", "encounter_type"), needs, actuals,
+    ):
+        if need != actual:
+            return False, (
+                f"{result.form_type}: {field} "
+                f"{'required' if need else 'must be null'}"
+            )
     return True, ""
 
 
@@ -251,15 +247,11 @@ def validate_result(
 def _stamp_form(
     form: FormSpec, result: FormLinkResult, catalog: EntityCatalog,
 ) -> FormSpec:
-    """Return a FormSpec copy with linkage fields stamped from a result."""
     return form.model_copy(update={
         "formType": result.form_type,
-        "subjectType": _canonical(result.subject_type, catalog.subject_types) or "",
-        "program": _canonical(result.program, catalog.programs) or "",
-        "encounterType": _canonical(
-            result.encounter_type,
-            catalog.program_encounters + catalog.encounters,
-        ) or "",
+        "subjectType": _lookup(result.subject_type, catalog.subject_types) or "",
+        "program": _lookup(result.program, catalog.programs) or "",
+        "encounterType": _lookup(result.encounter_type, catalog.all_encounters()) or "",
     })
 
 
@@ -269,39 +261,29 @@ def apply_form_link_results(
     catalog: EntityCatalog,
     *,
     auto_apply_only_high_confidence: bool = False,
-) -> tuple[list[FormSpec], list[str], list[str], list[FormLinkResult]]:
-    """Stamp validated link results onto FormSpec list.
+) -> LinkApplyOutcome:
+    """Stamp validated link results onto the FormSpec list.
 
-    Returns:
-        linked_forms: forms that survived (junk-classified forms dropped when
-            auto-applied; junk forms held for review stay in the list).
-        dropped_sheet_names: sheet names auto-applied as junk.
-        warnings: rejected validations + sheets the LLM didn't classify.
-        deferred_results: results held back for HITL review when
-            `auto_apply_only_high_confidence=True`. Empty otherwise.
-
-    The function is idempotent — running it twice on the same inputs yields
-    the same outputs.
+    Idempotent. When `auto_apply_only_high_confidence`, low / medium results
+    (and form-like-name junk) are returned in `deferred` for HITL review and
+    the corresponding form stays at parser defaults.
     """
-    by_sheet: dict[str, FormLinkResult] = {
-        _norm(r.sheet_name): r for r in link_results
-    }
+    by_sheet = {_norm(r.sheet_name): r for r in link_results}
 
-    linked_forms: list[FormSpec] = []
+    linked: list[FormSpec] = []
     dropped: list[str] = []
     warnings: list[str] = []
     deferred: list[FormLinkResult] = []
 
     for form in forms:
-        key = _norm(form.name)
-        result = by_sheet.get(key)
+        result = by_sheet.get(_norm(form.name))
 
         if result is None:
             warnings.append(
                 f"form sheet {form.name!r} not classified by LLM; "
                 f"keeping parser defaults"
             )
-            linked_forms.append(form)
+            linked.append(form)
             continue
 
         ok, err = validate_result(result, catalog)
@@ -310,27 +292,25 @@ def apply_form_link_results(
                 f"form sheet {form.name!r}: classification rejected ({err}); "
                 f"keeping parser defaults"
             )
-            linked_forms.append(form)
+            linked.append(form)
             continue
 
-        # HITL gate: review-needed results are deferred — the form keeps its
-        # parser default until the user resolves the card.
         needs_review = auto_apply_only_high_confidence and (
             result.confidence != "high"
             or (result.form_type is None and is_form_like_sheet_name(form.name))
         )
         if needs_review:
             deferred.append(result)
-            linked_forms.append(form)
+            linked.append(form)
             continue
 
         if result.form_type is None:
             dropped.append(form.name)
             continue
 
-        linked_forms.append(_stamp_form(form, result, catalog))
+        linked.append(_stamp_form(form, result, catalog))
 
-    return linked_forms, dropped, warnings, deferred
+    return LinkApplyOutcome(linked, dropped, warnings, deferred)
 
 
 def apply_review_decisions(
@@ -339,25 +319,17 @@ def apply_review_decisions(
     catalog: EntityCatalog,
     resolutions: dict[str, str],
 ) -> tuple[list[FormSpec], list[str], list[str]]:
-    """Apply HITL resolutions to deferred form-link results.
+    """Apply HITL resolutions (`Decision` values) to deferred results.
 
-    Each resolution keyed by sheet name (case-insensitive) is one of:
-        "accept"        — apply the LLM's classification as proposed
-        "skip"          — drop the form sheet from the bundle (treat as junk)
-        "keep_default"  — leave the form with parser defaults
-
-    Anything else is treated as "keep_default" with a warning.
+    Unknown decisions degrade to `Decision.KEEP` with a warning. Sheets
+    without a deferred result pass through unchanged.
 
     Returns (linked_forms, dropped_sheet_names, warnings).
     """
-    by_sheet: dict[str, FormLinkResult] = {
-        _norm(r.sheet_name): r for r in deferred
-    }
-    normalized_resolutions: dict[str, str] = {
-        _norm(k): (v or "").strip().lower() for k, v in resolutions.items()
-    }
+    by_sheet = {_norm(r.sheet_name): r for r in deferred}
+    normalized = {_norm(k): (v or "").strip().lower() for k, v in resolutions.items()}
 
-    linked_forms: list[FormSpec] = []
+    linked: list[FormSpec] = []
     dropped: list[str] = []
     warnings: list[str] = []
 
@@ -365,39 +337,45 @@ def apply_review_decisions(
         key = _norm(form.name)
         result = by_sheet.get(key)
         if result is None:
-            linked_forms.append(form)
+            linked.append(form)
             continue
 
-        decision = normalized_resolutions.get(key, "keep_default")
-
-        if decision == "accept":
-            if result.form_type is None:
-                dropped.append(form.name)
-                continue
-            linked_forms.append(_stamp_form(form, result, catalog))
-            continue
-
-        if decision == "skip":
-            dropped.append(form.name)
-            continue
-
-        if decision != "keep_default":
+        raw = normalized.get(key, Decision.KEEP.value)
+        try:
+            decision = Decision(raw)
+        except ValueError:
             warnings.append(
                 f"form sheet {form.name!r}: unknown resolution "
-                f"{decision!r}; keeping parser defaults"
+                f"{raw!r}; keeping parser defaults"
             )
-        linked_forms.append(form)
+            decision = Decision.KEEP
 
-    return linked_forms, dropped, warnings
+        if decision is Decision.ACCEPT:
+            if result.form_type is None:
+                dropped.append(form.name)
+            else:
+                linked.append(_stamp_form(form, result, catalog))
+        elif decision is Decision.SKIP:
+            dropped.append(form.name)
+        else:
+            linked.append(form)
+
+    return linked, dropped, warnings
+
+
+# ── Pending-card serialization (LangGraph state boundary) ─────────────────────
+
+
+_ORPHAN_KIND = "form_link_orphan"
 
 
 def build_pending_cards(
     deferred: list[FormLinkResult], orphans: list[str],
 ) -> list[dict]:
-    """Turn deferred results + orphan strings into HITL card dicts.
+    """Serialize deferred results + orphan strings into HITL card dicts.
 
-    The shape is intentionally simple so the chat / web client can render
-    them without a typed schema dependency.
+    The dict shape is the wire contract with chat / web clients — change it
+    only in lockstep with those consumers.
     """
     cards: list[dict] = []
     for r in deferred:
@@ -422,59 +400,90 @@ def build_pending_cards(
     for line in orphans:
         cards.append({
             "card_id": f"form-link/orphan/{line}",
-            "kind": "form_link_orphan",
+            "kind": _ORPHAN_KIND,
             "message": line,
         })
     return cards
 
 
+def card_to_result(card: dict) -> FormLinkResult | None:
+    """Reconstruct a `FormLinkResult` from a review card. Orphans → None."""
+    if card.get("kind") == _ORPHAN_KIND:
+        return None
+    proposed = card.get("proposed") or {}
+    return FormLinkResult(
+        sheet_name=card.get("sheet_name", ""),
+        form_type=proposed.get("form_type"),
+        subject_type=proposed.get("subject_type"),
+        program=proposed.get("program"),
+        encounter_type=proposed.get("encounter_type"),
+        confidence=card.get("confidence", "low"),
+        reasoning=card.get("reasoning", ""),
+    )
+
+
+def cards_to_deferred(cards: Iterable[dict]) -> list[FormLinkResult]:
+    return [r for r in (card_to_result(c) for c in cards) if r is not None]
+
+
 # ── Orphan detection ──────────────────────────────────────────────────────────
+
+
+# How each form_type claims an entity from the catalog. The key function
+# returns the catalog-side identity that line consumes (a name, or a
+# (name, program) tuple for program encounters); `None` means "this result
+# doesn't claim anything for the given kind."
+_CLAIM_BY_FORM_TYPE: dict[str, tuple[str, Callable[[FormLinkResult], object | None]]] = {
+    "IndividualProfile":
+        ("subject", lambda r: _norm(r.subject_type) if r.subject_type else None),
+    "ProgramEnrolment":
+        ("program_enrolment", lambda r: _norm(r.program) if r.program else None),
+    "ProgramExit":
+        ("program_exit", lambda r: _norm(r.program) if r.program else None),
+    "ProgramEncounter":
+        ("program_encounter",
+         lambda r: (_norm(r.encounter_type), _norm(r.program))
+                   if r.encounter_type and r.program else None),
+    "Encounter":
+        ("encounter", lambda r: _norm(r.encounter_type) if r.encounter_type else None),
+}
 
 
 def orphan_entities(
     catalog: EntityCatalog, link_results: list[FormLinkResult],
 ) -> list[str]:
-    """Entities declared in the modelling doc that no link result claims.
-
-    The output is a list of human-readable lines, one per orphan; intended
-    for the HITL pause surface in phase 6.
-    """
-    claimed_subjects: set[str] = set()
-    claimed_programs_for_enrolment: set[str] = set()
-    claimed_programs_for_exit: set[str] = set()
-    claimed_program_encounters: set[tuple[str, str]] = set()
-    claimed_encounters: set[str] = set()
-
+    """Catalog entities that no link result claims, as human-readable lines."""
+    claimed: dict[str, set] = {
+        "subject": set(),
+        "program_enrolment": set(),
+        "program_exit": set(),
+        "program_encounter": set(),
+        "encounter": set(),
+    }
     for r in link_results:
-        if r.form_type == "IndividualProfile" and r.subject_type:
-            claimed_subjects.add(_norm(r.subject_type))
-        elif r.form_type == "ProgramEnrolment" and r.program:
-            claimed_programs_for_enrolment.add(_norm(r.program))
-        elif r.form_type == "ProgramExit" and r.program:
-            claimed_programs_for_exit.add(_norm(r.program))
-        elif r.form_type == "ProgramEncounter" and r.encounter_type and r.program:
-            claimed_program_encounters.add((_norm(r.encounter_type), _norm(r.program)))
-        elif r.form_type == "Encounter" and r.encounter_type:
-            claimed_encounters.add(_norm(r.encounter_type))
+        spec = _CLAIM_BY_FORM_TYPE.get(r.form_type or "")
+        if spec is None:
+            continue
+        bucket, key_fn = spec
+        key = key_fn(r)
+        if key is not None:
+            claimed[bucket].add(key)
 
     orphans: list[str] = []
     for name, _ in catalog.subject_types:
-        if _norm(name) not in claimed_subjects:
+        if _norm(name) not in claimed["subject"]:
             orphans.append(f"Subject Type {name!r} has no registration form")
     for name, hints in catalog.programs:
-        if _norm(name) not in claimed_programs_for_enrolment:
+        if _norm(name) not in claimed["program_enrolment"]:
             orphans.append(f"Program {name!r} has no enrolment form")
-        if hints.get("exit_form_source") and _norm(name) not in claimed_programs_for_exit:
+        if hints.get("exit_form_source") and _norm(name) not in claimed["program_exit"]:
             orphans.append(f"Program {name!r} has no exit form")
     for name, hints in catalog.program_encounters:
         prog = hints.get("program")
-        if (
-            prog
-            and (_norm(name), _norm(prog)) not in claimed_program_encounters
-        ):
+        if prog and (_norm(name), _norm(prog)) not in claimed["program_encounter"]:
             orphans.append(f"Program Encounter {name!r} (under {prog!r}) has no form")
     for name, _ in catalog.encounters:
-        if _norm(name) not in claimed_encounters:
+        if _norm(name) not in claimed["encounter"]:
             orphans.append(f"Encounter {name!r} has no form")
     return orphans
 
@@ -517,56 +526,66 @@ Rules:
 """
 
 
+# Per-section formatters: each tuple is (hint_key, label-format-string).
+# The format string takes a single positional arg — the hint value. Sections
+# render any subset of their formatters that have non-empty hint values.
+_SECTION_FORMATTERS: dict[str, list[tuple[str, str]]] = {
+    "Programs": [
+        ("target_subject_type", "target: {}"),
+        ("enrolment_form_source", 'enrolment: "{}"'),
+        ("exit_form_source", 'exit: "{}"'),
+    ],
+    "Program Encounters": [
+        ("program", "under {}"),
+        ("form_source", 'form: "{}"'),
+        ("cancellation_form_source", 'cancellation: "{}"'),
+    ],
+    "Encounters (standalone)": [
+        ("subject_type", "under {}"),
+        ("form_source", 'form: "{}"'),
+        ("cancellation_form_source", 'cancellation: "{}"'),
+    ],
+}
+
+
+def _render_subject_types(
+    items: list[tuple[str, dict[str, str | None]]],
+) -> list[str]:
+    """Subject Types has a one-off `[type]` suffix the generic renderer lacks."""
+    out: list[str] = ["  Subject Types:"]
+    for name, hints in items:
+        type_hint = f" [{hints.get('type')}]" if hints.get("type") else ""
+        src = hints.get("registration_form_source")
+        suffix = f' (registration form source: "{src}")' if src else ""
+        out.append(f"    - {name}{type_hint}{suffix}")
+    out.append("")
+    return out
+
+
+def _render_section(
+    label: str,
+    items: list[tuple[str, dict[str, str | None]]],
+    formatters: list[tuple[str, str]],
+) -> list[str]:
+    out: list[str] = [f"  {label}:"]
+    for name, hints in items:
+        bits = [fmt.format(hints[key]) for key, fmt in formatters if hints.get(key)]
+        suffix = f"   ({'   '.join(bits)})" if bits else ""
+        out.append(f"    - {name}{suffix}")
+    out.append("")
+    return out
+
+
 def build_prompt(catalog: EntityCatalog, sheet_names: list[str]) -> tuple[str, str]:
     """Render (system_prompt, user_prompt) for the classification call."""
     lines: list[str] = ["ENTITIES (from modelling doc):", ""]
-
-    lines.append("  Subject Types:")
-    for name, hints in catalog.subject_types:
-        src = hints.get("registration_form_source")
-        suffix = f' (registration form source: "{src}")' if src else ""
-        type_hint = f" [{hints.get('type')}]" if hints.get("type") else ""
-        lines.append(f"    - {name}{type_hint}{suffix}")
-    lines.append("")
-
-    lines.append("  Programs:")
-    for name, hints in catalog.programs:
-        bits = []
-        if hints.get("target_subject_type"):
-            bits.append(f"target: {hints['target_subject_type']}")
-        if hints.get("enrolment_form_source"):
-            bits.append(f'enrolment: "{hints["enrolment_form_source"]}"')
-        if hints.get("exit_form_source"):
-            bits.append(f'exit: "{hints["exit_form_source"]}"')
-        suffix = f"   ({'   '.join(bits)})" if bits else ""
-        lines.append(f"    - {name}{suffix}")
-    lines.append("")
-
-    lines.append("  Program Encounters:")
-    for name, hints in catalog.program_encounters:
-        bits = []
-        if hints.get("program"):
-            bits.append(f"under {hints['program']}")
-        if hints.get("form_source"):
-            bits.append(f'form: "{hints["form_source"]}"')
-        if hints.get("cancellation_form_source"):
-            bits.append(f'cancellation: "{hints["cancellation_form_source"]}"')
-        suffix = f"   ({'   '.join(bits)})" if bits else ""
-        lines.append(f"    - {name}{suffix}")
-    lines.append("")
-
-    lines.append("  Encounters (standalone):")
-    for name, hints in catalog.encounters:
-        bits = []
-        if hints.get("subject_type"):
-            bits.append(f"under {hints['subject_type']}")
-        if hints.get("form_source"):
-            bits.append(f'form: "{hints["form_source"]}"')
-        if hints.get("cancellation_form_source"):
-            bits.append(f'cancellation: "{hints["cancellation_form_source"]}"')
-        suffix = f"   ({'   '.join(bits)})" if bits else ""
-        lines.append(f"    - {name}{suffix}")
-    lines.append("")
+    lines.extend(_render_subject_types(catalog.subject_types))
+    lines.extend(_render_section("Programs", catalog.programs,
+                                 _SECTION_FORMATTERS["Programs"]))
+    lines.extend(_render_section("Program Encounters", catalog.program_encounters,
+                                 _SECTION_FORMATTERS["Program Encounters"]))
+    lines.extend(_render_section("Encounters (standalone)", catalog.encounters,
+                                 _SECTION_FORMATTERS["Encounters (standalone)"]))
 
     lines.append("SHEET NAMES (from forms doc):")
     for s in sheet_names:
@@ -575,11 +594,10 @@ def build_prompt(catalog: EntityCatalog, sheet_names: list[str]) -> tuple[str, s
     lines.append(
         "Return a JSON array, one object per sheet, in the input order above."
     )
-
     return _SYSTEM_PROMPT, "\n".join(lines)
 
 
-# ── Orchestrator (LLM call is plugged in phase 3) ─────────────────────────────
+# ── Orchestrator ──────────────────────────────────────────────────────────────
 
 
 def classify_forms(
@@ -588,10 +606,10 @@ def classify_forms(
     sheet_names: list[str],
     llm_helper,
 ) -> tuple[list[FormLinkResult], list[str]]:
-    """Return (link_results, warnings).
+    """Run one Haiku call to classify every form sheet. Returns (results, warnings).
 
-    Falls through to an empty result list (no-op) when the LLM helper is
-    unavailable or raises — caller treats that as "keep parser defaults".
+    No-op on empty inputs or when the helper is unavailable; the caller
+    treats that as "keep parser defaults".
     """
     if not forms or not sheet_names:
         return [], []
