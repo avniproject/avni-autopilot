@@ -460,6 +460,7 @@ def parse_subject_types(df: pd.DataFrame) -> list[SubjectTypeSpec]:
 
     name_col = _find_col(df, "Subject Type Name", "Subject Type", "Name", "Entity Name")
     type_col = _find_col(df, "Type", "Subject Type", "Entity Type")
+    reg_form_col = _find_col(df, "Registration Form", "Form", "Registration")
 
     if not name_col:
         return []
@@ -476,6 +477,7 @@ def parse_subject_types(df: pd.DataFrame) -> list[SubjectTypeSpec]:
 
         raw_type = _clean(row.get(type_col, "Person")).lower() if type_col else "person"
         avni_type = _SUBJECT_TYPE_MAP.get(raw_type, "Person")
+        reg_form = _clean(row.get(reg_form_col, "")) if reg_form_col else ""
 
         subject_types.append(
             SubjectTypeSpec(
@@ -484,6 +486,7 @@ def parse_subject_types(df: pd.DataFrame) -> list[SubjectTypeSpec]:
                 allowProfilePicture=False,
                 uniqueName=False,
                 lastNameOptional=True,
+                registration_form_source=reg_form or None,
             )
         )
     return subject_types
@@ -495,6 +498,8 @@ def parse_programs(df: pd.DataFrame, subject_type_names: set[str]) -> list[Progr
 
     name_col = _find_col(df, "Program Name", "Program", "Name")
     target_col = _find_col(df, "Target Subject Type", "Target Subject", "Subject Type")
+    enrol_col = _find_col(df, "Enrolment Form", "Enrollment Form", "Enrolment", "Enrollment")
+    exit_col = _find_col(df, "Exit Form", "Exit")
 
     if not name_col:
         return []
@@ -517,8 +522,17 @@ def parse_programs(df: pd.DataFrame, subject_type_names: set[str]) -> list[Progr
         elif not target and subject_type_names:
             target = next(iter(subject_type_names))
 
+        enrol_form = _clean(row.get(enrol_col, "")) if enrol_col else ""
+        exit_form = _clean(row.get(exit_col, "")) if exit_col else ""
+
         programs.append(
-            ProgramSpec(name=name, target_subject_type=target, colour="#4A148C")
+            ProgramSpec(
+                name=name,
+                target_subject_type=target,
+                colour="#4A148C",
+                enrolment_form_source=enrol_form or None,
+                exit_form_source=exit_form or None,
+            )
         )
     return programs
 
@@ -543,6 +557,8 @@ def parse_encounters(
         "Scheduled",
         "Type",
     )
+    form_col = _find_col(df, "Forms Linked", "Form", "Forms")
+    cancel_col = _find_col(df, "Cancellation Form", "Cancellation")
 
     if is_program_encounter:
         prog_col = _find_col(df, "Program name", "Program Name", "Program")
@@ -577,6 +593,9 @@ def parse_encounters(
             enc_type_raw = _clean(row.get(sched_col, "")).lower()
         is_scheduled = "unscheduled" not in enc_type_raw
 
+        form_src = _clean(row.get(form_col, "")) if form_col else ""
+        cancel_src = _clean(row.get(cancel_col, "")) if cancel_col else ""
+
         encounter_types.append(
             EncounterTypeSpec(
                 name=name,
@@ -584,6 +603,8 @@ def parse_encounters(
                 subject_type=subject_type,
                 is_program_encounter=is_program_encounter or bool(program_name),
                 is_scheduled=is_scheduled,
+                form_source=form_src or None,
+                cancellation_form_source=cancel_src or None,
             )
         )
     return encounter_types
@@ -1237,125 +1258,6 @@ def _load_file(path: Path) -> list[tuple[str, pd.DataFrame]]:
     return []
 
 
-# ── Post-processing ──────────────────────────────────────────────────────────
-
-
-def _resolve_form_subject_types(
-    forms: list[FormSpec],
-    encounter_types: list[EncounterTypeSpec],
-    subject_types: list[SubjectTypeSpec],
-    programs: list[ProgramSpec],
-) -> None:
-    """Fix formType, encounterType, subjectType, and program on forms. Mutates in place."""
-    enc_to_subject: dict[str, str] = {}
-    enc_to_program: dict[str, str] = {}
-    for et in encounter_types:
-        if et.subject_type:
-            enc_to_subject[et.name.lower()] = et.subject_type
-        if et.program_name:
-            enc_to_program[et.name.lower()] = et.program_name
-
-    prog_to_subject = {
-        p.name.lower(): p.target_subject_type for p in programs if p.target_subject_type
-    }
-
-    st_names = {st.name for st in subject_types}
-    prog_names = {p.name for p in programs}
-    enc_names = {et.name for et in encounter_types}
-
-    for form in forms:
-        name_lower = form.name.lower()
-
-        # Step 0: Fix formType based on form name patterns
-        if form.formType == "Encounter":
-            if any(kw in name_lower for kw in ("registration", "profile", "details")):
-                base = name_lower
-                for kw in ("registration", "profile", "details"):
-                    base = base.replace(kw, "").strip()
-                matched_st = _fuzzy_match(base, st_names)
-                if matched_st:
-                    form.formType = "IndividualProfile"
-                    form.subjectType = matched_st
-                elif len(subject_types) == 1:
-                    form.formType = "IndividualProfile"
-                    form.subjectType = subject_types[0].name
-            elif any(kw in name_lower for kw in ("enrolment", "enrollment")):
-                matched_prog = _fuzzy_match(form.name, prog_names)
-                if matched_prog:
-                    prog = next(p for p in programs if p.name == matched_prog)
-                    form.formType = "ProgramEnrolment"
-                    form.program = prog.name
-                    form.subjectType = prog.target_subject_type
-            elif "exit" in name_lower:
-                form_base = name_lower.replace("exit", "").strip().rstrip("-").strip()
-                prog_bases = {
-                    p.name: p.name.lower()
-                    .replace("enrollment", "")
-                    .replace("enrolment", "")
-                    .strip()
-                    for p in programs
-                }
-                matched_prog = _fuzzy_match(form_base, set(prog_bases.values()))
-                if matched_prog:
-                    prog = next(p for p, b in prog_bases.items() if b == matched_prog)
-                    real_prog = next(p for p in programs if p.name == prog)
-                    form.formType = "ProgramExit"
-                    form.program = real_prog.name
-                    form.subjectType = real_prog.target_subject_type
-
-        # Step 1: Match form to encounter type by name (fuzzy)
-        if not form.encounterType and form.formType in (
-            "Encounter",
-            "ProgramEncounter",
-            "IndividualEncounterCancellation",
-            "ProgramEncounterCancellation",
-        ):
-            match_name = (
-                form.name.replace(" Cancellation", "")
-                .replace(" cancellation", "")
-                .strip()
-            )
-            matched_enc = _fuzzy_match(match_name, enc_names)
-            if matched_enc:
-                et = next(e for e in encounter_types if e.name == matched_enc)
-                form.encounterType = et.name
-                if et.is_program_encounter and et.program_name:
-                    form.formType = (
-                        "ProgramEncounter"
-                        if "cancellation" not in name_lower
-                        else "ProgramEncounterCancellation"
-                    )
-                    form.program = et.program_name
-
-        # Step 2: Resolve subjectType from encounterType
-        if not form.subjectType and form.encounterType:
-            subject = enc_to_subject.get(form.encounterType.lower())
-            if subject:
-                form.subjectType = subject
-
-        # Step 3: Resolve subjectType from program (fuzzy)
-        if not form.subjectType and form.program:
-            matched_prog = _fuzzy_match(form.program, set(prog_to_subject.keys()))
-            if matched_prog:
-                form.subjectType = prog_to_subject[matched_prog]
-
-        # Step 4: Resolve subjectType for registration forms (fuzzy)
-        if not form.subjectType and form.formType == "IndividualProfile":
-            matched_st = _fuzzy_match(form.name, st_names)
-            if matched_st:
-                form.subjectType = matched_st
-
-        # Step 5: Resolve program from encounterType
-        if not form.program and form.encounterType:
-            prog = enc_to_program.get(form.encounterType.lower())
-            if prog:
-                form.program = prog
-
-        # Step 6: Fallback — single subject type
-        if not form.subjectType and len(subject_types) == 1:
-            form.subjectType = subject_types[0].name
-
-
 # ── Main Entry Point ─────────────────────────────────────────────────────────
 
 
@@ -1607,8 +1509,11 @@ def parse_scoping_docs(
         if not et.subject_type and len(all_subjects) == 1:
             et.subject_type = all_subjects[0].name
 
-    # Phase 5b: Resolve missing subjectType on forms
-    _resolve_form_subject_types(all_forms, all_encounters, all_subjects, all_programs)
+    # Phase 5b: form ↔ entity linking is delegated to the
+    # `link_forms_to_entities` pipeline node (FORM_ENTITY_LINKING_SDD §5.7).
+    # Forms leave this parser with parser defaults (formType="Encounter",
+    # subject/program/encounter unset); the downstream LLM pass stamps the
+    # final linkage.
 
     # Phase 5c: Attach rule intents harvested from the Rules tab
     if intents_by_form_name:

@@ -78,6 +78,10 @@ class SubjectTypeSpec(BaseModel):
     allowProfilePicture: bool = False
     uniqueName: bool = False
     lastNameOptional: bool = True
+    # Raw value of the "Registration Form" column from the Subject Types tab.
+    # Consumed by `link_forms_to_entities` as a hint when matching the subject
+    # to a sheet in the forms xlsx.
+    registration_form_source: str | None = None
 
 
 class ProgramSpec(BaseModel):
@@ -85,6 +89,9 @@ class ProgramSpec(BaseModel):
     target_subject_type: str = ""
     colour: str = "#4A148C"
     allow_multiple_enrolments: bool = False
+    # Raw values from the Program tab's "Enrolment Form" / "Exit Form" columns.
+    enrolment_form_source: str | None = None
+    exit_form_source: str | None = None
 
 
 class EncounterTypeSpec(BaseModel):
@@ -93,6 +100,11 @@ class EncounterTypeSpec(BaseModel):
     subject_type: str = ""
     is_program_encounter: bool = False
     is_scheduled: bool = True
+    # Raw values from the source row's form-reference columns. Same field on
+    # both Program Encounter rows and standalone Encounter rows (the two tabs
+    # use the same column semantics).
+    form_source: str | None = None
+    cancellation_form_source: str | None = None
 
     @field_validator("program_name", mode="before")
     @classmethod

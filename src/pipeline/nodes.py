@@ -22,6 +22,15 @@ from domain.bundle_editor import apply_field_edits, load_bundle_snapshot
 from domain.changes import apply_resolutions
 from domain.diff import diff
 from domain.enricher import enrich_forms
+from domain.form_links import (
+    FormLinkResult,
+    apply_form_link_results,
+    apply_review_decisions,
+    build_entity_catalog,
+    build_pending_cards,
+    classify_forms,
+    orphan_entities,
+)
 from domain.generators import (
     make_address_level_types,
     make_encounter_types,
@@ -110,6 +119,153 @@ def parse_documents(state: BundleState) -> dict:
         len(entity_spec.forms),
     )
     return {"entity_spec": entity_spec, "parse_warnings": warnings, "errors": errors}
+
+
+# ── Node 2.25: form ↔ entity linking (FORM_ENTITY_LINKING_SDD) ────────────────
+
+
+def link_forms_to_entities(state: BundleState) -> dict:
+    """Classify every form sheet against the modelling-doc entity catalog.
+
+    Runs after parse but before enrichment so the latter sees correct
+    `formType` / `subjectType` for prompt assembly. Junk-classified sheets
+    are dropped from `entity_spec.forms`; sheets the LLM could not classify
+    (or whose result failed validation) keep parser defaults and surface
+    in `form_link_warnings` for the HITL pause.
+
+    No-op when there are no forms (saves the LLM call on empty bundles)
+    or when the API key is missing (parser defaults flow through).
+    """
+    spec = state["entity_spec"]
+    warnings = list(state.get("form_link_warnings", []))
+
+    if spec is None or not spec.forms:
+        return {"form_link_warnings": warnings}
+
+    helper = LLMHelper()
+    if not helper.is_available():
+        log.info(
+            "[%s] form-link classification skipped — ANTHROPIC_API_KEY not set",
+            state["org_name"],
+        )
+        warnings.append(
+            "form-link classification skipped: ANTHROPIC_API_KEY not set"
+        )
+        return {"form_link_warnings": warnings}
+
+    sheet_names = [f.name for f in spec.forms]
+    catalog = build_entity_catalog(spec)
+    results, call_warnings = classify_forms(spec.forms, spec, sheet_names, helper)
+    warnings.extend(call_warnings)
+
+    if not results:
+        log.info(
+            "[%s] form-link classification produced no results; keeping parser defaults",
+            state["org_name"],
+        )
+        return {
+            "entity_spec": spec,
+            "form_link_warnings": warnings,
+            "pending_form_links": [],
+        }
+
+    linked_forms, dropped, apply_warnings, deferred = apply_form_link_results(
+        spec.forms, results, catalog,
+        auto_apply_only_high_confidence=True,
+    )
+    warnings.extend(apply_warnings)
+
+    orphans = orphan_entities(catalog, results)
+    for orphan in orphans:
+        warnings.append(f"orphan-entity: {orphan}")
+
+    if dropped:
+        log.info(
+            "[%s] form-link: auto-dropped %d junk sheet(s): %s",
+            state["org_name"], len(dropped), dropped,
+        )
+
+    spec.forms = linked_forms
+    pending_cards = build_pending_cards(deferred, orphans)
+
+    log.info(
+        "[%s] form-link: %d classified, %d auto-applied, %d deferred, "
+        "%d orphans, %d dropped",
+        state["org_name"], len(results),
+        len(results) - len(deferred), len(deferred),
+        len(orphans), len(dropped),
+    )
+
+    return {
+        "entity_spec": spec,
+        "form_link_warnings": warnings,
+        "pending_form_links": pending_cards,
+    }
+
+
+def confirm_form_links(state: BundleState) -> dict:
+    """Pause for HITL review of low-confidence / orphan form-link cards.
+
+    Orphan cards are informational; the resolution map only addresses
+    review-needed sheet classifications keyed by sheet name. Anything not
+    in the resolutions is left at parser defaults.
+    """
+    cards = state.get("pending_form_links") or []
+    if not cards:
+        return {}
+
+    review_cards = [
+        c for c in cards if c.get("kind") != "form_link_orphan"
+    ]
+    if not review_cards and not cards:
+        return {}
+
+    resolutions: dict[str, str] = {}
+    if review_cards:
+        raw = interrupt({
+            "kind": "confirm_form_links",
+            "org": state["org_name"],
+            "cards": cards,
+        })
+        if isinstance(raw, dict):
+            resolutions = {str(k): str(v) for k, v in raw.items()}
+
+    # Reconstruct the deferred FormLinkResult list from the cards so the
+    # apply step uses the same data the user saw.
+    deferred: list[FormLinkResult] = []
+    for c in review_cards:
+        proposed = c.get("proposed") or {}
+        deferred.append(FormLinkResult(
+            sheet_name=c.get("sheet_name", ""),
+            form_type=proposed.get("form_type"),
+            subject_type=proposed.get("subject_type"),
+            program=proposed.get("program"),
+            encounter_type=proposed.get("encounter_type"),
+            confidence=c.get("confidence", "low"),
+            reasoning=c.get("reasoning", ""),
+        ))
+
+    spec = state["entity_spec"]
+    catalog = build_entity_catalog(spec)
+    warnings = list(state.get("form_link_warnings") or [])
+
+    linked_forms, dropped, apply_warnings = apply_review_decisions(
+        spec.forms, deferred, catalog, resolutions,
+    )
+    warnings.extend(apply_warnings)
+    spec.forms = linked_forms
+
+    if dropped:
+        log.info(
+            "[%s] form-link review: dropped %d sheet(s): %s",
+            state["org_name"], len(dropped), dropped,
+        )
+
+    return {
+        "entity_spec": spec,
+        "form_link_warnings": warnings,
+        "pending_form_links": [],
+    }
 
 
 # ── Node 2.5: LLM enrichment ──────────────────────────────────────────────────

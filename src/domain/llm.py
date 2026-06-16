@@ -183,6 +183,44 @@ class LLMHelper:
         # `with_structured_output` returns the parsed Pydantic model directly.
         return result  # type: ignore[return-value]
 
+    def classify(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type,
+        *,
+        retries: int = 2,
+    ) -> Any:
+        """Single Haiku call returning a parsed `response_model` instance.
+
+        Generic enough that any caller (form-link classifier, future entity
+        resolvers, …) can pass its own Pydantic container. Retries up to
+        `retries` times on parse / API errors before letting the last
+        exception propagate.
+        """
+        if not self.is_available():
+            raise RuntimeError(
+                "LLMHelper called without ANTHROPIC_API_KEY; check is_available() first"
+            )
+        chat = ChatAnthropic(model=MODEL, max_tokens=MAX_TOKENS)
+        model = chat.with_structured_output(response_model)
+        system = SystemMessage(
+            content=[{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }]
+        )
+        human = HumanMessage(content=user_prompt)
+        last_exc: Exception | None = None
+        for _ in range(max(1, retries)):
+            try:
+                return model.invoke([system, human])
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+        assert last_exc is not None
+        raise last_exc
+
 
 def _json_dumps(obj: Any) -> str:
     import json
