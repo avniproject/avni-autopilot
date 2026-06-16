@@ -439,17 +439,21 @@ def _build_rule_spec(
 ) -> RuleSpec:
     """Compose a RuleSpec from a FormSpec and the bundle's vocabulary.
 
-    `all_forms` is the full list of `FormSpec` in the bundle — used to
-    resolve cross-form references (registration + enrolment) for
-    `concept_answers` per CONCEPT_ANSWER_GROUNDING_SDD.md §5.
+    `all_forms` is the full list of `FormSpec` in the bundle. Both
+    `available_concepts` and `concept_answers` span the in-scope forms —
+    target plus its registration and enrolment siblings — so a rule on a
+    program encounter (e.g. ANC) can reference enrolment fields like
+    `Last Menstrual Period (LMP)` reachable at runtime via the entity
+    chain. Mirrors CONCEPT_ANSWER_GROUNDING_SDD.md §5.
     """
+    in_scope_forms = _forms_in_scope_for(form_spec, all_forms or [form_spec])
     available_concepts = sorted({
         field.name
-        for section in (form_spec.sections or [])
+        for form in in_scope_forms
+        for section in (form.sections or [])
         for field in (section.fields or [])
         if field.name
     })
-    in_scope_forms = _forms_in_scope_for(form_spec, all_forms or [form_spec])
     concept_answers = _collect_concept_answers(in_scope_forms)
     return RuleSpec(
         rule_kind=kind,
