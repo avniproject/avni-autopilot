@@ -290,15 +290,19 @@ def _find_col(df: pd.DataFrame, *candidates: str) -> str | None:
 # ── Sheet Classification ─────────────────────────────────────────────────────
 
 
-def _classify_sheet(df: pd.DataFrame, sheet_name: str = "") -> str:
-    """
-    Classify a DataFrame by its column headers into one of:
-    location, subject_type, program, encounter, program_encounter,
-    w3h, form, or unknown.
+def _classify_sheet(df: pd.DataFrame) -> str:
+    """Classify a DataFrame by its column headers.
 
-    Uses the FIRST column as the strongest signal — it's usually the primary
-    entity name (e.g. "Encounter Name", "Subject Type Name", "Program Name").
-    Falls back to sheet_name pattern matching when content headers are ambiguous.
+    Returns one of: location, subject_type, program, encounter,
+    program_encounter, unified_modelling, w3h, form, rules, unknown.
+
+    Content-driven only — the first column is the strongest signal
+    (entity-name header like "Subject Type Name" / "Program Name" /
+    "Encounter Name"). Sheets whose columns don't recognise as any
+    entity tab fall through to "unknown" and surface as `misc_sheets`
+    for operator review. The form-link node (LLM) is the authoritative
+    source for entity↔form binding, so a strict content-driven
+    classification here is safer than name-based guessing.
     """
     if df.empty or df.shape[1] < 2:
         return "unknown"
@@ -371,24 +375,6 @@ def _classify_sheet(df: pd.DataFrame, sheet_name: str = "") -> str:
         return "location"
     if first_col == "location type":
         return "location"
-
-    # ── Sheet-name fallback (when column headers are ambiguous) ─────────────
-    if sheet_name:
-        sn = sheet_name.strip().lower()
-        if "program encounter" in sn:
-            return "program_encounter"
-        if sn in ("program", "programs"):
-            return "program"
-        if "encounter" in sn and "program" not in sn:
-            return "encounter"
-        if "subject type" in sn or sn in ("subject types", "subjects"):
-            return "subject_type"
-        if "location hierarchy" in sn or sn in (
-            "location",
-            "locations",
-            "address levels",
-        ):
-            return "location"
 
     return "unknown"
 
@@ -1320,7 +1306,7 @@ def parse_scoping_docs(
             df_with_header = df_with_header.iloc[1:].reset_index(drop=True)
             df_with_header = df_with_header.dropna(how="all")
 
-            classification = _classify_sheet(df_with_header, sheet_name)
+            classification = _classify_sheet(df_with_header)
 
             # If unknown, try with row 1 as headers (scoping doc pattern)
             if classification == "unknown" and df.shape[0] >= 3:
@@ -1329,7 +1315,7 @@ def parse_scoping_docs(
                     str(df.iloc[1, c]).strip() if df.shape[0] > 1 else f"col{c}"
                     for c in range(df.shape[1])
                 ]
-                alt_class = _classify_sheet(df_alt, sheet_name)
+                alt_class = _classify_sheet(df_alt)
                 if alt_class in ("form", "form_offset1"):
                     classification = "form_offset1"
                 elif alt_class != "unknown":

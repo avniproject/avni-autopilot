@@ -5,25 +5,27 @@ to its declared entity in the modelling doc (subject types, programs,
 program encounters, encounters). Replaces the deterministic keyword
 ladder formerly in `parser._resolve_form_subject_types`.
 
+Validated classifications auto-apply unconditionally. Sheets the LLM marks
+as junk (`form_type=None`) are dropped from the bundle. Off-pool or shape-
+invalid results fall back to parser defaults with a warning. Declared
+entities that no sheet claims surface as orphan warnings on the run output.
+
 Public surface:
 
   classify_forms(forms, entity_spec, sheet_names, llm_helper)
       Returns (link_results, warnings).
 
-  apply_form_link_results(forms, link_results, catalog, ...)
-      Returns a `LinkApplyOutcome` (linked_forms, dropped, warnings, deferred).
-
-  apply_review_decisions(forms, deferred, catalog, resolutions)
-      Applies HITL user choices to deferred (review-needed) results.
+  apply_form_link_results(forms, link_results, catalog)
+      Returns a `LinkApplyOutcome` (linked_forms, dropped, warnings).
 
   build_entity_catalog(entity_spec)
-      Pure conversion from EntitySpec → EntityCatalog (used by prompt + validator).
+      Pure conversion from EntitySpec → EntityCatalog (prompt + validator).
 
   validate_result(result, catalog)
       Per-row validation: pool membership + formType reference consistency.
 
-  build_pending_cards(deferred, orphans) + cards_to_deferred(cards)
-      Inverses across the LangGraph state serialization boundary.
+  orphan_entities(catalog, link_results)
+      Catalog entities no result claims, as human-readable lines.
 
 See specs/FORM_ENTITY_LINKING_SDD.md.
 """
@@ -31,8 +33,6 @@ See specs/FORM_ENTITY_LINKING_SDD.md.
 from __future__ import annotations
 
 import logging
-import re
-from enum import StrEnum
 from itertools import chain
 from typing import Callable, Iterable, Iterator, Literal, NamedTuple
 
@@ -41,19 +41,6 @@ from pydantic import BaseModel, Field
 from models import EntitySpec, FormSpec
 
 log = logging.getLogger(__name__)
-
-
-# Sheet-name heuristic — the >15-char and not-`Sheet\d+` choices match
-# Excel's defaults: anything shorter or generated is almost certainly
-# not a real form, so junk-classifying it should not gate a HITL pause.
-_GENERIC_SHEET_NAME_RE = re.compile(r"^Sheet\d+$", re.IGNORECASE)
-
-
-def is_form_like_sheet_name(name: str) -> bool:
-    s = (name or "").strip()
-    if len(s) <= 15:
-        return False
-    return _GENERIC_SHEET_NAME_RE.match(s) is None
 
 
 # ── Result model ──────────────────────────────────────────────────────────────
@@ -89,26 +76,18 @@ class FormLinkResults(BaseModel):
     results: list[FormLinkResult]
 
 
-class Decision(StrEnum):
-    ACCEPT = "accept"
-    SKIP = "skip"
-    KEEP = "keep_default"
-
-
 class LinkApplyOutcome(NamedTuple):
     linked_forms: list[FormSpec]
     dropped: list[str]
     warnings: list[str]
-    deferred: list[FormLinkResult]
 
 
 # ── Form-type consistency table ───────────────────────────────────────────────
 
 
 # Required-reference signature per formType: which of
-# (subject_type, program, encounter_type) must be non-null. The table-driven
-# check beats inline `if`s because the seven shapes share three boolean
-# axes — a single tuple comparison covers all of them.
+# (subject_type, program, encounter_type) must be non-null. A table-driven
+# check keeps the seven shapes uniform — single tuple comparison covers all.
 _REQUIRED_REFS: dict[FormTypeLiteral, tuple[bool, bool, bool]] = {
     "IndividualProfile":              (True,  False, False),
     "ProgramEnrolment":                (True,  True,  False),
@@ -259,21 +238,17 @@ def apply_form_link_results(
     forms: list[FormSpec],
     link_results: list[FormLinkResult],
     catalog: EntityCatalog,
-    *,
-    auto_apply_only_high_confidence: bool = False,
 ) -> LinkApplyOutcome:
-    """Stamp validated link results onto the FormSpec list.
+    """Stamp every validated link result onto the FormSpec list.
 
-    Idempotent. When `auto_apply_only_high_confidence`, low / medium results
-    (and form-like-name junk) are returned in `deferred` for HITL review and
-    the corresponding form stays at parser defaults.
+    Idempotent. Junk classifications drop the sheet. Validation failures
+    leave the form at parser defaults with a warning.
     """
     by_sheet = {_norm(r.sheet_name): r for r in link_results}
 
     linked: list[FormSpec] = []
     dropped: list[str] = []
     warnings: list[str] = []
-    deferred: list[FormLinkResult] = []
 
     for form in forms:
         result = by_sheet.get(_norm(form.name))
@@ -295,135 +270,13 @@ def apply_form_link_results(
             linked.append(form)
             continue
 
-        needs_review = auto_apply_only_high_confidence and (
-            result.confidence != "high"
-            or (result.form_type is None and is_form_like_sheet_name(form.name))
-        )
-        if needs_review:
-            deferred.append(result)
-            linked.append(form)
-            continue
-
         if result.form_type is None:
             dropped.append(form.name)
             continue
 
         linked.append(_stamp_form(form, result, catalog))
 
-    return LinkApplyOutcome(linked, dropped, warnings, deferred)
-
-
-def apply_review_decisions(
-    forms: list[FormSpec],
-    deferred: list[FormLinkResult],
-    catalog: EntityCatalog,
-    resolutions: dict[str, str],
-) -> tuple[list[FormSpec], list[str], list[str]]:
-    """Apply HITL resolutions (`Decision` values) to deferred results.
-
-    Unknown decisions degrade to `Decision.KEEP` with a warning. Sheets
-    without a deferred result pass through unchanged.
-
-    Returns (linked_forms, dropped_sheet_names, warnings).
-    """
-    by_sheet = {_norm(r.sheet_name): r for r in deferred}
-    normalized = {_norm(k): (v or "").strip().lower() for k, v in resolutions.items()}
-
-    linked: list[FormSpec] = []
-    dropped: list[str] = []
-    warnings: list[str] = []
-
-    for form in forms:
-        key = _norm(form.name)
-        result = by_sheet.get(key)
-        if result is None:
-            linked.append(form)
-            continue
-
-        raw = normalized.get(key, Decision.KEEP.value)
-        try:
-            decision = Decision(raw)
-        except ValueError:
-            warnings.append(
-                f"form sheet {form.name!r}: unknown resolution "
-                f"{raw!r}; keeping parser defaults"
-            )
-            decision = Decision.KEEP
-
-        if decision is Decision.ACCEPT:
-            if result.form_type is None:
-                dropped.append(form.name)
-            else:
-                linked.append(_stamp_form(form, result, catalog))
-        elif decision is Decision.SKIP:
-            dropped.append(form.name)
-        else:
-            linked.append(form)
-
-    return linked, dropped, warnings
-
-
-# ── Pending-card serialization (LangGraph state boundary) ─────────────────────
-
-
-_ORPHAN_KIND = "form_link_orphan"
-
-
-def build_pending_cards(
-    deferred: list[FormLinkResult], orphans: list[str],
-) -> list[dict]:
-    """Serialize deferred results + orphan strings into HITL card dicts.
-
-    The dict shape is the wire contract with chat / web clients — change it
-    only in lockstep with those consumers.
-    """
-    cards: list[dict] = []
-    for r in deferred:
-        kind = (
-            "form_link_junk_review"
-            if r.form_type is None
-            else "form_link_low_confidence"
-        )
-        cards.append({
-            "card_id": f"form-link/{r.sheet_name}",
-            "kind": kind,
-            "sheet_name": r.sheet_name,
-            "proposed": {
-                "form_type": r.form_type,
-                "subject_type": r.subject_type,
-                "program": r.program,
-                "encounter_type": r.encounter_type,
-            },
-            "confidence": r.confidence,
-            "reasoning": r.reasoning,
-        })
-    for line in orphans:
-        cards.append({
-            "card_id": f"form-link/orphan/{line}",
-            "kind": _ORPHAN_KIND,
-            "message": line,
-        })
-    return cards
-
-
-def card_to_result(card: dict) -> FormLinkResult | None:
-    """Reconstruct a `FormLinkResult` from a review card. Orphans → None."""
-    if card.get("kind") == _ORPHAN_KIND:
-        return None
-    proposed = card.get("proposed") or {}
-    return FormLinkResult(
-        sheet_name=card.get("sheet_name", ""),
-        form_type=proposed.get("form_type"),
-        subject_type=proposed.get("subject_type"),
-        program=proposed.get("program"),
-        encounter_type=proposed.get("encounter_type"),
-        confidence=card.get("confidence", "low"),
-        reasoning=card.get("reasoning", ""),
-    )
-
-
-def cards_to_deferred(cards: Iterable[dict]) -> list[FormLinkResult]:
-    return [r for r in (card_to_result(c) for c in cards) if r is not None]
+    return LinkApplyOutcome(linked, dropped, warnings)
 
 
 # ── Orphan detection ──────────────────────────────────────────────────────────

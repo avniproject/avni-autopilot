@@ -24,10 +24,7 @@ from domain.diff import diff
 from domain.enricher import enrich_forms
 from domain.form_links import (
     apply_form_link_results,
-    apply_review_decisions,
     build_entity_catalog,
-    build_pending_cards,
-    cards_to_deferred,
     classify_forms,
     orphan_entities,
 )
@@ -149,16 +146,9 @@ def link_forms_to_entities(state: BundleState) -> dict:
     if not results:
         log.info("[%s] form-link: no classifications; keeping parser defaults",
                  state["org_name"])
-        return {
-            "entity_spec": spec,
-            "form_link_warnings": warnings,
-            "pending_form_links": [],
-        }
+        return {"entity_spec": spec, "form_link_warnings": warnings}
 
-    outcome = apply_form_link_results(
-        spec.forms, results, catalog,
-        auto_apply_only_high_confidence=True,
-    )
+    outcome = apply_form_link_results(spec.forms, results, catalog)
     warnings.extend(outcome.warnings)
 
     orphans = orphan_entities(catalog, results)
@@ -167,57 +157,12 @@ def link_forms_to_entities(state: BundleState) -> dict:
     spec.forms = outcome.linked_forms
 
     log.info(
-        "[%s] form-link: %d classified, %d auto-applied, %d deferred, "
-        "%d orphans, %d dropped",
+        "[%s] form-link: %d classified, %d applied, %d dropped, %d orphans",
         state["org_name"], len(results),
-        len(results) - len(outcome.deferred), len(outcome.deferred),
-        len(orphans), len(outcome.dropped),
+        len(results) - len(outcome.dropped), len(outcome.dropped), len(orphans),
     )
 
-    return {
-        "entity_spec": spec,
-        "form_link_warnings": warnings,
-        "pending_form_links": build_pending_cards(outcome.deferred, orphans),
-    }
-
-
-def confirm_form_links(state: BundleState) -> dict:
-    """Pause for HITL review of low-confidence / form-like-junk classifications.
-
-    Orphan cards are informational and don't trigger an interrupt — they
-    flow through `form_link_warnings` from the upstream node.
-    """
-    cards = state.get("pending_form_links") or []
-    review_cards = [c for c in cards if c.get("kind") != "form_link_orphan"]
-    if not review_cards:
-        return {"pending_form_links": []}
-
-    raw = interrupt({
-        "kind": "confirm_form_links",
-        "org": state["org_name"],
-        "cards": cards,
-    })
-    resolutions = {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
-
-    spec = state["entity_spec"]
-    catalog = build_entity_catalog(spec)
-    warnings = list(state.get("form_link_warnings") or [])
-
-    linked, dropped, apply_warnings = apply_review_decisions(
-        spec.forms, cards_to_deferred(review_cards), catalog, resolutions,
-    )
-    warnings.extend(apply_warnings)
-    spec.forms = linked
-
-    if dropped:
-        log.info("[%s] form-link review: dropped %d sheet(s): %s",
-                 state["org_name"], len(dropped), dropped)
-
-    return {
-        "entity_spec": spec,
-        "form_link_warnings": warnings,
-        "pending_form_links": [],
-    }
+    return {"entity_spec": spec, "form_link_warnings": warnings}
 
 
 # ── Node 2.5: LLM enrichment ──────────────────────────────────────────────────

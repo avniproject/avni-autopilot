@@ -27,7 +27,6 @@ class BundleState(TypedDict):
     edit_result: dict                       # set by apply_diff_edits (an EditResult dump)
     # Form ↔ entity linking
     form_link_warnings: list[str]
-    pending_form_links: list[dict]
     # LLM enrichment
     user_instructions: str | None           # passed through from chat tool
     pending_changes: list[dict]             # surfaced via interrupt(); empty after resume
@@ -66,7 +65,6 @@ def initial_state(
         "entity_spec": None,
         "parse_warnings": [],
         "form_link_warnings": [],
-        "pending_form_links": [],
         "mode": mode,
         "bundle_path": bundle_path,
         "diff_ops": [],

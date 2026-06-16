@@ -95,21 +95,31 @@ Hard constraints:
   2. The function MUST return {return_type_description}.
   3. Reference ONLY the helper methods listed under HELPERS in the user message.
      Do not invent helpers, methods, or namespaces.
-  4. Reference ONLY the concept names listed under AVAILABLE_CONCEPTS. Concept
-     names appear as the first string argument to accessors like
-     `getObservationReadableValue('<concept>')` or as observation lookups.
-  5. Reference ONLY the encounter type names listed under AVAILABLE_ENCOUNTER_TYPES.
-     These appear as `encounterType: '<name>'` property values in
-     `scheduleBuilder.add({{...}})` calls and as the first string argument to
-     methods like `hasEncounterOfType('<name>')`.
+  4. Reference ONLY the concept names listed under AVAILABLE_CONCEPTS,
+     character-for-character. Do NOT paraphrase, abbreviate, expand acronyms,
+     translate, or strip parenthetical content. The intent often uses an
+     informal short form (e.g. "LMP", "delivery date") while the allowlist
+     carries the full canonical string (e.g. "Last Menstrual Period (LMP)",
+     "Expected Date of Delivery (EDD)"). Use the listed string verbatim,
+     including any parenthetical suffix. If no listed concept clearly matches
+     what the intent refers to, fall to rule 7 — do not best-guess.
+  5. Reference ONLY the encounter type names listed under AVAILABLE_ENCOUNTER_TYPES,
+     character-for-character (same rule as concepts). These appear as
+     `encounterType: '<name>'` property values in `scheduleBuilder.add({{...}})`
+     calls and as the first string argument to methods like
+     `hasEncounterOfType('<name>')`. If no listed encounter type clearly
+     matches, fall to rule 7.
   6. When using `containsAnswerConceptName(...)` or
      `containsAnyAnswerConceptName(...)`, the string argument MUST match an
      exact entry under the relevant concept in CONCEPT_ANSWERS. Never pass
      the user's informal phrasing verbatim — look up the right answer
      string. Example: if the user says "supporting family" and the concept's
      answers include "can support my family", use "can support my family".
-  7. If the intent cannot be expressed within these constraints, return an
-     empty `js` string and set `confidence` to "low".
+  7. If the intent references a concept, encounter type, or program that has
+     no character-for-character match in the relevant allowlist, do NOT
+     guess, paraphrase, or fabricate a plausible name. Return an empty `js`
+     string, set `confidence` to "low", and add a single warning of the form
+     `"unresolved <kind>: <intent reference> → no match in allowlist"`.
 
 Self-report `confidence` ("high" / "medium" / "low"):
   - high — intent maps cleanly to one of the EXAMPLES; every symbol used is on

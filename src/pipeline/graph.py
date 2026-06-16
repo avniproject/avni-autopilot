@@ -15,7 +15,6 @@ from langgraph.graph import END, StateGraph
 from pipeline.nodes import (
     apply_diff_edits,
     apply_user_decisions,
-    confirm_form_links,
     diff_against_bundle,
     discover_files,
     enrich_with_llm,
@@ -53,7 +52,6 @@ def build_graph(checkpointer=None) -> Any:
     graph.add_node("discover_files", discover_files)
     graph.add_node("parse_documents", parse_documents)
     graph.add_node("link_forms_to_entities", link_forms_to_entities)
-    graph.add_node("confirm_form_links", confirm_form_links)
     graph.add_node("enrich_with_llm", enrich_with_llm)
     graph.add_node("apply_user_decisions", apply_user_decisions)
     graph.add_node("generate_entities", generate_entities)
@@ -74,8 +72,7 @@ def build_graph(checkpointer=None) -> Any:
         "parse_documents", _can_proceed,
         {"continue": "link_forms_to_entities", "abort": END},
     )
-    graph.add_edge("link_forms_to_entities", "confirm_form_links")
-    graph.add_edge("confirm_form_links", "enrich_with_llm")
+    graph.add_edge("link_forms_to_entities", "enrich_with_llm")
     graph.add_edge("enrich_with_llm", "apply_user_decisions")
     graph.add_edge("apply_user_decisions", "generate_entities")
     graph.add_edge("generate_entities", "generate_forms")

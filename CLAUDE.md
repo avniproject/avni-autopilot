@@ -7,6 +7,10 @@
 6. Do not use `you / yours / me / us / we` in code comments or docstrings.
 7. Use Python f-string for logging.
 8. Provide high-quality, comprehensive, and unambiguous prompts.
+9. 
+9. Don't add comments when evident - dont mention phases of implementation in comments
+10. Make sure the code is properly segregated based on the projects design - nodes, domain, pipeline
+11. Use good design practices when implementing
 
 # Development workflow
 9. Designs live in `specs/` as SDDs. Run `/implement-spec specs/<NAME>.md` to implement one. The SDD is the contract — don't silently expand or contract scope, and "Out of scope" sections are binding. When the SDD is unclear, stop and quote the specific section back before guessing.

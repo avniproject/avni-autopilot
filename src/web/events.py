@@ -90,8 +90,7 @@ def tool_result(call_id: str, ok: bool, summary: str) -> dict[str, Any]:
 def hitl_pending(interrupt_id: str, changes: list[dict[str, Any]]) -> dict[str, Any]:
     """Payload for `hitl.pending` — pipeline awaits user confirmations.
 
-    `changes` mirrors `models.Change` dumps (see SDD §4.2 and chat/tools.py
-    `_run_with_interrupt_handling`).
+    `changes` mirrors `models.Change` dumps from the LLM enrichment node.
     """
     return {"interrupt_id": interrupt_id, "changes": changes}
 

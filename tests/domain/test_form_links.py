@@ -3,8 +3,8 @@
 Covers:
 - Catalog assembly from EntitySpec.
 - Validator rejection of off-pool references and shape mismatches.
-- Junk-sheet classification (form_type=None).
-- HITL split: high-confidence auto-apply vs deferred review.
+- Junk-sheet classification (form_type=None) → drop.
+- Orphan-entity detection.
 - Roundtrip on the four named Ekam failure cases via a stub agent.
 
 Usage:
@@ -16,16 +16,12 @@ from __future__ import annotations
 import pytest
 
 from domain.form_links import (
-    Decision,
     EntityCatalog,
     FormLinkResult,
     FormLinkResults,
     apply_form_link_results,
-    apply_review_decisions,
     build_entity_catalog,
-    build_pending_cards,
     classify_forms,
-    is_form_like_sheet_name,
     orphan_entities,
     validate_result,
 )
@@ -217,10 +213,10 @@ def test_validator_accepts_clean_junk(ekam_catalog) -> None:
     assert ok, err
 
 
-# ── Application + HITL split ──────────────────────────────────────────────────
+# ── Application — auto-apply all validated results ────────────────────────────
 
 
-def test_high_confidence_auto_applies_and_drops_junk(ekam_catalog) -> None:
+def test_applies_classification_and_drops_junk(ekam_catalog) -> None:
     forms = [
         FormSpec(name="Save a Child Follow Up", formType="Encounter"),
         FormSpec(name="Sheet35", formType="Encounter"),
@@ -240,20 +236,17 @@ def test_high_confidence_auto_applies_and_drops_junk(ekam_catalog) -> None:
             confidence="high", reasoning="excel default",
         ),
     ]
-    linked, dropped, warnings, deferred = apply_form_link_results(
-        forms, results, ekam_catalog,
-        auto_apply_only_high_confidence=True,
-    )
-    assert dropped == ["Sheet35"]
-    assert warnings == []
-    assert deferred == []
-    assert len(linked) == 1
-    assert linked[0].formType == "ProgramEncounter"
-    assert linked[0].program == "Save a child"
-    assert linked[0].encounterType == "Save a Child Followup "
+    outcome = apply_form_link_results(forms, results, ekam_catalog)
+    assert outcome.dropped == ["Sheet35"]
+    assert outcome.warnings == []
+    assert len(outcome.linked_forms) == 1
+    stamped = outcome.linked_forms[0]
+    assert stamped.formType == "ProgramEncounter"
+    assert stamped.program == "Save a child"
+    assert stamped.encounterType == "Save a Child Followup "
 
 
-def test_low_confidence_defers_for_review(ekam_catalog) -> None:
+def test_medium_confidence_still_applies(ekam_catalog) -> None:
     forms = [FormSpec(name="Awareness", formType="Encounter")]
     results = [
         FormLinkResult(
@@ -264,90 +257,35 @@ def test_low_confidence_defers_for_review(ekam_catalog) -> None:
             reasoning="single match",
         ),
     ]
-    linked, dropped, warnings, deferred = apply_form_link_results(
-        forms, results, ekam_catalog,
-        auto_apply_only_high_confidence=True,
-    )
-    assert linked[0].formType == "Encounter"  # parser default preserved
-    assert dropped == []
-    assert len(deferred) == 1
-    assert deferred[0].sheet_name == "Awareness"
-
-
-def test_junk_on_form_like_name_defers_for_review(ekam_catalog) -> None:
-    forms = [FormSpec(name="Stakeholders Meeting", formType="Encounter")]
-    results = [
-        FormLinkResult(
-            sheet_name="Stakeholders Meeting",
-            form_type=None,
-            confidence="high",  # high-conf junk but the name is form-like
-            reasoning="no exact match",
-        ),
-    ]
-    _, dropped, _, deferred = apply_form_link_results(
-        forms, results, ekam_catalog,
-        auto_apply_only_high_confidence=True,
-    )
-    assert dropped == []
-    assert len(deferred) == 1
+    outcome = apply_form_link_results(forms, results, ekam_catalog)
+    assert outcome.dropped == []
+    assert outcome.warnings == []
+    assert outcome.linked_forms[0].formType == "IndividualProfile"
+    assert outcome.linked_forms[0].subjectType == "Awareness"
 
 
 def test_unclassified_form_keeps_defaults_with_warning(ekam_catalog) -> None:
     forms = [FormSpec(name="A new sheet", formType="Encounter")]
-    linked, dropped, warnings, deferred = apply_form_link_results(
-        forms, [], ekam_catalog,
-        auto_apply_only_high_confidence=True,
-    )
-    assert linked[0].formType == "Encounter"
-    assert dropped == []
-    assert deferred == []
-    assert any("not classified" in w for w in warnings)
+    outcome = apply_form_link_results(forms, [], ekam_catalog)
+    assert outcome.linked_forms[0].formType == "Encounter"
+    assert outcome.dropped == []
+    assert any("not classified" in w for w in outcome.warnings)
 
 
-def test_apply_review_decisions_accept_skip_keep(ekam_catalog) -> None:
-    forms = [
-        FormSpec(name="Awareness", formType="Encounter"),
-        FormSpec(name="Maybe junk?", formType="Encounter"),
-        FormSpec(name="Untouched", formType="Encounter"),
-    ]
-    deferred = [
+def test_off_pool_result_keeps_defaults_with_warning(ekam_catalog) -> None:
+    forms = [FormSpec(name="Awareness", formType="Encounter")]
+    results = [
         FormLinkResult(
             sheet_name="Awareness",
             form_type="IndividualProfile",
-            subject_type="Awareness",
-            confidence="medium",
-            reasoning="single match",
-        ),
-        FormLinkResult(
-            sheet_name="Maybe junk?",
-            form_type=None,
-            confidence="low",
-            reasoning="ambiguous",
-        ),
-        FormLinkResult(
-            sheet_name="Untouched",
-            form_type="IndividualProfile",
-            subject_type="Awareness",
-            confidence="medium",
-            reasoning="single match",
+            subject_type="Imaginary",
+            confidence="high",
+            reasoning="hallucinated",
         ),
     ]
-    linked, dropped, warnings = apply_review_decisions(
-        forms, deferred, ekam_catalog,
-        resolutions={
-            "Awareness": Decision.ACCEPT,
-            "Maybe junk?": Decision.SKIP,
-            "Untouched": Decision.KEEP,
-        },
-    )
-    names = [f.name for f in linked]
-    assert "Awareness" in names and "Untouched" in names
-    assert "Maybe junk?" not in names
-    assert dropped == ["Maybe junk?"]
-    awareness = next(f for f in linked if f.name == "Awareness")
-    assert awareness.formType == "IndividualProfile"
-    untouched = next(f for f in linked if f.name == "Untouched")
-    assert untouched.formType == "Encounter"
+    outcome = apply_form_link_results(forms, results, ekam_catalog)
+    assert outcome.linked_forms[0].formType == "Encounter"
+    assert any("rejected" in w for w in outcome.warnings)
 
 
 # ── Orphan detection ──────────────────────────────────────────────────────────
@@ -368,39 +306,6 @@ def test_orphan_subject_when_no_registration_match(ekam_catalog) -> None:
     assert any("'Stakeholder Meeting'" in line for line in orphans)
 
 
-# ── Pending-card construction ─────────────────────────────────────────────────
-
-
-def test_build_pending_cards_assigns_kinds() -> None:
-    deferred = [
-        FormLinkResult(sheet_name="Awareness", form_type="IndividualProfile",
-                       subject_type="Awareness", confidence="medium",
-                       reasoning="ok"),
-        FormLinkResult(sheet_name="Maybe junk?", form_type=None,
-                       confidence="low", reasoning="ambiguous"),
-    ]
-    cards = build_pending_cards(deferred, ["Subject Type 'X' has no registration form"])
-    kinds = [c["kind"] for c in cards]
-    assert "form_link_low_confidence" in kinds
-    assert "form_link_junk_review" in kinds
-    assert "form_link_orphan" in kinds
-
-
-# ── Sheet-name heuristic ──────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize("name,expected", [
-    ("Sheet35", False),
-    ("Sheet1", False),
-    ("Short", False),
-    ("Awareness", False),  # 9 chars
-    ("Stakeholders Meeting", True),
-    ("A reasonably long form name", True),
-])
-def test_is_form_like_sheet_name(name: str, expected: bool) -> None:
-    assert is_form_like_sheet_name(name) is expected
-
-
 # ── End-to-end roundtrip via a stub agent ─────────────────────────────────────
 
 
@@ -418,14 +323,7 @@ class _StubHelper:
 
 
 def test_classify_forms_roundtrip_named_ekam_failures(ekam_catalog) -> None:
-    """The four named failure cases resolve correctly through the stub agent.
-
-    Each result mirrors the spec's expected classification (§1 table):
-        Awareness                       → Subject Type 'Awareness' registration
-        Stakeholders Meeting            → Subject Type 'Stakeholder Meeting' reg
-        Save a Child Follow Up          → Program Encounter under 'Save a child'
-        Refferal Enrolment Hospital for → Program Encounter 'Referral to ...'
-    """
+    """The four named failure cases all resolve through the stub agent."""
     spec = _ekam_entity_spec()
     forms = [
         FormSpec(name="Awareness", formType="Encounter"),
@@ -480,33 +378,18 @@ def test_classify_forms_roundtrip_named_ekam_failures(ekam_catalog) -> None:
     assert warnings == []
     assert len(results) == 5
 
-    linked, dropped, apply_warnings, deferred = apply_form_link_results(
-        forms, results, ekam_catalog,
-        auto_apply_only_high_confidence=True,
-    )
-    assert apply_warnings == []
-    assert dropped == ["Sheet35"]
+    outcome = apply_form_link_results(forms, results, ekam_catalog)
+    assert outcome.warnings == []
+    assert outcome.dropped == ["Sheet35"]
 
-    # Auto-applied (high-conf): Awareness, Stakeholders Meeting, Save a Child Follow Up.
-    # Deferred (medium-conf): Refferal Enrolment Hospital for.
-    auto_applied = {f.name: f for f in linked if f.formType != "Encounter"}
-    assert "Awareness" in auto_applied
-    assert auto_applied["Awareness"].subjectType == "Awareness"
-    assert auto_applied["Stakeholders Meeting"].subjectType == "Stakeholder Meeting"
-    sacfu = auto_applied["Save a Child Follow Up"]
+    by_name = {f.name: f for f in outcome.linked_forms if f.formType != "Encounter"}
+    assert by_name["Awareness"].subjectType == "Awareness"
+    assert by_name["Stakeholders Meeting"].subjectType == "Stakeholder Meeting"
+    sacfu = by_name["Save a Child Follow Up"]
     assert sacfu.formType == "ProgramEncounter"
     assert sacfu.program == "Save a child"
     assert sacfu.encounterType == "Save a Child Followup "
-
-    assert [d.sheet_name for d in deferred] == ["Refferal Enrolment Hospital for"]
-
-    # And the deferred case applies cleanly when the operator accepts it.
-    final, _, _ = apply_review_decisions(
-        linked, deferred, ekam_catalog,
-        resolutions={"Refferal Enrolment Hospital for": Decision.ACCEPT},
-    )
-    final_by_name = {f.name: f for f in final}
-    target = final_by_name["Refferal Enrolment Hospital for"]
-    assert target.formType == "ProgramEncounter"
-    assert target.program == "Referral"
-    assert target.encounterType == "Referral to Hospital Follow up"
+    referral = by_name["Refferal Enrolment Hospital for"]
+    assert referral.formType == "ProgramEncounter"
+    assert referral.program == "Referral"
+    assert referral.encounterType == "Referral to Hospital Follow up"
