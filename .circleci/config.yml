@@ -1,0 +1,223 @@
+version: 2.1
+
+orbs:
+  python: circleci/python@2.1.1
+  aws-cli: circleci/aws-cli@4.1.1
+
+commands:
+  deploy_as_service:
+    description: "Deploy avni-autopilot via avni-infra Ansible"
+    parameters:
+      env:
+        type: string
+        default: "staging"
+    steps:
+      - attach_workspace:
+          at: ~/artifacts
+
+      - run: sudo apt-get install make openssl
+
+      - run: curl -L https://github.com/avniproject/avni-infra/archive/master.zip >> ~/infra.zip
+
+      - run: |
+          cd ~/
+          unzip infra.zip
+          mv avni-infra-master avni-infra
+          rm -rf infra.zip
+
+      - run: echo $ANSIBLE_VAULT_PASS > ~/.vault-pass.txt
+
+      - run: |
+          cd ~/avni-infra/configure
+          VAULT_PASSWORD_FILE=~/.vault-pass.txt autopilot_zip_path=~/artifacts make deploy-avni-autopilot-<< parameters.env >>
+
+      - run: rm ~/.vault-pass.txt
+
+  setup_server_access:
+    description: Generate and copy temporary SSH key to the target EC2 box
+    parameters:
+      instance-id:
+        type: string
+      os-user:
+        type: string
+        default: ubuntu
+      availability-zone:
+        type: string
+        default: ap-south-1a
+    steps:
+      - run: rm -rf /tmp/temp_rsa_key*
+      - run: ssh-keygen -b 2048 -t rsa -f /tmp/temp_rsa_key -q -N ""
+      - run: eval `ssh-agent -s`
+      - run: ssh-add /tmp/temp_rsa_key
+      - run: |
+          aws ec2-instance-connect send-ssh-public-key --instance-id << parameters.instance-id >> --availability-zone << parameters.availability-zone >> --instance-os-user << parameters.os-user >> --no-paginate --ssh-public-key file:///tmp/temp_rsa_key.pub --output text | head -1
+
+jobs:
+  build:
+    docker:
+      - image: cimg/python:3.11.9
+    steps:
+      - checkout
+
+      - run:
+          name: Install uv
+          command: |
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+
+      - restore_cache:
+          keys:
+            - v1-deps-{{ checksum "pyproject.toml" }}
+            - v1-deps-
+
+      - run:
+          name: Install dependencies
+          command: uv sync
+
+      - save_cache:
+          paths:
+            - .venv
+          key: v1-deps-{{ checksum "pyproject.toml" }}
+
+      - run:
+          name: Build deploy artifact
+          command: |
+            mkdir -p /tmp/artifacts
+            tar -czf /tmp/artifacts/avni-autopilot.tar.gz \
+              --exclude='.git' \
+              --exclude='.venv' \
+              --exclude='__pycache__' \
+              --exclude='*.pyc' \
+              --exclude='.pytest_cache' \
+              --exclude='logs' \
+              --exclude='resources/input' \
+              --exclude='resources/output' \
+              .
+
+      - store_artifacts:
+          path: /tmp/artifacts
+
+      - persist_to_workspace:
+          root: /tmp/artifacts
+          paths:
+            - avni-autopilot.tar.gz
+
+  test:
+    docker:
+      - image: cimg/python:3.11.9
+    steps:
+      - checkout
+
+      - run:
+          name: Install uv
+          command: |
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+
+      - restore_cache:
+          keys:
+            - v1-deps-{{ checksum "pyproject.toml" }}
+
+      - run:
+          name: Install dependencies
+          command: uv sync --extra dev
+
+      - run:
+          name: Run tests
+          command: uv run pytest tests/ -v
+          environment:
+            AVNI_SERVER_BASE_URL: "https://staging.avniproject.org"
+            ANTHROPIC_API_KEY: "test_key_for_unit_tests"
+            VOYAGE_API_KEY: "test_key_for_unit_tests"
+
+      - store_test_results:
+          path: test-results
+
+  staging_deploy:
+    docker:
+      - image: cimg/deploy:2025.01
+    steps:
+      - attach_workspace:
+          at: /tmp/artifacts
+      - aws-cli/setup:
+          role_arn: "arn:aws:iam::118388513628:role/avni_circleci_instance_connect"
+          region: "ap-south-1"
+      - setup_server_access:
+          instance-id: "i-0879e9c88952968ea"
+          availability-zone: "ap-south-1a"
+      - deploy_as_service:
+          env: "staging"
+
+  prerelease_deploy:
+    docker:
+      - image: cimg/deploy:2025.01
+    steps:
+      - attach_workspace:
+          at: /tmp/artifacts
+      - aws-cli/setup:
+          role_arn: "arn:aws:iam::118388513628:role/avni_circleci_instance_connect"
+          region: "ap-south-1"
+      - setup_server_access:
+          instance-id: "i-0cdce9ae698eb3462"
+          availability-zone: "ap-south-1b"
+      - deploy_as_service:
+          env: "prerelease"
+
+  prod_deploy:
+    docker:
+      - image: cimg/deploy:2025.01
+    steps:
+      - attach_workspace:
+          at: /tmp/artifacts
+      - aws-cli/setup:
+          role_arn: "arn:aws:iam::118388513628:role/avni_circleci_instance_connect"
+          region: "ap-south-1"
+      - setup_server_access:
+          instance-id: "i-07df2679f68762a68"
+          availability-zone: "ap-south-1a"
+      - deploy_as_service:
+          env: "prod"
+
+workflows:
+  version: 2
+  build-test-deploy:
+    jobs:
+      - build
+      - test:
+          requires:
+            - build
+      - staging_approve:
+          type: approval
+          requires:
+            - test
+      - staging_deploy:
+          requires:
+            - staging_approve
+          context:
+            - non-prod-deploy
+      - prerelease_approve:
+          type: approval
+          requires:
+            - test
+          filters:
+            branches:
+              ignore:
+                - master
+      - prerelease_deploy:
+          requires:
+            - prerelease_approve
+          context:
+            - non-prod-deploy
+      - prod_approve:
+          type: approval
+          requires:
+            - test
+          filters:
+            branches:
+              ignore:
+                - master
+      - prod_deploy:
+          requires:
+            - prod_approve
+          context:
+            - prod-deploy
