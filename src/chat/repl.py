@@ -50,18 +50,17 @@ def _tool_label(name: str, args: dict) -> str:
     Falls back to `name(args)` for any tool we haven't given a label,
     so a newly-added tool degrades gracefully instead of disappearing.
     """
-    org = (args.get("org") or "").strip()
     if name == "generate_bundle":
-        return f"Generating bundle for {org}…" if org else "Generating bundle…"
+        return "Building your app…"
     if name == "edit_bundle_from_spec":
-        return f"Updating bundle for {org} from spec…" if org else "Updating bundle from spec…"
+        return "Updating your app…"
     if name == "resume_bundle":
-        return "Applying your decisions…"
+        return "Continuing where we left off…"
     if name == "list_bundle_fields":
-        return "Listing bundle fields…"
+        return "Listing your app's fields…"
     if name == "edit_bundle_fields":
         n = len(args.get("operations") or [])
-        return f"Editing {n} field(s)…" if n else "Editing bundle fields…"
+        return f"Editing {n} field(s)…" if n else "Editing your app's fields…"
     # Unknown tool — keep the technical fallback so devs aren't left guessing.
     arg_str = json.dumps(args, default=str)
     if len(arg_str) > 80:
