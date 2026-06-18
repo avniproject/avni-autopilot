@@ -83,16 +83,29 @@ def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
     """
     thread_id = config["configurable"]["thread_id"]
     result: dict | None = None
+    caught: str = "none"
     try:
         result = _pipeline_graph.invoke(input_or_command, config=config)
-    except GraphInterrupt:
-        pass
+        log.info(
+            "invoke returned thread_id=%s type=%s keys=%s",
+            thread_id,
+            type(result).__name__,
+            list(result.keys())[:12] if isinstance(result, dict) else None,
+        )
+    except GraphInterrupt as exc:
+        caught = "GraphInterrupt"
+        log.info("invoke raised GraphInterrupt thread_id=%s args_len=%d", thread_id, len(exc.args or ()))
+    except BaseException as exc:  # noqa: BLE001 — diagnostic: see what's really being raised
+        caught = type(exc).__name__
+        log.info("invoke raised %s thread_id=%s msg=%s", caught, thread_id, str(exc)[:200])
+        raise
 
     snapshot = _pipeline_graph.get_state(config)
     is_paused = bool(snapshot and snapshot.next)
     log.info(
-        "post-invoke thread_id=%s is_paused=%s tasks=%d",
-        thread_id, is_paused, len(getattr(snapshot, "tasks", []) or []),
+        "post-invoke thread_id=%s caught=%s is_paused=%s tasks=%d snapshot_values_keys=%s",
+        thread_id, caught, is_paused, len(getattr(snapshot, "tasks", []) or []),
+        list((getattr(snapshot, "values", {}) or {}).keys())[:12],
     )
 
     if is_paused:

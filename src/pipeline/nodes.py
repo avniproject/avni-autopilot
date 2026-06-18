@@ -237,14 +237,29 @@ def apply_user_decisions(state: BundleState) -> dict:
     confirmed therefore still match.
     """
     pending_dicts = state.get("pending_changes") or []
+    log.info(
+        "[%s] apply_user_decisions entered pending=%d",
+        state.get("org_name", "?"), len(pending_dicts),
+    )
     if not pending_dicts:
+        log.info("[%s] apply_user_decisions: no pending, skipping interrupt", state.get("org_name", "?"))
         return {}
 
+    log.info(
+        "[%s] apply_user_decisions: calling interrupt() with %d pending",
+        state.get("org_name", "?"), len(pending_dicts),
+    )
     resolutions = interrupt({
         "kind": "confirm_changes",
         "org": state["org_name"],
         "changes": pending_dicts,
     })
+    log.info(
+        "[%s] apply_user_decisions: interrupt() RETURNED (resumed) with type=%s len=%s",
+        state.get("org_name", "?"),
+        type(resolutions).__name__,
+        len(resolutions) if hasattr(resolutions, "__len__") else "n/a",
+    )
 
     pending = [Change(**d) for d in pending_dicts]
     spec = state["entity_spec"]
