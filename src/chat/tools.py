@@ -74,26 +74,67 @@ def _summarize(state: dict) -> dict:
 
 
 def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
-    """Invoke the pipeline; if it interrupts, return the pending payload.
+    """Invoke the pipeline; if it pauses on interrupt(), return needs_confirmation.
 
-    LangGraph 1.x raises `GraphInterrupt` when `interrupt()` fires inside a
-    node (the 0.x behaviour of returning `result["__interrupt__"]` no longer
-    holds). Catch it here, extract the interrupt payload, and surface the
-    `needs_confirmation` shape the chat agent + browser already expect.
+    LangGraph 1.x persists the suspended state on the checkpointer when a
+    node calls `interrupt()`. Whether `invoke()` returns or raises depends
+    on the exact 1.x version, so this function:
+
+      1. Tries `invoke()`. Catches `GraphInterrupt` if raised.
+      2. Reads `get_state(config)` to determine whether the graph is
+         actually paused (`snapshot.next` non-empty), which is the
+         authoritative signal in 1.x and works for both code paths.
+      3. Extracts the interrupt payload from `snapshot.tasks[*].interrupts`.
+
     Resume happens via `resume_bundle` → `Command(resume=...)`.
     """
+    thread_id = config["configurable"]["thread_id"]
+    result: dict | None = None
     try:
         result = _pipeline_graph.invoke(input_or_command, config=config)
-    except GraphInterrupt as exc:
-        interrupts = exc.args[0] if exc.args else ()
-        first = interrupts[0] if interrupts else None
-        payload = getattr(first, "value", None)
-        if payload is None and isinstance(first, dict):
-            payload = first.get("value")
+    except GraphInterrupt:
+        pass
+
+    snapshot = _pipeline_graph.get_state(config)
+    is_paused = bool(snapshot and snapshot.next)
+    log.info(
+        "post-invoke thread_id=%s is_paused=%s next=%s values_keys=%s tasks=%d",
+        thread_id, is_paused,
+        getattr(snapshot, "next", None),
+        list((getattr(snapshot, "values", {}) or {}).keys())[:6],
+        len(getattr(snapshot, "tasks", []) or []),
+    )
+
+    if is_paused:
+        payload: dict = {}
+        for task in (snapshot.tasks or []):
+            for itr in (getattr(task, "interrupts", None) or []):
+                value = getattr(itr, "value", None)
+                if value is None and isinstance(itr, dict):
+                    value = itr.get("value")
+                if value:
+                    payload = value if isinstance(value, dict) else {"value": value}
+                    break
+            if payload:
+                break
         return {
             "status": "needs_confirmation",
-            "thread_id": config["configurable"]["thread_id"],
-            "payload": payload or {},
+            "thread_id": thread_id,
+            "payload": payload,
+        }
+
+    if result is None:
+        # GraphInterrupt was raised but the snapshot says we are not paused —
+        # something is wrong with the checkpointer setup. Surface, do not lie.
+        return {
+            "status": "error",
+            "code": "E_INTERRUPT_NOT_PERSISTED",
+            "error": (
+                "The pipeline raised an interrupt but the checkpointer did "
+                "not retain the paused state. Tell the user the build "
+                f"failed (thread_id={thread_id!r}) and ask whether they "
+                "want to retry — do NOT claim you can resume."
+            ),
         }
     return _summarize(result)
 
@@ -206,10 +247,16 @@ def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
     if not has_checkpoint:
         return {
             "status": "error",
+            "code": "E_NO_CHECKPOINT",
             "error": (
-                f"no paused bundle run found for thread_id={thread_id!r}. "
-                "The session may have expired or the service may have restarted. "
-                "Start a new bundle run with `generate_bundle`."
+                f"The paused bundle run for thread_id={thread_id!r} is gone "
+                "(likely a service restart). The pending changes the user "
+                "decided on cannot be applied — the run that produced them "
+                "no longer exists. Tell the user the previous run was lost "
+                "and ask whether they want to start a NEW run. Do NOT call "
+                "generate_bundle without the user's explicit confirmation, "
+                "and do NOT claim you can carry their previous decisions "
+                "forward — you cannot."
             ),
         }
     return _run_with_interrupt_handling(Command(resume=resolutions), config)
