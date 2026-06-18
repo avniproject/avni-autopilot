@@ -8,6 +8,7 @@ bundle pipeline (or the bundle editor).
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Literal
@@ -15,6 +16,8 @@ from typing import Literal
 from langchain_core.tools import tool
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
+
+log = logging.getLogger(__name__)
 
 from config import settings
 from domain.bundle_editor import (
@@ -194,6 +197,21 @@ def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
             "edit:<new_value>"  — apply with a user-provided override
     """
     config = {"configurable": {"thread_id": thread_id}}
+    snapshot = _pipeline_graph.get_state(config)
+    has_checkpoint = bool(snapshot and (snapshot.next or snapshot.values))
+    log.info(
+        "resume_bundle thread_id=%s has_checkpoint=%s n_resolutions=%d",
+        thread_id, has_checkpoint, len(resolutions or {}),
+    )
+    if not has_checkpoint:
+        return {
+            "status": "error",
+            "error": (
+                f"no paused bundle run found for thread_id={thread_id!r}. "
+                "The session may have expired or the service may have restarted. "
+                "Start a new bundle run with `generate_bundle`."
+            ),
+        }
     return _run_with_interrupt_handling(Command(resume=resolutions), config)
 
 

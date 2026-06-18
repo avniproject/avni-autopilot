@@ -221,7 +221,11 @@ class ChatService:
             except Exception:  # noqa: BLE001
                 pass
 
-        lines = ["My decisions on the pending changes:"]
+        thread_id = context.get("thread_id", "")
+        lines = [
+            "My decisions on the pending changes for the bundle run "
+            f"(call resume_bundle with thread_id={thread_id!r}):"
+        ]
         for r in resolutions:
             change_id = r.get("change_id", "")
             decision = (r.get("decision") or "").lower()
@@ -232,6 +236,10 @@ class ChatService:
                 lines.append(f"- {change_id}: edit:{value}")
             else:
                 lines.append(f"- {change_id}: {decision}")
+        log.info(
+            "resolve sid=%s interrupt_id=%s thread_id=%s n=%d",
+            self._session.session_id, interrupt_id, thread_id, len(resolutions),
+        )
         await self.send_message("\n".join(lines))
         return True
 
