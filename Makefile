@@ -11,7 +11,7 @@ start:
 	uv run avni-autopilot
 
 test:
-	uv run pytest --cov=src
+	uv run pytest
 
 build-and-deploy-to-staging:
 	tar -czf /tmp/avni-autopilot.tar.gz \

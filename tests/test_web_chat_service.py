@@ -235,7 +235,11 @@ async def test_resolve_formats_message_and_runs_turn(tmp_path: Path) -> None:
     await asyncio.wait_for(svc._running_task, timeout=1.0)  # type: ignore[arg-type]
 
     text = captured["text"]
-    assert "My decisions on the pending changes:" in text
+    assert "My decisions on the pending changes" in text
+    # thread_id from the prior needs_confirmation is round-tripped explicitly
+    # so the agent doesn't have to remember it from the prior tool result.
+    assert "thread_id='bundle-srijan-1'" in text
+    assert "resume_bundle" in text
     assert "- c-1: yes" in text
     assert "- c-2: edit:Better name" in text
     assert "- c-3: no" in text
