@@ -97,17 +97,29 @@ def _install_fake_avni_server(
 
     def fake_async_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
         def handler(request: httpx.Request) -> httpx.Response:
-            assert request.url.path == "/import/new"
-            # All six params avni-server's ImportController requires must be present.
-            assert request.url.params.get("type") == "metadataZip"
-            assert request.url.params.get("autoApprove") == "false"
-            assert "locationUploadMode" in request.url.params
-            assert "locationHierarchy" in request.url.params
-            assert "encounterUploadMode" in request.url.params
-            # avni-server auth filter wants both AUTH-TOKEN and user-name.
-            assert request.headers.get("AUTH-TOKEN")
-            assert request.headers.get("user-name")
-            return httpx.Response(import_status, content=import_body)
+            if request.url.path == "/import/new":
+                # All six params avni-server's ImportController requires must be present.
+                assert request.url.params.get("type") == "metadataZip"
+                assert request.url.params.get("autoApprove") == "false"
+                assert "locationUploadMode" in request.url.params
+                assert "locationHierarchy" in request.url.params
+                assert "encounterUploadMode" in request.url.params
+                # avni-server auth filter wants both AUTH-TOKEN and user-name.
+                assert request.headers.get("AUTH-TOKEN")
+                assert request.headers.get("user-name")
+                # On success avni-server returns the literal "true"; on failure
+                # callers can override import_body to inspect the error path.
+                body = "true" if import_status == 200 else import_body
+                return httpx.Response(import_status, content=body)
+            if request.url.path == "/import/status":
+                # Production code calls this after a successful /import/new to
+                # resolve the job UUID by fileName. import_body doubles as the
+                # job UUID in this path.
+                return httpx.Response(
+                    200,
+                    json={"content": [{"fileName": "Srijan.zip", "uuid": import_body}]},
+                )
+            raise AssertionError(f"unexpected request to {request.url.path}")
         kwargs["transport"] = httpx.MockTransport(handler)
         return real_async_client(*args, **kwargs)
 
