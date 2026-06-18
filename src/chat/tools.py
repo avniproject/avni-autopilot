@@ -76,16 +76,9 @@ def _summarize(state: dict) -> dict:
 def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
     """Invoke the pipeline; if it pauses on interrupt(), return needs_confirmation.
 
-    LangGraph 1.x persists the suspended state on the checkpointer when a
-    node calls `interrupt()`. Whether `invoke()` returns or raises depends
-    on the exact 1.x version, so this function:
-
-      1. Tries `invoke()`. Catches `GraphInterrupt` if raised.
-      2. Reads `get_state(config)` to determine whether the graph is
-         actually paused (`snapshot.next` non-empty), which is the
-         authoritative signal in 1.x and works for both code paths.
-      3. Extracts the interrupt payload from `snapshot.tasks[*].interrupts`.
-
+    The graph's checkpointer (SqliteSaver, see `pipeline.graph._default_checkpointer`)
+    persists the suspended state across the GraphInterrupt unwind, so
+    `get_state(config).next` is the authoritative paused signal here.
     Resume happens via `resume_bundle` → `Command(resume=...)`.
     """
     thread_id = config["configurable"]["thread_id"]
@@ -98,11 +91,8 @@ def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
     snapshot = _pipeline_graph.get_state(config)
     is_paused = bool(snapshot and snapshot.next)
     log.info(
-        "post-invoke thread_id=%s is_paused=%s next=%s values_keys=%s tasks=%d",
-        thread_id, is_paused,
-        getattr(snapshot, "next", None),
-        list((getattr(snapshot, "values", {}) or {}).keys())[:6],
-        len(getattr(snapshot, "tasks", []) or []),
+        "post-invoke thread_id=%s is_paused=%s tasks=%d",
+        thread_id, is_paused, len(getattr(snapshot, "tasks", []) or []),
     )
 
     if is_paused:
@@ -112,7 +102,7 @@ def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
                 value = getattr(itr, "value", None)
                 if value is None and isinstance(itr, dict):
                     value = itr.get("value")
-                if value:
+                if value is not None:
                     payload = value if isinstance(value, dict) else {"value": value}
                     break
             if payload:
@@ -123,20 +113,18 @@ def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
             "payload": payload,
         }
 
-    if result is None:
-        # GraphInterrupt was raised but the snapshot says we are not paused —
-        # something is wrong with the checkpointer setup. Surface, do not lie.
-        return {
-            "status": "error",
-            "code": "E_INTERRUPT_NOT_PERSISTED",
-            "error": (
-                "The pipeline raised an interrupt but the checkpointer did "
-                "not retain the paused state. Tell the user the build "
-                f"failed (thread_id={thread_id!r}) and ask whether they "
-                "want to retry — do NOT claim you can resume."
-            ),
-        }
-    return _summarize(result)
+    if result is not None:
+        return _summarize(result)
+
+    return {
+        "status": "error",
+        "code": "E_INTERRUPT_NOT_PERSISTED",
+        "error": (
+            f"Build failed (thread_id={thread_id!r}). Tell the user the "
+            "build failed and ask whether they want to retry — do NOT "
+            "claim you can resume."
+        ),
+    }
 
 
 # ── Tools ────────────────────────────────────────────────────────────────────

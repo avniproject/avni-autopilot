@@ -92,6 +92,14 @@ class Settings:
     # Port the FastAPI service listens on locally. 8023 matches the existing
     # avni-ai infra slot autopilot inherits; ALBs map 443/80 → this port.
     ai_web_port: int = _env_int("AI_WEB_PORT", 8023)
+    # SQLite file the pipeline graph's LangGraph checkpointer writes to. Must
+    # be on a path that survives `deploy_application.yml` (i.e., NOT under
+    # /opt/avni-autopilot/current/). Falls back to a project-local file for
+    # local dev / tests so they get the same persistence semantics as prod.
+    checkpoint_db_path: str = _env(
+        "AI_CHECKPOINT_DB_PATH",
+        os.path.join(_PROJECT_ROOT, "resources", "output", "_checkpoints.db"),
+    )
 
 
 settings = Settings()

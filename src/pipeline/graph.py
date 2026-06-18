@@ -7,10 +7,17 @@ Reads node implementations from `pipeline.nodes`; state schema from
 
 from __future__ import annotations
 
+import logging
+import os
+import sqlite3
 from typing import Any
 
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
+
+from config import settings
+
+log = logging.getLogger(__name__)
 
 from pipeline.nodes import (
     apply_diff_edits,
@@ -88,4 +95,24 @@ def build_graph(checkpointer=None) -> Any:
     graph.add_edge("apply_diff_edits", END)
 
     # A checkpointer is required for `interrupt()` to be resumable.
-    return graph.compile(checkpointer=checkpointer or MemorySaver())
+    return graph.compile(checkpointer=checkpointer or _default_checkpointer())
+
+
+def _default_checkpointer() -> SqliteSaver:
+    """SqliteSaver pointing at the file in `settings.checkpoint_db_path`.
+
+    Persists across process restarts so a user mid-HITL doesn't lose the
+    paused state on deploy / OOM. The connection uses
+    `check_same_thread=False` because LangChain executes sync tools in
+    a thread executor — the writer is still serialised by SQLite's
+    file lock; the flag just allows reads/writes from the executor thread.
+    """
+    path = settings.checkpoint_db_path
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    conn = sqlite3.connect(path, check_same_thread=False)
+    saver = SqliteSaver(conn)
+    saver.setup()
+    log.info(f"pipeline checkpointer: SqliteSaver({path})")
+    return saver
