@@ -289,6 +289,12 @@ class ChatService:
         for _node, state_update in chunk.items():
             if not state_update:
                 continue
+            # LangGraph 1.x emits non-dict values for special chunks like
+            # `__interrupt__` (tuple of Interrupt objects). HITL in this graph
+            # is surfaced via the `needs_confirmation` tool result instead, so
+            # skip everything that isn't a node-state dict.
+            if not isinstance(state_update, dict):
+                continue
             for msg in state_update.get("messages", []) or []:
                 self._handle_message(msg)
 
