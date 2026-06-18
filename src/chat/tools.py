@@ -14,7 +14,6 @@ import time
 from typing import Literal
 
 from langchain_core.tools import tool
-from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 log = logging.getLogger(__name__)
@@ -74,70 +73,39 @@ def _summarize(state: dict) -> dict:
 
 
 def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
-    """Invoke the pipeline; if it pauses on interrupt(), return needs_confirmation.
+    """Invoke the pipeline. If it pauses at `apply_user_decisions` (declarative
+    interrupt, see pipeline.graph.build_graph), return `needs_confirmation`
+    with the pending changes that the user must review.
 
-    The graph's checkpointer (SqliteSaver, see `pipeline.graph._default_checkpointer`)
-    persists the suspended state across the GraphInterrupt unwind, so
-    `get_state(config).next` is the authoritative paused signal here.
-    Resume happens via `resume_bundle` → `Command(resume=...)`.
+    The graph is compiled with `interrupt_before=["apply_user_decisions"]`,
+    so `invoke()` returns normally with the paused state visible on the
+    snapshot — no GraphInterrupt exception is raised on the happy path.
     """
     thread_id = config["configurable"]["thread_id"]
-    result: dict | None = None
-    caught: str = "none"
-    try:
-        result = _pipeline_graph.invoke(input_or_command, config=config)
-        log.info(
-            "invoke returned thread_id=%s type=%s keys=%s",
-            thread_id,
-            type(result).__name__,
-            list(result.keys())[:12] if isinstance(result, dict) else None,
-        )
-    except GraphInterrupt as exc:
-        caught = "GraphInterrupt"
-        log.info("invoke raised GraphInterrupt thread_id=%s args_len=%d", thread_id, len(exc.args or ()))
-    except BaseException as exc:  # noqa: BLE001 — diagnostic: see what's really being raised
-        caught = type(exc).__name__
-        log.info("invoke raised %s thread_id=%s msg=%s", caught, thread_id, str(exc)[:200])
-        raise
+    result = _pipeline_graph.invoke(input_or_command, config=config)
 
     snapshot = _pipeline_graph.get_state(config)
     is_paused = bool(snapshot and snapshot.next)
     log.info(
-        "post-invoke thread_id=%s caught=%s is_paused=%s tasks=%d snapshot_values_keys=%s",
-        thread_id, caught, is_paused, len(getattr(snapshot, "tasks", []) or []),
-        list((getattr(snapshot, "values", {}) or {}).keys())[:12],
+        "post-invoke thread_id=%s is_paused=%s next=%s pending=%d",
+        thread_id, is_paused,
+        getattr(snapshot, "next", None),
+        len(((getattr(snapshot, "values", {}) or {}).get("pending_changes")) or []),
     )
 
     if is_paused:
-        payload: dict = {}
-        for task in (snapshot.tasks or []):
-            for itr in (getattr(task, "interrupts", None) or []):
-                value = getattr(itr, "value", None)
-                if value is None and isinstance(itr, dict):
-                    value = itr.get("value")
-                if value is not None:
-                    payload = value if isinstance(value, dict) else {"value": value}
-                    break
-            if payload:
-                break
+        values = getattr(snapshot, "values", {}) or {}
         return {
             "status": "needs_confirmation",
             "thread_id": thread_id,
-            "payload": payload,
+            "payload": {
+                "kind": "confirm_changes",
+                "org": values.get("org_name", ""),
+                "changes": values.get("pending_changes") or [],
+            },
         }
 
-    if result is not None:
-        return _summarize(result)
-
-    return {
-        "status": "error",
-        "code": "E_INTERRUPT_NOT_PERSISTED",
-        "error": (
-            f"Build failed (thread_id={thread_id!r}). Tell the user the "
-            "build failed and ask whether they want to retry — do NOT "
-            "claim you can resume."
-        ),
-    }
+    return _summarize(result)
 
 
 # ── Tools ────────────────────────────────────────────────────────────────────
@@ -260,7 +228,12 @@ def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
                 "forward — you cannot."
             ),
         }
-    return _run_with_interrupt_handling(Command(resume=resolutions), config)
+    # Inject the user's resolutions into state, then resume from the
+    # interrupt_before pause. `None` as the input tells LangGraph to
+    # continue from the persisted checkpoint with whatever state we
+    # just wrote via update_state.
+    _pipeline_graph.update_state(config, {"user_resolutions": resolutions or {}})
+    return _run_with_interrupt_handling(None, config)
 
 
 @tool

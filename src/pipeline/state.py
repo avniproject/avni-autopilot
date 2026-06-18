@@ -29,9 +29,12 @@ class BundleState(TypedDict):
     form_link_warnings: list[str]
     # LLM enrichment
     user_instructions: str | None           # passed through from chat tool
-    pending_changes: list[dict]             # surfaced via interrupt(); empty after resume
+    pending_changes: list[dict]             # set by enrich_with_llm; cleared after apply
     applied_changes: list[dict]             # for the run summary + audit log
     enrich_warnings: list[str]
+    # HITL — written into state by chat_service via update_state before resume,
+    # consumed by apply_user_decisions. Map of change_id → "yes"|"no"|"edit:<v>".
+    user_resolutions: dict[str, str]
     # Generated JSON
     subject_types_json: list[dict]
     operational_subject_types_json: dict
@@ -73,6 +76,7 @@ def initial_state(
         "pending_changes": [],
         "applied_changes": [],
         "enrich_warnings": [],
+        "user_resolutions": {},
         "subject_types_json": [],
         "operational_subject_types_json": {},
         "programs_json": [],

@@ -16,7 +16,6 @@ import zipfile
 from typing import Any
 
 import pandas as pd
-from langgraph.types import interrupt
 
 from domain.bundle_editor import apply_field_edits, load_bundle_snapshot
 from domain.changes import apply_resolutions
@@ -230,36 +229,25 @@ def enrich_with_llm(state: BundleState) -> dict:
 
 
 def apply_user_decisions(state: BundleState) -> dict:
-    """If there are pending changes, ask the user via interrupt and apply.
+    """Apply HITL resolutions to the pending changes.
 
-    On resume, only this node re-executes — `enrich_with_llm` already ran on
-    the first pass and its pending list is in state. The change_ids the user
-    confirmed therefore still match.
+    The graph is compiled with `interrupt_before=["apply_user_decisions"]`,
+    so the framework pauses BEFORE this node runs and persists state via the
+    checkpointer. `chat_service.resolve` writes the user's resolutions into
+    `state.user_resolutions` via `update_state(...)`, then resumes with
+    `invoke(None, config)`. This node reads those resolutions and applies
+    them. On a paused-but-unresumed graph, this body never runs.
     """
     pending_dicts = state.get("pending_changes") or []
     log.info(
-        "[%s] apply_user_decisions entered pending=%d",
+        "[%s] apply_user_decisions entered pending=%d resolutions=%d",
         state.get("org_name", "?"), len(pending_dicts),
+        len(state.get("user_resolutions") or {}),
     )
     if not pending_dicts:
-        log.info("[%s] apply_user_decisions: no pending, skipping interrupt", state.get("org_name", "?"))
         return {}
 
-    log.info(
-        "[%s] apply_user_decisions: calling interrupt() with %d pending",
-        state.get("org_name", "?"), len(pending_dicts),
-    )
-    resolutions = interrupt({
-        "kind": "confirm_changes",
-        "org": state["org_name"],
-        "changes": pending_dicts,
-    })
-    log.info(
-        "[%s] apply_user_decisions: interrupt() RETURNED (resumed) with type=%s len=%s",
-        state.get("org_name", "?"),
-        type(resolutions).__name__,
-        len(resolutions) if hasattr(resolutions, "__len__") else "n/a",
-    )
+    resolutions = state.get("user_resolutions") or {}
 
     pending = [Change(**d) for d in pending_dicts]
     spec = state["entity_spec"]

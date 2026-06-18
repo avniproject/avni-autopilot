@@ -94,8 +94,15 @@ def build_graph(checkpointer=None) -> Any:
     graph.add_edge("diff_against_bundle", "apply_diff_edits")
     graph.add_edge("apply_diff_edits", END)
 
-    # A checkpointer is required for `interrupt()` to be resumable.
-    return graph.compile(checkpointer=checkpointer or _default_checkpointer())
+    # Declarative interrupt: the framework pauses BEFORE apply_user_decisions
+    # and persists state via the checkpointer. This avoids the LangGraph 1.2
+    # dynamic-interrupt() persistence gap (observed: GraphInterrupt raised but
+    # SqliteSaver receives no put()). Resolutions are written via update_state
+    # by chat_service.resolve before invoke(None, config) resumes.
+    return graph.compile(
+        checkpointer=checkpointer or _default_checkpointer(),
+        interrupt_before=["apply_user_decisions"],
+    )
 
 
 def _default_checkpointer() -> SqliteSaver:
