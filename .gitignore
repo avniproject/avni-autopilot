@@ -33,6 +33,7 @@ htmlcov/
 resources/output/
 resources/temp/
 specs/diagrams/
+resources/input
 
 # Rule generation embedding cache (recomputed by `avni-rules-kb rebuild`)
 resources/rules/.embeddings.json

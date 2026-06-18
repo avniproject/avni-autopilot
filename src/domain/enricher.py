@@ -75,11 +75,14 @@ def _all_fields(form: FormSpec) -> list[FieldSpec]:
 
 
 def _drop_unjustified_changes(
-    changes: list[Change], parser_form: FormSpec, warnings: list[str]
+    changes: list[Change], parser_form: FormSpec
 ) -> list[Change]:
     # Strict: keep only changes that match a real condition in the parser form.
     # long_name:        change.field must name a field with length > 255.
     # duplicate_field:  change.field must name a field that appears > 1 time.
+    #
+    # Drops are LLM hallucinations the deterministic gate corrected — logged
+    # for telemetry, not surfaced to the user.
     long_field_names_lower = {
         f.name.strip().lower()
         for f in _all_fields(parser_form)
@@ -95,16 +98,16 @@ def _drop_unjustified_changes(
         key = (ch.field or "").strip().lower()
         if ch.kind == "long_name":
             if key not in long_field_names_lower:
-                warnings.append(
-                    f"Dropped long_name {ch.change_id} — '{ch.field[:80]}' is "
-                    f"not a >{NAME_LIMIT}-char field in form '{parser_form.name}'"
+                log.info(
+                    "[enrich] dropped long_name %s — '%s' is not a >%d-char field in form '%s'",
+                    ch.change_id, ch.field[:80], NAME_LIMIT, parser_form.name,
                 )
                 continue
         elif ch.kind == "duplicate_field":
             if name_counts.get(key, 0) <= 1:
-                warnings.append(
-                    f"Dropped duplicate_field {ch.change_id} on '{ch.field}' — "
-                    f"name appears only once in form"
+                log.info(
+                    "[enrich] dropped duplicate_field %s on '%s' — name appears only once in form '%s'",
+                    ch.change_id, ch.field, parser_form.name,
                 )
                 continue
         kept.append(ch)
@@ -140,8 +143,7 @@ def enrich_form(
             f"LLM enrichment failed for form '{parser_form.name}': {exc}"
         ]
 
-    warnings: list[str] = []
-    justified = _drop_unjustified_changes(enriched.changes, parser_form, warnings)
+    justified = _drop_unjustified_changes(enriched.changes, parser_form)
 
     # Namespace change_ids with the form name. Haiku's prompt only requires
     # uniqueness *within* a form, so two different forms can both emit
@@ -153,11 +155,8 @@ def enrich_form(
         for ch in justified
     ]
 
-    log.info(
-        "[enrich] %s: %d pending, %d warnings",
-        parser_form.name, len(justified), len(warnings),
-    )
-    return parser_form, [], justified, warnings
+    log.info("[enrich] %s: %d pending", parser_form.name, len(justified))
+    return parser_form, [], justified, []
 
 
 def enrich_forms(

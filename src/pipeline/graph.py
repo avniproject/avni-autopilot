@@ -89,20 +89,3 @@ def build_graph(checkpointer=None) -> Any:
 
     # A checkpointer is required for `interrupt()` to be resumable.
     return graph.compile(checkpointer=checkpointer or MemorySaver())
-
-
-def run(org_name: str, input_dir: str, output_dir: str,
-        user_instructions: str | None = None,
-        thread_id: str | None = None) -> BundleState:
-    """Run the pipeline end-to-end. If it interrupts, the partial state is returned.
-
-    The chat host typically uses `build_graph()` directly to stream events
-    and handle interrupts; `run()` is a convenience for non-interactive
-    callers (no API key, clean inputs, no confirmation needed).
-    """
-    pipeline = build_graph()
-    config = {"configurable": {"thread_id": thread_id or f"thread-{org_name}"}}
-    return pipeline.invoke(
-        initial_state(org_name, input_dir, output_dir, user_instructions),
-        config=config,
-    )

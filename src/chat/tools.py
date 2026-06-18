@@ -13,6 +13,7 @@ import time
 from typing import Literal
 
 from langchain_core.tools import tool
+from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from config import settings
@@ -72,17 +73,17 @@ def _summarize(state: dict) -> dict:
 def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
     """Invoke the pipeline; if it interrupts, return the pending payload.
 
-    The pipeline graph uses LangGraph's `interrupt()` in
-    `apply_user_decisions`. On invoke that returns a dict whose
-    `__interrupt__` key carries the interrupt info, the caller (the chat
-    agent) presents it to the user. Once the user responds, the agent
-    calls `resume_bundle` with the same thread_id and the pipeline
-    resumes from the interrupt point.
+    LangGraph 1.x raises `GraphInterrupt` when `interrupt()` fires inside a
+    node (the 0.x behaviour of returning `result["__interrupt__"]` no longer
+    holds). Catch it here, extract the interrupt payload, and surface the
+    `needs_confirmation` shape the chat agent + browser already expect.
+    Resume happens via `resume_bundle` → `Command(resume=...)`.
     """
-    result = _pipeline_graph.invoke(input_or_command, config=config)
-    interrupts = result.get("__interrupt__")
-    if interrupts:
-        first = interrupts[0]
+    try:
+        result = _pipeline_graph.invoke(input_or_command, config=config)
+    except GraphInterrupt as exc:
+        interrupts = exc.args[0] if exc.args else ()
+        first = interrupts[0] if interrupts else None
         payload = getattr(first, "value", None)
         if payload is None and isinstance(first, dict):
             payload = first.get("value")
