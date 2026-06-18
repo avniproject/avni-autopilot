@@ -89,10 +89,9 @@ class Settings:
     # Absolute session lifetime (hours). Sessions older than this are reaped
     # even if active — defence against runaway tabs.
     ai_session_max_hours: int = _env_int("AI_SESSION_MAX_HOURS", 2)
-    # Port the FastAPI service listens on locally. Default 8090 to dodge
-    # avni-server's 8080 on a dev machine; ALBs in front of it map
-    # 443/80 → this port (per DEPLOYMENT_SDD §5).
-    ai_web_port: int = _env_int("AI_WEB_PORT", 8090)
+    # Port the FastAPI service listens on locally. 8023 matches the existing
+    # avni-ai infra slot autopilot inherits; ALBs map 443/80 → this port.
+    ai_web_port: int = _env_int("AI_WEB_PORT", 8023)
 
 
 settings = Settings()
