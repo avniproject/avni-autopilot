@@ -41,6 +41,11 @@ class FieldSpec(BaseModel):
     isQuestionGroup: bool = False
     isRepeatable: bool = False  # Only meaningful when isQuestionGroup=True
     children: list["FieldSpec"] | None = None  # Child fields for QG/RQG
+    # Composed natural-language intent driving `formElement.rule` generation —
+    # visibility / value / validation / answer-filter fragments concatenated
+    # by the parser. None when no behaviour columns were populated for this
+    # field. See specs/FIELD_AND_PAGE_VISIBILITY_RULES_SDD.md §6.1.
+    rule_intent: str | None = None
 
 
 # ── Form-level ─────────────────────────────────────────────────────────────────

@@ -430,6 +430,137 @@ def set_form_rule(
     }
 
 
+@tool
+def set_form_element_rule(
+    bundle_path: str,
+    form_name: str,
+    page_name: str,
+    field_name: str,
+    intent: str,
+) -> dict:
+    """Generate JS for a single field's `formElement.rule` slot and write it.
+
+    Targets `form.formElementGroups[<page>].formElements[<field>].rule`.
+    The behaviour mix (visibility / value / validation / answer-filter) is
+    dictated by the intent text — examples:
+
+      - "show this only when 'Consent given' is Yes"
+      - "pre-fill with the value of 'Mobile number' from registration"
+      - "block save when the date is in the past"
+      - "only allow 'C-section' and 'Assisted' when 'Place of delivery' is Hospital"
+
+    Loads the bundle, builds a RuleSpec from the form's context (formType,
+    subject/program/encounter associations, available concepts, encounter
+    types, and coded-concept answers across the target + registration +
+    enrolment forms), calls the rule generator, validates the produced JS,
+    and on success writes it into the matching form element before
+    re-zipping atomically.
+
+    Before calling this, ground the user's intent against the bundle —
+    short form names, paraphrased field/page names, and casual answer
+    wording are common. Call `list_bundle_fields` first to discover the
+    exact form, page, field, and coded-answer names the intent
+    references (e.g. resolve "yes" → the actual answer concept name on
+    that field). Echo the resolved names back to the user when
+    confirming so any mis-mapping is caught before the rule is written.
+
+    On validation failure (parse error, off-bundle concept, encounter
+    type, or answer) nothing is written and the warnings are returned for
+    the user to act on.
+
+    Args:
+        bundle_path: Path to a bundle ZIP file or an unpacked bundle directory.
+        form_name: Exact name of the form (matches `form.name` in the bundle).
+        page_name: Exact name of the page (matches a
+            `formElementGroups[i].name`).
+        field_name: Exact name of the field (matches a
+            `formElementGroups[i].formElements[j].name`).
+        intent: Natural-language description of what the rule should DO,
+            not how. Any concept, field, or coded-answer names referenced
+            in the intent must match the bundle EXACTLY — quote them as
+            they appear in `list_bundle_fields` output (e.g. use 'Yes'
+            not 'yes', 'Place of delivery' not 'where delivery happened').
+            Mixing behaviours is fine: a single intent can ask for
+            visibility AND a default value AND validation — they all land
+            in the same `FormElementStatus` return.
+            Examples:
+              - "show only when 'Consent given' is Yes"
+              - "pre-fill with the value of 'Mobile number' from
+                 registration"
+              - "block save when the date is before today"
+              - "only allow 'C-section' and 'Assisted delivery' when
+                 'Place of delivery' is Hospital"
+    """
+    try:
+        context = load_form_rule_context(bundle_path, form_name)
+    except FileNotFoundError as exc:
+        return {"status": "error", "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "error": f"unexpected: {exc}"}
+
+    if context is None:
+        return {
+            "status": "error",
+            "error": f"form not found in bundle: {form_name!r}",
+        }
+
+    spec = RuleSpec(
+        rule_kind=RuleKind.FORM_ELEMENT,
+        intent=intent,
+        form_name=form_name,
+        form_type=context["form_type"],
+        subject_type=context["subject_type"],
+        program=context["program"],
+        encounter_type=context["encounter_type"],
+        available_concepts=context["available_concepts"],
+        available_encounter_types=context["available_encounter_types"],
+        available_programs=context["available_programs"],
+        concept_answers=context.get("concept_answers", {}),
+    )
+
+    result = _rule_generator.generate(spec)
+    ok, warnings = _validate_and_decide(result, spec)
+
+    if not ok:
+        return {
+            "status": "rejected",
+            "form_name": form_name,
+            "page_name": page_name,
+            "field_name": field_name,
+            "rule_kind": RuleKind.FORM_ELEMENT.value,
+            "confidence": result.confidence,
+            "warnings": warnings,
+        }
+
+    wrote = write_form_rule(
+        bundle_path, form_name, RuleKind.FORM_ELEMENT.value, result.js,
+        page_name=page_name, field_name=field_name,
+    )
+    if not wrote:
+        return {
+            "status": "error",
+            "error": (
+                f"could not locate form element {field_name!r} on page "
+                f"{page_name!r} of form {form_name!r} — verify the resolved "
+                f"names with list_bundle_fields"
+            ),
+        }
+
+    return {
+        "status": "done",
+        "form_name": form_name,
+        "page_name": page_name,
+        "field_name": field_name,
+        "rule_kind": RuleKind.FORM_ELEMENT.value,
+        "confidence": result.confidence,
+        "used_helpers": result.used_helpers,
+        "referenced_concepts": result.referenced_concepts,
+        "referenced_encounter_types": result.referenced_encounter_types,
+        "warnings": warnings,
+        "js_preview": result.js if len(result.js) <= 400 else result.js[:400] + "...",
+    }
+
+
 TOOLS = [
     generate_bundle,
     edit_bundle_from_spec,
@@ -437,4 +568,5 @@ TOOLS = [
     list_bundle_fields,
     edit_bundle_fields,
     set_form_rule,
+    set_form_element_rule,
 ]

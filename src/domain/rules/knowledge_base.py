@@ -86,7 +86,14 @@ class HelperEntry(BaseModel):
 
 
 class ExampleEntry(BaseModel):
-    """One few-shot example pulled from the curated rule corpus."""
+    """One few-shot example pulled from the curated rule corpus.
+
+    ``kind`` and ``field_name`` are populated only for ``formElementRule``
+    examples (FIELD_AND_PAGE_VISIBILITY_RULES_SDD §6.2 / §7). The form-level
+    rule corpora leave them as the empty string. Neither participates in
+    embedding text — they are surfaced for retrieval-time boosts and for
+    debug rendering.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -99,6 +106,8 @@ class ExampleEntry(BaseModel):
     source_org: str
     js: str
     source_file: str
+    kind: str = ""
+    field_name: str = ""
 
     def embedding_text(self) -> str:
         return self.intent
@@ -298,6 +307,8 @@ class KnowledgeBase:
                 source_org=meta.get("source_org", "").strip(),
                 js=body,
                 source_file=rel,
+                kind=(meta.get("kind") or "").strip(),
+                field_name=(meta.get("field_name") or "").strip(),
             ))
         return out
 

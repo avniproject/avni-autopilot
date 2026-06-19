@@ -820,11 +820,21 @@ def _collect_concept_answers_for(
 
 def write_form_rule(
     bundle_path: str, form_name: str, rule_field: str, js: str,
+    *,
+    page_name: str | None = None,
+    field_name: str | None = None,
 ) -> bool:
-    """Set `<form_name>[rule_field] = js` on the form JSON and re-zip atomically.
+    """Write a generated rule body into the bundle and re-zip atomically.
 
-    Returns True when the form was found and rewritten; False when no form
-    with that name exists. Other forms and concepts are not touched.
+    For form-level kinds (``visitScheduleRule`` / ``validationRule`` /
+    ``editFormRule`` / ``decisionRule``) the body is written to
+    ``form[rule_field]`` at the top level. For ``formElementRule`` the
+    body is written to the matching field's ``rule`` slot at
+    ``form.formElementGroups[page_name].formElements[field_name].rule``;
+    both ``page_name`` and ``field_name`` are required in that case.
+
+    Returns True when the target slot was located and rewritten; False
+    when the form, page, or field could not be found.
     """
     with _open_bundle(bundle_path) as workdir:
         forms = _load_forms(workdir)
@@ -836,11 +846,48 @@ def write_form_rule(
         if target_fname is None:
             return False
         target_form = forms[target_fname]
-        target_form[rule_field] = js
+
+        if rule_field == "formElementRule":
+            if not page_name or not field_name:
+                log.warning(
+                    f"write_form_rule: formElementRule requires "
+                    f"page_name and field_name; "
+                    f"got page={page_name!r} field={field_name!r}"
+                )
+                return False
+            form_element = _find_form_element_by_name(
+                target_form, page_name, field_name,
+            )
+            if form_element is None:
+                return False
+            form_element["rule"] = js
+        else:
+            target_form[rule_field] = js
+
         _write_json(os.path.join(workdir, "forms", target_fname), target_form)
         if zipfile.is_zipfile(bundle_path):
             _repackage_zip(workdir, bundle_path)
     return True
+
+
+def _find_form_element_by_name(
+    form: dict, page_name: str, field_name: str,
+) -> dict | None:
+    """Locate a single ``formElement`` dict by exact (page, field) names.
+
+    Unlike the pipeline-side helper (which truncates spec names to match the
+    generator's output), bundle-side callers already know the names as they
+    appear in the bundle JSON — ``list_bundle_fields`` is the canonical
+    source — so an exact equality check is sufficient. Returns None when
+    no matching page or field is found.
+    """
+    for group in form.get("formElementGroups") or []:
+        if group.get("name") != page_name:
+            continue
+        for element in group.get("formElements") or []:
+            if element.get("name") == field_name:
+                return element
+    return None
 
 
 def _load_entity_index(

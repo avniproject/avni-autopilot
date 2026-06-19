@@ -9,8 +9,9 @@ Day-to-day commands (porcelain):
   examples          Refresh one rule-kind's example corpus (ingest-examples
                     + rebuild). Use after editing one curated tab.
   examples-all      Ingest every wired RuleKind's curated tab from
-                    `rules_ai_automation.xlsx` and rebuild once. Use for
-                    first-time setup or after bulk edits across tabs.
+                    `resources/rules/rules_ai_automation.xlsx` and rebuild
+                    once. Use for first-time setup or after bulk edits
+                    across tabs.
 
 Surgical commands (plumbing, run individually when you know what you need):
 
@@ -61,7 +62,7 @@ log = logging.getLogger("rules.kb")
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _AVNI_MODELS_DEFAULT = _REPO_ROOT.parent / "avni-models" / "src"
-_XLSX_DEFAULT = _REPO_ROOT / "requirements" / "rules_ai_automation.xlsx"
+_XLSX_DEFAULT = _REPO_ROOT / "resources" / "rules" / "rules_ai_automation.xlsx"
 _CURATED_TAB_DEFAULT = "VS rule (curated)"
 _RULES_ROOT = _REPO_ROOT / "resources" / "rules"
 
@@ -150,13 +151,15 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
-# Each RuleKind's curated tab inside `requirements/rules_ai_automation.xlsx`.
-# See FORM_LEVEL_RULES_SDD §7.
+# Each RuleKind's curated tab inside
+# `resources/rules/rules_ai_automation.xlsx`. See FORM_LEVEL_RULES_SDD §7
+# and FIELD_AND_PAGE_VISIBILITY_RULES_SDD §7.
 _INGEST_MANIFEST: dict[RuleKind, str] = {
     RuleKind.VISIT_SCHEDULE: "VS rule (curated)",
     RuleKind.VALIDATION:     "Validation rule (curated)",
     RuleKind.EDIT_FORM:      "Edit form rule (curated)",
     RuleKind.DECISION:       "Decision rule (curated)",
+    RuleKind.FORM_ELEMENT:   "Field rules (curated)",
 }
 
 
@@ -519,7 +522,13 @@ class _IngestStats:
 
 
 def cmd_ingest_examples(xlsx: Path, tab: str, root: Path, rule_kind: str) -> int:
-    """Read the curated rules tab and write one Markdown file per row."""
+    """Read the curated rules tab and write one Markdown file per row.
+
+    Columns are resolved by header name (case-insensitive). The curated
+    tabs vary in shape — form-level tabs carry
+    ``ORG name | Form name | Rule | Prompt`` while the Field-rules tab
+    adds ``field_name`` and ``kind``. Both are handled by the same loop.
+    """
     if not xlsx.exists():
         log.error(f"xlsx not found: {xlsx}")
         return 2
@@ -536,39 +545,102 @@ def cmd_ingest_examples(xlsx: Path, tab: str, root: Path, rule_kind: str) -> int
     out_dir.mkdir(parents=True, exist_ok=True)
 
     sheet = workbook[tab]
-    header_seen = False
+    rows_iter = sheet.iter_rows(values_only=True)
+    try:
+        header_row = next(rows_iter)
+    except StopIteration:
+        log.warning(f"tab {tab!r} is empty")
+        return 0
+
+    column_indices = _resolve_column_indices(header_row)
+    if column_indices.get("rule") is None or column_indices.get("prompt") is None:
+        log.error(
+            f"tab {tab!r} missing required 'rule' or 'prompt' header "
+            f"(have: {list(header_row)})"
+        )
+        return 2
+
     stats = _IngestStats()
-    for row in sheet.iter_rows(values_only=True):
-        if not header_seen:
-            header_seen = True
-            continue
+    for row in rows_iter:
         if not row or not any(cell for cell in row if cell):
             continue
-        org = (row[0] or "").strip() if isinstance(row[0], str) else str(row[0] or "").strip()
-        form = (row[1] or "").strip() if isinstance(row[1], str) else str(row[1] or "").strip()
-        rule_js = (row[2] or "").strip() if isinstance(row[2], str) else ""
-        prompt = (row[3] or "").strip() if len(row) > 3 and isinstance(row[3], str) else ""
+        org        = _cell_text(row, column_indices.get("org_name"))
+        form       = _cell_text(row, column_indices.get("form_name"))
+        field_name = _cell_text(row, column_indices.get("field_name"))
+        rule_js    = _cell_text(row, column_indices["rule"])
+        prompt     = _cell_text(row, column_indices["prompt"])
+        kind       = _cell_text(row, column_indices.get("kind"))
 
         if not rule_js or not prompt:
             stats.skipped += 1
-            log.warning(f"row skipped (org={org!r} form={form!r}): empty rule or prompt")
+            log.warning(
+                f"row skipped (org={org!r} form={form!r} "
+                f"field={field_name!r}): empty rule or prompt"
+            )
             continue
 
         entity_param = _derive_entity_param(rule_js) or "individual"
         encounter_types = _derive_encounter_types(rule_js)
         concepts = _derive_concepts(rule_js)
 
-        slug = _slug(f"{org}_{form}")
+        slug_basis = f"{org}_{form}_{field_name}" if field_name else f"{org}_{form}"
+        slug = _slug(slug_basis)
         path = out_dir / f"{slug}.md"
         path.write_text(
-            _render_example(rule_kind, prompt, entity_param,
-                            encounter_types, concepts, org, rule_js),
+            _render_example(
+                rule_kind, prompt, entity_param, encounter_types,
+                concepts, org, rule_js,
+                field_name=field_name or None,
+                kind=kind or None,
+            ),
             encoding="utf-8",
         )
         stats.written += 1
 
     log.info(f"ingest-examples done — wrote {stats.written}, skipped {stats.skipped}")
     return 0
+
+
+def _resolve_column_indices(header_row: tuple) -> dict[str, int]:
+    """Build a `{canonical_key → column_index}` map from the header row.
+
+    Canonical keys are: ``org_name``, ``form_name``, ``field_name``,
+    ``rule``, ``prompt``, ``kind``. Headers are matched case-insensitively
+    against the known synonym table below; columns whose header maps to no
+    known key are ignored. Missing columns return None for that key.
+    """
+    aliases: dict[str, tuple[str, ...]] = {
+        "org_name":   ("org_name", "org name"),
+        "form_name":  ("form_name", "form name"),
+        "field_name": ("field_name", "field name"),
+        "rule":       ("rule",),
+        "prompt":     ("prompt",),
+        "kind":       ("kind",),
+    }
+    out: dict[str, int] = {}
+    for col, raw in enumerate(header_row):
+        if raw is None:
+            continue
+        header_text = str(raw).strip().lower()
+        if not header_text:
+            continue
+        for canonical, synonyms in aliases.items():
+            if canonical in out:
+                continue
+            if header_text in synonyms:
+                out[canonical] = col
+                break
+    return out
+
+
+def _cell_text(row: tuple, idx: int | None) -> str:
+    """Read a cell as stripped text. None / missing column → empty string."""
+    if idx is None or idx >= len(row):
+        return ""
+    value = row[idx]
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 _PARAM_ENTITY_RE = re.compile(r"const\s+(\w+)\s*=\s*params\.entity")
@@ -616,17 +688,33 @@ def _render_example(
     concepts: list[str],
     source_org: str,
     js: str,
+    *,
+    field_name: str | None = None,
+    kind: str | None = None,
 ) -> str:
-    """Render a single example Markdown file matching SDD §6.2."""
+    """Render a single example Markdown file matching VISIT_SCHEDULE_RULE_SDD §6.2.
+
+    Field-rule examples (FIELD_AND_PAGE_VISIBILITY_RULES_SDD §7) also carry
+    the originating ``field_name`` and the behaviour ``kind`` tag
+    (``visibility | value | validation | answerFilter``). Both are
+    informational — the embedder still vectorises only ``intent`` — so
+    callers can omit them for the form-level corpora.
+    """
+    payload: dict[str, Any] = {
+        "rule_kind": rule_kind,
+        "intent": intent,
+        "entity_param": entity_param,
+        "encounter_types": encounter_types,
+        "concepts": concepts,
+        "source_org": source_org,
+    }
+    if field_name:
+        payload["field_name"] = field_name
+    if kind:
+        payload["kind"] = kind
+
     frontmatter = yaml.safe_dump(
-        {
-            "rule_kind": rule_kind,
-            "intent": intent,
-            "entity_param": entity_param,
-            "encounter_types": encounter_types,
-            "concepts": concepts,
-            "source_org": source_org,
-        },
+        payload,
         sort_keys=False,
         allow_unicode=True,
         default_flow_style=False,

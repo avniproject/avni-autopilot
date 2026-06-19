@@ -42,6 +42,23 @@ Available tools:
     Before calling this, ALWAYS call `list_bundle_fields` to resolve
     the exact form/field/answer names the user is referencing
     informally — the validator rejects off-bundle references.
+  - set_form_element_rule(bundle_path, form_name, page_name, field_name,
+    intent) — generate JS for ONE field's `formElement.rule` slot from a
+    natural-language intent and write it. Use when the user asks to
+    show/hide / pre-fill / validate / filter coded-answer options for a
+    specific field, e.g.:
+      * "only show 'Reason for refusal' when 'Consent given' is No"
+      * "pre-fill 'Mobile number' from the registration form"
+      * "block save when the next-visit date is in the past"
+      * "only allow 'C-section' / 'Assisted' when 'Place of delivery'
+        is Hospital"
+    The behaviour mix (visibility / value / validation / answer-filter)
+    is dictated by the intent text — Avni gives every field one `rule`
+    slot whose return value carries them all. ALWAYS call
+    `list_bundle_fields` first so `page_name`, `field_name`, and any
+    coded-answer names referenced in the intent (e.g. "Yes", "Other")
+    are exact matches; the writer rejects mismatches and the validator
+    rejects off-bundle answer references.
 
 Behavior:
   Choosing between generate vs edit-from-spec:

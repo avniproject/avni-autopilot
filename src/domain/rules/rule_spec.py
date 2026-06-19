@@ -28,6 +28,7 @@ class RuleKind(str, Enum):
     VALIDATION = "validationRule"
     EDIT_FORM = "editFormRule"
     DECISION = "decisionRule"
+    FORM_ELEMENT = "formElementRule"
 
 
 class RuleSpec(BaseModel):

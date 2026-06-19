@@ -386,6 +386,8 @@ def _check_return_shape(tree: Any, spec: RuleSpec) -> list[str]:
         return _check_edit_form_shape(returns)
     if spec.rule_kind == RuleKind.DECISION:
         return _check_decision_shape(returns, tree)
+    if spec.rule_kind == RuleKind.FORM_ELEMENT:
+        return _check_form_element_shape(returns, arrow)
     return []
 
 
@@ -505,6 +507,127 @@ def _check_edit_form_shape(returns: list[Any]) -> list[str]:
             "or `{ editable: boolean }`."
         ]
     return []
+
+
+def _check_form_element_shape(returns: list[Any], arrow: Any) -> list[str]:
+    """formElementRule: return is a `FormElementStatus` (constructor or `statusBuilder.build()`).
+
+    Per FIELD_AND_PAGE_VISIBILITY_RULES_SDD §4.3: top-level `return` must
+    resolve to one of —
+      - `new imports.rulesConfig.FormElementStatus(...)` constructor call;
+      - a call to `.build()` on a `FormElementStatusBuilder` constructed in
+        the same scope (via `new imports.rulesConfig.FormElementStatusBuilder`).
+    Anything else (object literal, array, raw identifier without a matching
+    constructor) is a soft warning. Grounding checks remain the hard gate.
+    """
+    if not returns:
+        return ["formElementRule: no return statement found"]
+
+    has_constructor_return = False
+    has_builder_build_return = False
+    builder_identifiers: set[str] = _builder_identifiers_in_scope(arrow)
+
+    for ret in returns:
+        arg = getattr(ret, "argument", None)
+        if arg is None:
+            continue
+        if _is_form_element_status_constructor(arg):
+            has_constructor_return = True
+            break
+        if _is_builder_build_call(arg, builder_identifiers):
+            has_builder_build_return = True
+            break
+
+    if has_constructor_return or has_builder_build_return:
+        return []
+
+    return [
+        "formElementRule: top-level return doesn't resolve to a "
+        "`FormElementStatus` — expected either "
+        "`new imports.rulesConfig.FormElementStatus(...)` or a "
+        "`statusBuilder.build()` call on a `FormElementStatusBuilder` "
+        "constructed in the same scope."
+    ]
+
+
+def _is_form_element_status_constructor(node: Any) -> bool:
+    """True when `node` is `new imports.rulesConfig.FormElementStatus(...)`."""
+    if getattr(node, "type", None) != "NewExpression":
+        return False
+    callee = getattr(node, "callee", None)
+    return _is_member_chain(callee, ("imports", "rulesConfig", "FormElementStatus"))
+
+
+def _is_builder_build_call(node: Any, builder_identifiers: set[str]) -> bool:
+    """True when `node` is `<builder>.build()` and the builder name is in scope."""
+    if getattr(node, "type", None) != "CallExpression":
+        return False
+    callee = getattr(node, "callee", None)
+    if callee is None or getattr(callee, "type", None) != "MemberExpression":
+        return False
+    prop = getattr(callee, "property", None)
+    if prop is None or getattr(prop, "name", None) != "build":
+        return False
+    obj = getattr(callee, "object", None)
+    if obj is None or getattr(obj, "type", None) != "Identifier":
+        return False
+    return getattr(obj, "name", None) in builder_identifiers
+
+
+def _builder_identifiers_in_scope(arrow: Any) -> set[str]:
+    """Names declared as `new imports.rulesConfig.FormElementStatusBuilder(...)` in the IIFE."""
+    out: set[str] = set()
+    body = getattr(arrow, "body", None)
+    if body is None:
+        return out
+    for node in _iter_all_nodes(body):
+        if getattr(node, "type", None) != "VariableDeclarator":
+            continue
+        init = getattr(node, "init", None)
+        if init is None or getattr(init, "type", None) != "NewExpression":
+            continue
+        callee = getattr(init, "callee", None)
+        if not _is_member_chain(
+            callee, ("imports", "rulesConfig", "FormElementStatusBuilder")
+        ):
+            continue
+        identifier = getattr(node, "id", None)
+        if identifier is None or getattr(identifier, "type", None) != "Identifier":
+            continue
+        name = getattr(identifier, "name", None)
+        if isinstance(name, str):
+            out.add(name)
+    return out
+
+
+def _is_member_chain(node: Any, expected: tuple[str, ...]) -> bool:
+    """True when `node` is the MemberExpression chain `expected[0].expected[1]....`.
+
+    For `imports.rulesConfig.FormElementStatus`:
+      MemberExpression(property=FormElementStatus,
+                       object=MemberExpression(property=rulesConfig,
+                                               object=Identifier(imports)))
+
+    Walks from the outermost member-expression inward, collecting property
+    names; compares the (root_identifier, *reversed_property_chain) tuple
+    against `expected`.
+    """
+    if node is None or len(expected) < 2:
+        return False
+    properties: list[str] = []
+    cur: Any = node
+    while getattr(cur, "type", None) == "MemberExpression":
+        prop = getattr(cur, "property", None)
+        name = getattr(prop, "name", None) if prop is not None else None
+        if not isinstance(name, str):
+            return False
+        properties.append(name)
+        cur = getattr(cur, "object", None)
+    if getattr(cur, "type", None) != "Identifier":
+        return False
+    root = getattr(cur, "name", None)
+    chain = (root, *reversed(properties))
+    return chain == tuple(expected)
 
 
 def _check_decision_shape(returns: list[Any], tree: Any) -> list[str]:

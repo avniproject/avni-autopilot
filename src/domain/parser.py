@@ -35,7 +35,6 @@ from models import (
     GroupSpec,
     ProgramSpec,
     SectionSpec,
-    SkipLogicSpec,
     SubjectTypeSpec,
 )
 
@@ -832,26 +831,94 @@ def parse_unified_modelling(
     return subject_types, programs, encounters, address_levels
 
 
-def _detect_skip_logic_patterns(fields: list[FieldSpec]) -> None:
-    """Auto-detect skip logic from field relationships. Mutates fields in place.
+# Connector prefixes for non-visibility behaviour fragments. Used to detect
+# whether a composed `rule_intent` already carries a visibility-show fragment
+# (the first line is something other than one of these prefixes).
+# See FIELD_AND_PAGE_VISIBILITY_RULES_SDD.md §6.1.
+_RULE_INTENT_SECONDARY_PREFIXES: tuple[str, ...] = (
+    "Hide this field when:",
+    "Pre-fill / compute the value as:",
+    "Block save when:",
+    "Restrict the answer options as follows:",
+)
 
-    Patterns detected:
-    1. "Others" pattern: Coded field with "Others" option + next field "Specify"/"Other" → show when Others
-    2. Sub-type pattern: "X Type" (Coded) + "X Sub-Type" (Coded) → show when parent answer matches
-    3. Yes/No detail: Coded Yes/No + "X Details"/"X Reason" → show when Yes
+
+def _compose_rule_intent(
+    visibility_show: str,
+    visibility_hide: str,
+    default_value: str,
+    validation: str,
+    option_condition: str,
+) -> str:
+    """Concatenate the five behaviour cells into a structured intent string.
+
+    Cells appear in fixed order with the connector phrases specified in
+    FIELD_AND_PAGE_VISIBILITY_RULES_SDD.md §6.1 so the LLM sees a consistent
+    shape regardless of which subset is populated. Empty cells contribute
+    nothing.
+    """
+    parts: list[str] = []
+    if visibility_show:
+        parts.append(visibility_show)
+    if visibility_hide:
+        parts.append(f"Hide this field when: {visibility_hide}")
+    if default_value:
+        parts.append(f"Pre-fill / compute the value as: {default_value}")
+    if validation:
+        parts.append(f"Block save when: {validation}")
+    if option_condition:
+        parts.append(f"Restrict the answer options as follows: {option_condition}")
+    return "\n".join(parts)
+
+
+def _has_visibility_show_fragment(intent: str | None) -> bool:
+    """True when the composed intent already starts with a visibility-show sentence.
+
+    Used by `_detect_visibility_patterns` to avoid double-prepending an
+    auto-detected visibility fragment when the modeller wrote an explicit
+    "When to show" cell. A fragment is "visibility-show" when the intent's
+    first line does NOT match any of the secondary-behaviour prefixes.
+    """
+    if not intent:
+        return False
+    first_line = intent.split("\n", 1)[0]
+    return not first_line.startswith(_RULE_INTENT_SECONDARY_PREFIXES)
+
+
+def _prepend_visibility_show(intent: str | None, sentence: str) -> str:
+    """Prepend a visibility-show sentence to the existing rule_intent."""
+    if not intent:
+        return sentence
+    return f"{sentence}\n{intent}"
+
+
+def _detect_visibility_patterns(fields: list[FieldSpec]) -> None:
+    """Auto-detect visibility patterns from field relationships. Mutates `rule_intent`.
+
+    Three patterns recognised — same as the prior `_detect_skip_logic_patterns`:
+    1. "Others" pattern: Coded field with "Others" option + next field
+       "Specify"/"Other" → show when Others.
+    2. Sub-type pattern: "X Type" (Coded) + "X Sub-Type" (Coded) → show when
+       parent answer matches.
+    3. Yes/No detail: Coded Yes/No + "X Details"/"X Reason" → show when Yes.
+
+    Each match adds a natural-language visibility sentence to the field's
+    `rule_intent`. Fields whose intent already carries a visibility-show
+    fragment are skipped to avoid double emission.
+    See FIELD_AND_PAGE_VISIBILITY_RULES_SDD.md §6.1.
     """
     for i, field in enumerate(fields):
-        if field.skipLogic:
-            continue  # Already has explicit skip logic from SRS
+        if _has_visibility_show_fragment(field.rule_intent):
+            continue
 
         name_lower = field.name.lower()
+        matched_sentence: str | None = None
 
         # Pattern 1: "Specify" / "Other details" after a Coded field with "Others" option
         if any(
             kw in name_lower
             for kw in ("specify", "other detail", "if other", "details - ")
         ):
-            # Look backwards for the nearest Coded field with "Others" option
             for j in range(i - 1, max(i - 5, -1), -1):
                 prev = fields[j]
                 if prev.dataType == "Coded" and prev.options:
@@ -863,21 +930,17 @@ def _detect_skip_logic_patterns(fields: list[FieldSpec]) -> None:
                         other_val = next(
                             o for o in prev.options if o.lower() in ("others", "other")
                         )
-                        field.skipLogic = SkipLogicSpec(
-                            dependsOn=prev.name,
-                            condition="containsAnswerConceptName",
-                            value=other_val,
+                        matched_sentence = (
+                            f"show only when '{prev.name}' is '{other_val}'"
                         )
                         break
 
         # Pattern 2: Sub-type field following a "Type" field
-        # "Health Activity Sub-Type" → parent "Activity Type", qualifier "Health"
-        if (
+        if matched_sentence is None and (
             "sub-type" in name_lower
             or "sub type" in name_lower
             or "subtype" in name_lower
         ):
-            # Strip "sub-type" to get the rest, then find the parent by word overlap
             stripped = (
                 name_lower.replace("sub-type", "")
                 .replace("sub type", "")
@@ -894,7 +957,6 @@ def _detect_skip_logic_patterns(fields: list[FieldSpec]) -> None:
                 # Parent must share at least one content word (not "type")
                 common = (stripped_words & prev_words) - {"type"}
                 if common:
-                    # Qualifier = words in sub-type name NOT in parent
                     qualifier_words = stripped_words - prev_words - {"type"}
                     qualifier = " ".join(qualifier_words)
                     if qualifier:
@@ -903,44 +965,46 @@ def _detect_skip_logic_patterns(fields: list[FieldSpec]) -> None:
                             None,
                         )
                         if match_opt:
-                            field.skipLogic = SkipLogicSpec(
-                                dependsOn=prev.name,
-                                condition="containsAnswerConceptName",
-                                value=match_opt,
+                            matched_sentence = (
+                                f"show only when '{prev.name}' is '{match_opt}'"
                             )
                             break
 
         # Pattern 3: Yes/No detail — "X Details" / "X Reason" after "X" (Yes/No)
-        if field.skipLogic:
-            continue
-        for suffix in ("details", "reason", "description", "explanation"):
-            if suffix in name_lower:
-                base = (
-                    name_lower.replace(suffix, "")
-                    .strip()
-                    .rstrip("-")
-                    .rstrip("–")
-                    .strip()
-                )
-                if not base:
-                    continue
-                for j in range(i - 1, max(i - 5, -1), -1):
-                    prev = fields[j]
-                    if prev.dataType == "Coded" and prev.options:
-                        prev_lower = prev.name.lower()
-                        if base in prev_lower or prev_lower in base:
-                            yes_opts = [
-                                o for o in prev.options if o.lower() in ("yes", "true")
-                            ]
-                            if yes_opts:
-                                field.skipLogic = SkipLogicSpec(
-                                    dependsOn=prev.name,
-                                    condition="containsAnswerConceptName",
-                                    value=yes_opts[0],
-                                )
-                                break
-                if field.skipLogic:
-                    break
+        if matched_sentence is None:
+            for suffix in ("details", "reason", "description", "explanation"):
+                if suffix in name_lower:
+                    base = (
+                        name_lower.replace(suffix, "")
+                        .strip()
+                        .rstrip("-")
+                        .rstrip("–")
+                        .strip()
+                    )
+                    if not base:
+                        continue
+                    for j in range(i - 1, max(i - 5, -1), -1):
+                        prev = fields[j]
+                        if prev.dataType == "Coded" and prev.options:
+                            prev_lower = prev.name.lower()
+                            if base in prev_lower or prev_lower in base:
+                                yes_opts = [
+                                    o for o in prev.options
+                                    if o.lower() in ("yes", "true")
+                                ]
+                                if yes_opts:
+                                    matched_sentence = (
+                                        f"show only when '{prev.name}' "
+                                        f"is '{yes_opts[0]}'"
+                                    )
+                                    break
+                    if matched_sentence is not None:
+                        break
+
+        if matched_sentence is not None:
+            field.rule_intent = _prepend_visibility_show(
+                field.rule_intent, matched_sentence,
+            )
 
 
 def parse_form_df(
@@ -985,7 +1049,17 @@ def parse_form_df(
     selection_idx = _col_idx("selection type", "selection")
     min_max_idx = _col_idx("max and min", "min and max", "limit", "range")
     unit_idx = _col_idx("unit")
-    skip_idx = _col_idx("when to show", "skip logic", "condition", "visibility")
+    # Field-rule behaviour columns. See
+    # FIELD_AND_PAGE_VISIBILITY_RULES_SDD.md §6.1 for the alias table.
+    visibility_show_idx = _col_idx(
+        "when to show", "visibility", "skip logic", "condition",
+    )
+    visibility_hide_idx = _col_idx("when not to show", "hide when")
+    default_value_idx = _col_idx("default_value", "default value", "pre-fill")
+    validation_idx = _col_idx("validation", "validate when", "block save when")
+    option_condition_idx = _col_idx(
+        "option condition", "show options when", "filter options",
+    )
 
     if field_idx is None:
         return None
@@ -1101,13 +1175,15 @@ def parse_form_df(
         if not unit:
             unit = None
 
-        skip_logic = None
-        if skip_idx is not None:
-            when_to_show = _clean(row.iloc[skip_idx])
-            if when_to_show:
-                skip_logic = SkipLogicSpec(
-                    dependsOn=when_to_show, condition="raw", value=when_to_show
-                )
+        # Compose the field's natural-language rule intent from the five
+        # behaviour columns. None when every cell is blank.
+        rule_intent = _compose_rule_intent(
+            _clean(row.iloc[visibility_show_idx]) if visibility_show_idx is not None else "",
+            _clean(row.iloc[visibility_hide_idx]) if visibility_hide_idx is not None else "",
+            _clean(row.iloc[default_value_idx]) if default_value_idx is not None else "",
+            _clean(row.iloc[validation_idx]) if validation_idx is not None else "",
+            _clean(row.iloc[option_condition_idx]) if option_condition_idx is not None else "",
+        ) or None
 
         fields.append(
             FieldSpec(
@@ -1120,15 +1196,15 @@ def parse_form_df(
                 max=max_val,
                 options=options,
                 selectionType=selection_type,
-                skipLogic=skip_logic,
+                rule_intent=rule_intent,
             )
         )
 
     if not fields:
         return None
 
-    # Auto-detect skip logic patterns from field relationships
-    _detect_skip_logic_patterns(fields)
+    # Auto-detect visibility patterns from field relationships.
+    _detect_visibility_patterns(fields)
 
     form_type = "Encounter"
     subject_type = None

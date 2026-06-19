@@ -55,6 +55,21 @@ _KIND_META: dict[RuleKind, RuleKindMeta] = {
             "the three arrays — leave the others empty."
         ),
     ),
+    RuleKind.FORM_ELEMENT: RuleKindMeta(
+        return_type_description=(
+            "a single `FormElementStatus` instance controlling this field's "
+            "visibility, default / computed value, validation errors, and "
+            "coded-answer filtering. Any subset of those behaviours may be "
+            "populated in the same body — the intent text dictates which. "
+            "Construct via `new imports.rulesConfig.FormElementStatus(uuid, "
+            "visibility, value, answersToSkip, validationErrors, "
+            "answersToShow, resetValueIfNull)` (last arg defaults to false) "
+            "or via `statusBuilder.show().when.<…>.build()` "
+            "(StatusBuilder also exposes `.value(...)`, `.validationError(...)`, "
+            "`.skipAnswers(...)`, `.showAnswers(...)` for composition). "
+            "The first arg is always `params.formElement.uuid`."
+        ),
+    ),
 }
 
 
@@ -128,6 +143,7 @@ _RETURN_EXPRESSION_BY_KIND: dict[RuleKind, str] = {
     RuleKind.VALIDATION:     "validationResults",
     RuleKind.EDIT_FORM:      "{ eligible: { value: true } }",
     RuleKind.DECISION:       "decisions",
+    RuleKind.FORM_ELEMENT:   "statusBuilder.build()",
 }
 
 
