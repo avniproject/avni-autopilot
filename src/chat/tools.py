@@ -72,17 +72,22 @@ def _summarize(state: dict) -> dict:
     return summary
 
 
-def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
+async def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
     """Invoke the pipeline. If it pauses at `apply_user_decisions` (declarative
     interrupt, see pipeline.graph.build_graph), return `needs_confirmation`
     with the pending changes that the user must review.
 
+    `ainvoke` (not `invoke`) so the call stays in the chat agent's event loop.
+    With sync `invoke` LangChain wraps the tool in a thread executor, where
+    LangGraph 1.x's internal awaits during interrupt persistence have no event
+    loop and hang forever (observed in staging logs).
+
     The graph is compiled with `interrupt_before=["apply_user_decisions"]`,
-    so `invoke()` returns normally with the paused state visible on the
+    so `ainvoke()` returns normally with the paused state visible on the
     snapshot — no GraphInterrupt exception is raised on the happy path.
     """
     thread_id = config["configurable"]["thread_id"]
-    result = _pipeline_graph.invoke(input_or_command, config=config)
+    result = await _pipeline_graph.ainvoke(input_or_command, config=config)
 
     snapshot = _pipeline_graph.get_state(config)
     is_paused = bool(snapshot and snapshot.next)
@@ -112,7 +117,7 @@ def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
 
 
 @tool
-def generate_bundle(org: str, user_instructions: str | None = None) -> dict:
+async def generate_bundle(org: str, user_instructions: str | None = None) -> dict:
     """Start an Avni bundle generation for a specific org.
 
     Reads all .xlsx files in resources/input/<org>/ and produces
@@ -145,11 +150,11 @@ def generate_bundle(org: str, user_instructions: str | None = None) -> dict:
     thread_id = f"bundle-{org}-{int(time.time())}"
     config = {"configurable": {"thread_id": thread_id}}
     initial = initial_state(org, input_dir, output_dir, user_instructions)
-    return _run_with_interrupt_handling(initial, config)
+    return await _run_with_interrupt_handling(initial, config)
 
 
 @tool
-def edit_bundle_from_spec(org: str, user_instructions: str | None = None) -> dict:
+async def edit_bundle_from_spec(org: str, user_instructions: str | None = None) -> dict:
     """Update an already-generated bundle from the current source .xlsx (the spec).
 
     Reads resources/input/<org>/*.xlsx, re-runs the deterministic parser and
@@ -191,11 +196,11 @@ def edit_bundle_from_spec(org: str, user_instructions: str | None = None) -> dic
         org, input_dir, output_dir, user_instructions,
         mode="edit_from_spec", bundle_path=bundle_path,
     )
-    return _run_with_interrupt_handling(initial, config)
+    return await _run_with_interrupt_handling(initial, config)
 
 
 @tool
-def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
+async def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
     """Resume a paused bundle run after the user confirms pending changes.
 
     Args:
@@ -233,7 +238,7 @@ def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
     # continue from the persisted checkpoint with whatever state we
     # just wrote via update_state.
     _pipeline_graph.update_state(config, {"user_resolutions": resolutions or {}})
-    return _run_with_interrupt_handling(None, config)
+    return await _run_with_interrupt_handling(None, config)
 
 
 @tool
