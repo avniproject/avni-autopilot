@@ -381,6 +381,18 @@ class ChatService:
                 "parse_warnings", "errors", "mode", "org",
             }
         }
+        # Log every parse / enrich warning and error individually so they
+        # are recorded in the backend log (greppable by session id) even
+        # though the inline `BundleSummary` card no longer surfaces
+        # warnings — it stays quiet for showcase recordings while errors
+        # remain visible there.
+        sid = self._session.session_id
+        for warning in summary.get("parse_warnings") or []:
+            log.info(f"bundle.warning sid={sid} parse: {warning}")
+        for warning in summary.get("enrich_warnings") or []:
+            log.info(f"bundle.warning sid={sid} enrich: {warning}")
+        for err in summary.get("errors") or []:
+            log.error(f"bundle.error sid={sid}: {err}")
         self._session.bus.publish(
             "bundle.ready", bundle_ready(zip_path, summary),
         )
