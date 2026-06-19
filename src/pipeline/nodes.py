@@ -231,12 +231,12 @@ def enrich_with_llm(state: BundleState) -> dict:
 def apply_user_decisions(state: BundleState) -> dict:
     """Apply HITL resolutions to the pending changes.
 
-    The graph is compiled with `interrupt_before=["apply_user_decisions"]`,
-    so the framework pauses BEFORE this node runs and persists state via the
-    checkpointer. `chat_service.resolve` writes the user's resolutions into
-    `state.user_resolutions` via `update_state(...)`, then resumes with
-    `invoke(None, config)`. This node reads those resolutions and applies
-    them. On a paused-but-unresumed graph, this body never runs.
+    First node in the Phase 2 graph (`pipeline.graph.build_phase2_graph`).
+    The chat tool drives both phases: Phase 1 ends with `pending_changes`
+    populated; the tool stashes the state, returns `needs_confirmation`,
+    and on resume re-runs Phase 2 with `user_resolutions` filled in. This
+    node reads those resolutions and applies them to `entity_spec.forms`.
+    Returns early if there's nothing to apply.
     """
     pending_dicts = state.get("pending_changes") or []
     log.info(

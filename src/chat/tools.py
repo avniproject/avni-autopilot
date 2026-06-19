@@ -28,15 +28,26 @@ from domain.bundle_editor import (
 from domain.rules.generator import RuleGenerator
 from domain.rules.rule_spec import RuleKind, RuleSpec
 from domain.rules.validator import validate_and_decide as _validate_and_decide
-from pipeline import build_graph, initial_state
+from pipeline import initial_state
+from pipeline.graph import build_phase1_graph, build_phase2_graph
 
-# ── Pipeline graph (compiled once, shared by every tool call) ────────────────
+# ── Pipeline graphs (compiled once, shared by every tool call) ───────────────
 #
-# The graph's checkpointer keeps per-thread state, so a paused run can be
-# resumed later by passing the same `thread_id` back via `resume_bundle`.
+# Two-phase split avoids LangGraph 1.x's broken HITL machinery (dynamic
+# `interrupt()` raised without persisting; `interrupt_before` hung inside
+# ainvoke). Phase 1 parses + enriches and ends; if `pending_changes` is
+# non-empty the tool stashes the state in `_saved_states` and returns
+# `needs_confirmation`. On resume, the saved state is reloaded,
+# `user_resolutions` is set, and Phase 2 finishes the build.
+#
+# In-process dict — state is lost on autopilot restart. Same v1 limitation
+# documented in `AVNI_WEBAPP_INTEGRATION_SDD §8.2`. Cross-restart durability
+# can be added later by pickling the dict to disk under autopilot_session_dir.
 
-_pipeline_graph = build_graph()
+_phase1_graph = build_phase1_graph()
+_phase2_graph = build_phase2_graph()
 _rule_generator = RuleGenerator()
+_saved_states: dict[str, dict] = {}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -72,45 +83,50 @@ def _summarize(state: dict) -> dict:
     return summary
 
 
-async def _run_with_interrupt_handling(input_or_command, config: dict) -> dict:
-    """Invoke the pipeline. If it pauses at `apply_user_decisions` (declarative
-    interrupt, see pipeline.graph.build_graph), return `needs_confirmation`
-    with the pending changes that the user must review.
+async def _run_phase1_then_pause_or_finish(initial: dict, thread_id: str) -> dict:
+    """Run phase 1; if `pending_changes` is non-empty, save state and return
+    needs_confirmation. Otherwise run phase 2 to completion and summarize.
 
     `ainvoke` (not `invoke`) so the call stays in the chat agent's event loop.
-    With sync `invoke` LangChain wraps the tool in a thread executor, where
-    LangGraph 1.x's internal awaits during interrupt persistence have no event
-    loop and hang forever (observed in staging logs).
-
-    The graph is compiled with `interrupt_before=["apply_user_decisions"]`,
-    so `ainvoke()` returns normally with the paused state visible on the
-    snapshot — no GraphInterrupt exception is raised on the happy path.
+    With sync `invoke` LangChain wraps sync tools in a thread executor, where
+    LangGraph 1.x's internal awaits would have no event loop.
     """
-    thread_id = config["configurable"]["thread_id"]
-    result = await _pipeline_graph.ainvoke(input_or_command, config=config)
-
-    snapshot = _pipeline_graph.get_state(config)
-    is_paused = bool(snapshot and snapshot.next)
+    phase1_state = await _phase1_graph.ainvoke(initial)
+    pending = phase1_state.get("pending_changes") or []
     log.info(
-        "post-invoke thread_id=%s is_paused=%s next=%s pending=%d",
-        thread_id, is_paused,
-        getattr(snapshot, "next", None),
-        len(((getattr(snapshot, "values", {}) or {}).get("pending_changes")) or []),
+        "phase1-done thread_id=%s pending=%d errors=%d",
+        thread_id, len(pending), len(phase1_state.get("errors") or []),
     )
 
-    if is_paused:
-        values = getattr(snapshot, "values", {}) or {}
+    if pending:
+        _saved_states[thread_id] = phase1_state
         return {
             "status": "needs_confirmation",
             "thread_id": thread_id,
             "payload": {
                 "kind": "confirm_changes",
-                "org": values.get("org_name", ""),
-                "changes": values.get("pending_changes") or [],
+                "org": phase1_state.get("org_name", ""),
+                "changes": pending,
             },
         }
 
-    return _summarize(result)
+    # No HITL required — fast-path straight to phase 2.
+    return await _run_phase2(phase1_state, thread_id)
+
+
+async def _run_phase2(phase1_state: dict, thread_id: str) -> dict:
+    log.info(
+        "phase2-start thread_id=%s resolutions=%d",
+        thread_id, len(phase1_state.get("user_resolutions") or {}),
+    )
+    final_state = await _phase2_graph.ainvoke(phase1_state)
+    log.info(
+        "phase2-done thread_id=%s zip=%s errors=%d",
+        thread_id,
+        bool(final_state.get("zip_path")),
+        len(final_state.get("errors") or []),
+    )
+    return _summarize(final_state)
 
 
 # ── Tools ────────────────────────────────────────────────────────────────────
@@ -148,9 +164,8 @@ async def generate_bundle(org: str, user_instructions: str | None = None) -> dic
         }
 
     thread_id = f"bundle-{org}-{int(time.time())}"
-    config = {"configurable": {"thread_id": thread_id}}
     initial = initial_state(org, input_dir, output_dir, user_instructions)
-    return await _run_with_interrupt_handling(initial, config)
+    return await _run_phase1_then_pause_or_finish(initial, thread_id)
 
 
 @tool
@@ -191,12 +206,11 @@ async def edit_bundle_from_spec(org: str, user_instructions: str | None = None) 
 
     output_dir = os.path.join(settings.output_root, org)
     thread_id = f"bundle-{org}-{int(time.time())}"
-    config = {"configurable": {"thread_id": thread_id}}
     initial = initial_state(
         org, input_dir, output_dir, user_instructions,
         mode="edit_from_spec", bundle_path=bundle_path,
     )
-    return await _run_with_interrupt_handling(initial, config)
+    return await _run_phase1_then_pause_or_finish(initial, thread_id)
 
 
 @tool
@@ -211,14 +225,12 @@ async def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
             "no"                — skip this change
             "edit:<new_value>"  — apply with a user-provided override
     """
-    config = {"configurable": {"thread_id": thread_id}}
-    snapshot = _pipeline_graph.get_state(config)
-    has_checkpoint = bool(snapshot and (snapshot.next or snapshot.values))
+    saved = _saved_states.pop(thread_id, None)
     log.info(
-        "resume_bundle thread_id=%s has_checkpoint=%s n_resolutions=%d",
-        thread_id, has_checkpoint, len(resolutions or {}),
+        "resume_bundle thread_id=%s found_saved=%s n_resolutions=%d",
+        thread_id, saved is not None, len(resolutions or {}),
     )
-    if not has_checkpoint:
+    if saved is None:
         return {
             "status": "error",
             "code": "E_NO_CHECKPOINT",
@@ -233,12 +245,8 @@ async def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
                 "forward — you cannot."
             ),
         }
-    # Inject the user's resolutions into state, then resume from the
-    # interrupt_before pause. `None` as the input tells LangGraph to
-    # continue from the persisted checkpoint with whatever state we
-    # just wrote via update_state.
-    _pipeline_graph.update_state(config, {"user_resolutions": resolutions or {}})
-    return await _run_with_interrupt_handling(None, config)
+    saved["user_resolutions"] = resolutions or {}
+    return await _run_phase2(saved, thread_id)
 
 
 @tool
