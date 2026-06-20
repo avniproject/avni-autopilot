@@ -1,0 +1,107 @@
+[
+  {
+    "name": "common.calculateBMI",
+    "signature": "imports.common.calculateBMI(weight, height, precision?)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "Compute BMI from weight (kg) and height (cm). Use for any 'show / derive / validate BMI' intent — handles the cm→m conversion and ceiling-rounds to `precision` decimal places (default 1).",
+    "example_snippet": "const weight = programEncounter.getObservationValue('Weight'); const height = programEncounter.getObservationValue('Height'); const bmi = imports.common.calculateBMI(weight, height); return new imports.rulesConfig.FormElementStatus(formElement.uuid, true, bmi);"
+  },
+  {
+    "name": "common.getZScore",
+    "signature": "imports.common.getZScore(individual, asOnDate, weight, height)",
+    "applies_to": ["formElementRule", "decisionRule"],
+    "use_when": "Compute WHO anthropometric z-scores for a child (weight-for-age, height-for-age, weight-for-height) on a given date. Returns an object with the three z-scores. Use for growth-monitoring fields.",
+    "example_snippet": "const z = imports.common.getZScore(individual, programEncounter.encounterDateTime, weight, height);"
+  },
+  {
+    "name": "common.getZScoreFromEncounter",
+    "signature": "imports.common.getZScoreFromEncounter(programEncounter)",
+    "applies_to": ["formElementRule", "decisionRule"],
+    "use_when": "Convenience wrapper: reads Weight + Height off the program encounter, computes z-scores against the individual. Use when both observations are guaranteed on the same encounter.",
+    "example_snippet": "const z = imports.common.getZScoreFromEncounter(programEncounter);"
+  },
+  {
+    "name": "common.calculateGrowthStatusForAdolescent",
+    "signature": "imports.common.calculateGrowthStatusForAdolescent({individual, weight, height, asOnDate})",
+    "applies_to": ["formElementRule", "decisionRule"],
+    "use_when": "Classify an adolescent's growth status from their BMI on a given date. Use for SAM / MAM / Normal categorisation on adolescent programs.",
+    "example_snippet": "const status = imports.common.calculateGrowthStatusForAdolescent({individual, weight, height, asOnDate: programEncounter.encounterDateTime});"
+  },
+  {
+    "name": "common.createValidationError",
+    "signature": "imports.common.createValidationError(messageKey)",
+    "applies_to": ["validationRule"],
+    "use_when": "Produce one validation error object to push into the array returned by a validationRule. `messageKey` is the i18n key or literal error message to show the user.",
+    "example_snippet": "if (age < 18) validationResults.push(imports.common.createValidationError('Age must be 18 or above'));"
+  },
+  {
+    "name": "common.addDays",
+    "signature": "imports.common.addDays(date, numberOfDays)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule", "visitScheduleRule"],
+    "use_when": "Return a new Date that is `numberOfDays` after the given date. Pure offset — preserves the time-of-day. Use whenever the intent says 'N days after X'.",
+    "example_snippet": "const nextVisit = imports.common.addDays(programEncounter.encounterDateTime, 14);"
+  },
+  {
+    "name": "common.addMonths",
+    "signature": "imports.common.addMonths(date, numberOfMonths)",
+    "applies_to": ["formElementRule", "decisionRule", "visitScheduleRule"],
+    "use_when": "Return a new Date `numberOfMonths` after the given date. Use for 'N months after X' offsets.",
+    "example_snippet": "const sixMonthsOn = imports.common.addMonths(individual.dateOfBirth, 6);"
+  },
+  {
+    "name": "common.addWeeks",
+    "signature": "imports.common.addWeeks(date, numberOfWeeks)",
+    "applies_to": ["formElementRule", "decisionRule", "visitScheduleRule"],
+    "use_when": "Return a new Date `numberOfWeeks` after the given date.",
+    "example_snippet": "const followUp = imports.common.addWeeks(deliveryDate, 6);"
+  },
+  {
+    "name": "common.getAgeInMonths",
+    "signature": "imports.common.getAgeInMonths(dateOfBirth, today)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "Age in completed months from birth to `today`. Use for under-2 / under-5 child gating.",
+    "example_snippet": "const ageMonths = imports.common.getAgeInMonths(individual.dateOfBirth, new Date());"
+  },
+  {
+    "name": "common.weeksBetween",
+    "signature": "imports.common.weeksBetween(later, earlier)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "Fractional weeks between two dates (positive when `later > earlier`). Use whenever an intent compares an interval to a week count.",
+    "example_snippet": "const weeksSince = imports.common.weeksBetween(programEncounter.encounterDateTime, lmpDate);"
+  },
+  {
+    "name": "common.getDays",
+    "signature": "imports.common.getDays(firstDate, secondDate)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "Absolute day count between two dates (always positive).",
+    "example_snippet": "const days = imports.common.getDays(programEncounter.encounterDateTime, lmpDate);"
+  },
+  {
+    "name": "common.getDateOfBirth",
+    "signature": "imports.common.getDateOfBirth(age, fromDate?)",
+    "applies_to": ["formElementRule", "decisionRule"],
+    "use_when": "Derive a date of birth from an age (in years) and an optional reference date (defaults to today). Use when only age is captured and a DoB-shaped field needs to be set.",
+    "example_snippet": "const dob = imports.common.getDateOfBirth(45);"
+  },
+  {
+    "name": "common.isBefore",
+    "signature": "imports.common.isBefore(past, present)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "Truthy when `past` is strictly before `present`. Use for date-ordering validation (no-past-date, must-be-after, etc.).",
+    "example_snippet": "if (imports.common.isBefore(scheduledDate, new Date())) validationResults.push(imports.common.createValidationError('Date cannot be in the past'));"
+  },
+  {
+    "name": "common.isNil",
+    "signature": "imports.common.isNil(obj)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "True when the value is null or undefined. Use to gate computations on missing observations.",
+    "example_snippet": "if (!imports.common.isNil(weight) && !imports.common.isNil(height)) { /* compute */ }"
+  },
+  {
+    "name": "common.isEmptyOrBlank",
+    "signature": "imports.common.isEmptyOrBlank(value)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "True when the value is nil, NaN, or an empty collection/string. Treats numbers / booleans / dates as non-empty.",
+    "example_snippet": "if (imports.common.isEmptyOrBlank(programEncounter.getObservationValue('Notes'))) { /* skip */ }"
+  }
+]

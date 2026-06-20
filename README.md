@@ -147,6 +147,45 @@ GET    /health                            operational liveness
 
 The `avni-chat` REPL and the `avni-rules-kb` CLI are unaffected by the service — they continue to read their own env vars and ignore the `AI_*` settings.
 
+### Pointing a local webapp at a local autopilot
+
+When iterating on autopilot changes alongside `avni-webapp` locally, you'll usually want the browser to hit your local autopilot rather than whatever URL `avni-server`'s `/idp-details` reports (which is typically the staging or prod autopilot).
+
+1. **Run autopilot locally on port 8023:**
+
+   ```bash
+   cd ~/projects/AI
+   uv run avni-autopilot      # binds 0.0.0.0:8023; reads .env
+   curl -fsS http://localhost:8023/health      # expected: {"ok":true}
+   ```
+
+   Your local `.env` needs at minimum `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY` (if rule generation is exercised), and `AVNI_SERVER_BASE_URL` pointing at whichever avni-server holds the auth token the webapp is logged in against (e.g. `https://staging.avniproject.org` if the webapp is logged in to staging).
+
+2. **Tell the webapp to use the local autopilot instead of the avni-server-reported URL.** In the webapp tab's DevTools console (URL must be `http://localhost:6010/...`):
+
+   ```js
+   localStorage.setItem("AI_ASSISTANT_URL_OVERRIDE", "http://localhost:8023")
+   location.reload()
+   ```
+
+   Verify:
+
+   ```js
+   localStorage.getItem("AI_ASSISTANT_URL_OVERRIDE")
+   // expected: "http://localhost:8023"
+   ```
+
+   The webapp's `useAiApi()` hook checks this localStorage key first and falls back to Redux (`state.app.genericConfig.avniAi.mcpServerUrl`) when absent — so the override is per-browser and zero-cost in production.
+
+3. **Turn the override off** when done:
+
+   ```js
+   localStorage.removeItem("AI_ASSISTANT_URL_OVERRIDE")
+   location.reload()
+   ```
+
+`localStorage` is **per-origin**, so the value set on `http://localhost:6010` is invisible on `https://staging.avniproject.org` and vice-versa — make sure DevTools is open on the webapp tab you actually want to redirect.
+
 ---
 
 ### Editing fields in an existing bundle

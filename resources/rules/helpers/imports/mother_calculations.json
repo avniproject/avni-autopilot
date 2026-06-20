@@ -1,0 +1,58 @@
+[
+  {
+    "name": "motherCalculations.estimatedDateOfDelivery",
+    "signature": "imports.motherCalculations.estimatedDateOfDelivery(programEnrolment)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "Compute the Estimated Date of Delivery (EDD) from the Last Menstrual Period (LMP) recorded on the pregnancy enrolment. Use whenever the intent says 'EDD from LMP', 'estimated delivery date', or computes a due date for an antenatal field.",
+    "example_snippet": "const edd = imports.motherCalculations.estimatedDateOfDelivery(programEnrolment); return new imports.rulesConfig.FormElementStatus(formElement.uuid, true, edd);"
+  },
+  {
+    "name": "motherCalculations.gestationalAgeAsOn",
+    "signature": "imports.motherCalculations.gestationalAgeAsOn(asOfDate, programEnrolment)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "Compute gestational age in completed weeks as of a given date, derived from the enrolment's LMP. Use for 'weeks of pregnancy', 'gestational age in weeks', or any visibility / validation gated by trimester week count.",
+    "example_snippet": "const weeks = imports.motherCalculations.gestationalAgeAsOn(programEncounter.encounterDateTime, programEnrolment); statusBuilder.show().whenItem(weeks).is.greaterThan(20); return statusBuilder.build();"
+  },
+  {
+    "name": "motherCalculations.gestationalAgeCategoryAsOn",
+    "signature": "imports.motherCalculations.gestationalAgeCategoryAsOn(asOfDate, programEnrolment)",
+    "applies_to": ["formElementRule", "decisionRule"],
+    "use_when": "Bucket the gestational age into one of 'Very preterm', 'Preterm (<28 weeks)', or 'Term (37 -38 weeks)' as of a given date. Use to derive a category field shown on the form.",
+    "example_snippet": "const category = imports.motherCalculations.gestationalAgeCategoryAsOn(new Date(), programEnrolment); return new imports.rulesConfig.FormElementStatus(formElement.uuid, true, category);"
+  },
+  {
+    "name": "motherCalculations.gestationalAgeForEDD",
+    "signature": "imports.motherCalculations.gestationalAgeForEDD(edd, asOfDate)",
+    "applies_to": ["formElementRule", "decisionRule"],
+    "use_when": "Back-compute the current gestational age (weeks) from an existing EDD and a reference date. Use when the modeller has EDD on file but no LMP.",
+    "example_snippet": "const weeks = imports.motherCalculations.gestationalAgeForEDD(eddDate, programEncounter.encounterDateTime);"
+  },
+  {
+    "name": "motherCalculations.currentTrimester",
+    "signature": "imports.motherCalculations.currentTrimester(programEnrolment, asOfDate?)",
+    "applies_to": ["formElementRule", "decisionRule"],
+    "use_when": "Return the current trimester (1, 2, or 3) for the pregnancy enrolment, based on LMP. `asOfDate` defaults to today. Use for trimester-gated visibility or decisions.",
+    "example_snippet": "const trimester = imports.motherCalculations.currentTrimester(programEnrolment); statusBuilder.show().whenItem(trimester).is.equals(3);"
+  },
+  {
+    "name": "motherCalculations.lmp",
+    "signature": "imports.motherCalculations.lmp(programEnrolment, errIfLmpIsNotSet?)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "Read the Last Menstrual Period date observed on the enrolment. Pass `true` for the second arg to throw when LMP is missing (otherwise returns undefined).",
+    "example_snippet": "const lmpDate = imports.motherCalculations.lmp(programEnrolment);"
+  },
+  {
+    "name": "motherCalculations.dateOfDelivery",
+    "signature": "imports.motherCalculations.dateOfDelivery(programEncounter)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "Read the 'Date of delivery' observation off a delivery program encounter. Throws if the date is missing.",
+    "example_snippet": "const deliveryDate = imports.motherCalculations.dateOfDelivery(programEncounter);"
+  },
+  {
+    "name": "motherCalculations.dateOfBirth",
+    "signature": "imports.motherCalculations.dateOfBirth(individual)",
+    "applies_to": ["formElementRule", "decisionRule", "validationRule"],
+    "use_when": "Read the subject's date of birth and assert it is a valid date.",
+    "example_snippet": "const dob = imports.motherCalculations.dateOfBirth(individual);"
+  }
+]
