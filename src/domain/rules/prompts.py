@@ -233,3 +233,98 @@ def _format_concept_answers(answers: dict[str, list[str]]) -> str:
         for opt in options:
             lines.append(f'    * "{opt}"')
     return "\n".join(lines)
+
+
+# ── Field-batch prompt (Haiku, one call per form) ─────────────────────────────
+
+_FIELD_BATCH_SYSTEM_PROMPT_TEMPLATE = """\
+You generate Avni form-element rule functions in JavaScript.
+
+For EACH field listed in the user message, produce a self-contained JS IIFE:
+
+"use strict";
+({{ params, imports }}) => {{
+    const {entity_param} = params.entity;
+    // rule body
+    return statusBuilder.build();
+}};
+
+Return one item per field in `rules`, with `field_name` matching the field name exactly.
+
+Hard constraints:
+  1. `params.entity` MUST be read as `{entity_param}` in every IIFE.
+  2. Each IIFE MUST return a `FormElementStatus` instance.
+  3. Reference ONLY the helper methods listed under HELPERS.
+  4. Reference ONLY the concept names listed under AVAILABLE_CONCEPTS.
+  5. Reference ONLY the encounter-type names listed under AVAILABLE_ENCOUNTER_TYPES.
+  6. When using `containsAnswerConceptName(...)` the string MUST match an exact
+     entry under the relevant concept in CONCEPT_ANSWERS. Never use the user's
+     informal phrasing — look up the right answer string.
+  7. If a field's intent is empty, a dash, or cannot be expressed within these
+     constraints, return empty `js` and set `confidence` to "low".
+
+Self-report `confidence` per field ("high" / "medium" / "low"):
+  - high   — intent maps cleanly to a known example; every symbol is grounded.
+  - medium — intent partially matches; some inference was required.
+  - low    — no matching example, or unable to ground every symbol.
+"""
+
+_FIELD_BATCH_USER_PROMPT_TEMPLATE = """\
+FIELDS
+{fields_block}
+
+AVAILABLE_CONCEPTS
+{available_concepts}
+
+AVAILABLE_ENCOUNTER_TYPES
+{available_encounter_types}
+
+AVAILABLE_PROGRAMS
+{available_programs}
+
+CONCEPT_ANSWERS
+{concept_answers}
+
+HELPERS
+{helpers_text}
+
+EXAMPLES
+{examples_text}
+
+Generate one JS IIFE per field. Return a `rules` list with one entry per field,
+`field_name` matching each field label above exactly.
+"""
+
+
+def build_field_batch_system_prompt(entity_param: str) -> str:
+    """Render the cacheable system prompt for a field-batch Haiku call."""
+    return _FIELD_BATCH_SYSTEM_PROMPT_TEMPLATE.format(entity_param=entity_param)
+
+
+def build_field_batch_user_prompt(
+    field_entries: list[tuple[str, str, RuleSpec]],
+    helpers_text: str,
+    examples_text: str,
+) -> str:
+    """Render the user message for a per-form field batch call.
+
+    field_entries: list of (field_name, section_name, rule_spec). All specs
+    share the same form context (concepts, encounter types, programs).
+    """
+    shared_spec = field_entries[0][2]
+    lines: list[str] = []
+    for i, (field_name, section_name, rule_spec) in enumerate(field_entries, 1):
+        lines.append(f"[{i}] {field_name} (section: {section_name})")
+        lines.append(f"    INTENT: {rule_spec.intent or '—'}")
+        lines.append("")
+    fields_block = "\n".join(lines).rstrip()
+
+    return _FIELD_BATCH_USER_PROMPT_TEMPLATE.format(
+        fields_block=fields_block,
+        available_concepts=_format_list(shared_spec.available_concepts),
+        available_encounter_types=_format_list(shared_spec.available_encounter_types),
+        available_programs=_format_list(shared_spec.available_programs),
+        concept_answers=_format_concept_answers(shared_spec.concept_answers),
+        helpers_text=helpers_text or "(none retrieved)",
+        examples_text=examples_text or "(none retrieved)",
+    )
