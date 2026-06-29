@@ -8,6 +8,7 @@ Failure modes: SDD §9.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,7 +19,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from config import settings
 from web.auth import AuthError, verify_token
 from web.chat_service import ChatService
-from web.sessions import SessionStore
+from web.sessions import SessionStore, download_org_bundle
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -70,6 +71,7 @@ async def create_session(
         shared_output_root=Path(settings.output_root),
     )
     session.chat_service = ChatService(session)
+    asyncio.create_task(download_org_bundle(session))
 
     # AI_SID cookie — keyed for ALB sticky sessions per DEPLOYMENT_SDD §7.
     # max_age matches the absolute session bound so the cookie expires in

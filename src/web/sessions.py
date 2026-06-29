@@ -23,7 +23,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from web.events import EventBus
+import httpx
+
+from config import settings
+from web.events import EventBus, session_loading, session_ready
 
 
 log = logging.getLogger(__name__)
@@ -113,6 +116,37 @@ class ChatSession:
         """Bump `last_activity_at` to now. Called on every request that hits
         a session — keeps it from being reaped while in active use."""
         self.last_activity_at = datetime.now(timezone.utc)
+
+
+# ── Bundle download ──────────────────────────────────────────────────────────
+
+
+async def download_org_bundle(session: ChatSession) -> None:
+    """Fetch the org's current bundle from avni-server into session workdir.
+
+    Runs as a background task — does not block session creation. Emits
+    `session.loading` at start and `session.ready` on completion so the webapp
+    can show / hide the "Checking the current setup" indicator.
+    """
+    session.bus.publish("session.loading", session_loading("Checking the current setup"))
+    url = f"{settings.avni_server_base_url}/implementation/export/false"
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                url,
+                headers={"AUTH-TOKEN": session.auth_token},
+                timeout=60,
+                follow_redirects=True,
+            )
+        resp.raise_for_status()
+        dest = session.workdir / "bundle.zip"
+        dest.write_bytes(resp.content)
+        session.bundle_path = dest
+        log.info(f"bundle downloaded session={session.session_id} size={len(resp.content)}")
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"bundle download failed session={session.session_id}: {exc}")
+    finally:
+        session.bus.publish("session.ready", session_ready())
 
 
 # ── Store ─────────────────────────────────────────────────────────────────────

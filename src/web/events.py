@@ -35,6 +35,8 @@ EventType = Literal[
     "upload.done",
     "error",
     "session.closed",
+    "session.loading",
+    "session.ready",
 ]
 
 # Per-session replay window. Older events scroll off when the buffer fills,
@@ -121,6 +123,16 @@ def error_payload(code: str, message: str, recoverable: bool) -> dict[str, Any]:
 def session_closed(reason: str) -> dict[str, Any]:
     """Payload for `session.closed` — terminal; consumer should disconnect."""
     return {"reason": reason}
+
+
+def session_loading(message: str) -> dict[str, Any]:
+    """Payload for `session.loading` — background work has started."""
+    return {"message": message}
+
+
+def session_ready() -> dict[str, Any]:
+    """Payload for `session.ready` — background work completed (or failed)."""
+    return {}
 
 
 # ── Per-session event bus ────────────────────────────────────────────────────

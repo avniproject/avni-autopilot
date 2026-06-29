@@ -163,7 +163,10 @@ class ChatService:
         self._session = session
         self._agent = agent_factory()
         self._config: dict[str, Any] = {
-            "configurable": {"thread_id": session.session_id},
+            "configurable": {
+                "thread_id": session.session_id,
+                "session": session,
+            },
         }
         # interrupt_id → {"thread_id": str, "changes": list[dict]}.
         # Populated when a tool returns `needs_confirmation`; consumed by
