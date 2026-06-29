@@ -1,195 +1,159 @@
-"""
-enricher — orchestrates the LLM enrichment pass for one form.
+"""enricher — orchestrates the LLM enrichment pass across all forms.
 
-Workflow per form:
-  1. Skip-when-clean gate — if the form has no long names (>255 chars) and
-     no duplicate field names, skip the LLM entirely.
-  2. Call LLMHelper.enrich(form, df, user_instructions). The LLM is
-     instructed to return the parser's FormSpec UNCHANGED and only emit
-     Change records, so we ignore `enriched.form` and keep using the
-     parser's form.
-  3. Drop unjustified changes via `_drop_unjustified_changes` (long_name
-     for short fields, duplicate_field for non-duplicate names).
-  4. Namespace change_ids with the form name so confirmations from two
-     forms don't collide in the resolutions dict.
-  5. Surface every surviving Change as `pending_changes`; the caller
-     (`pipeline.apply_user_decisions`) presents them via `interrupt()` for
-     the user to confirm/edit/reject.
+Workflow:
+  1. Detect — scan all forms deterministically for long_name (>255 chars) and
+     duplicate_field issues. No LLM involved in detection.
+  2. Skip gate — if no problems are found, return immediately without a LLM call.
+  3. Suggest — send the full problem list to the LLM in ONE call. The LLM only
+     proposes replacement names; it does not scan forms or detect issues.
+  4. Assemble — build Change records from the LLM suggestions, matched back by
+     (form_name, section_name, field_name).
+  5. Surface — return every Change as pending_changes for user confirmation.
 
 Public surface:
-    refined, applied, pending, warnings = enrich_form(form, df, user_instructions, llm_helper)
-    refined, applied, pending, warnings = enrich_forms(forms, sheets, user_instructions, llm_helper)
-
-`applied` is always [] — kept in the return shape so callers don't need to
-change. Every refinement now requires explicit user confirmation.
+    refined, applied, pending, warnings = enrich_forms(forms, user_instructions, llm_helper)
 """
 
 from __future__ import annotations
 
 import logging
-
-import pandas as pd
+from dataclasses import dataclass
+from typing import Literal
 
 from domain.llm import LLMHelper
-from models import Change, FieldSpec, FormSpec
+from models import Change, FormSpec
 
 log = logging.getLogger(__name__)
 
 NAME_LIMIT = 255
 
 
-# ── Skip gate ─────────────────────────────────────────────────────────────────
+# ── Problem detection ─────────────────────────────────────────────────────────
 
 
-def _form_is_clean(form: FormSpec, user_instructions: str | None) -> bool:
-    """True iff the parser's FormSpec has no long names and no duplicate names.
-
-    These are the only two issues the LLM is currently allowed to refine
-    (long_name, duplicate_field), so any form without them can skip the call.
-    """
-    field_names_lower: set[str] = set()
-    for field in _all_fields(form):
-        if len(field.name) > NAME_LIMIT:
-            return False
-        key = field.name.strip().lower()
-        if key in field_names_lower:
-            return False
-        field_names_lower.add(key)
-    return True
+@dataclass
+class _FieldProblem:
+    kind: Literal["long_name", "duplicate_field"]
+    form_name: str
+    field_name: str
+    section_name: str
+    occurrence: int                         # 1-based; 1 for long_name, 1..N for duplicates
+    context_sections: dict[str, list[str]]  # section_name → field names in that section
 
 
-def _all_fields(form: FormSpec) -> list[FieldSpec]:
-    """Flatten every section's fields into a single list."""
-    out: list[FieldSpec] = []
-    for section in form.sections or []:
-        out.extend(section.fields)
-    return out
+def _detect_problems(forms: list[FormSpec]) -> list[_FieldProblem]:
+    """Scan all forms and return every long_name and duplicate_field problem."""
+    problems: list[_FieldProblem] = []
 
+    for form in forms:
+        # ── long_name ─────────────────────────────────────────────────────────
+        for section in (form.sections or []):
+            for fld in (section.fields or []):
+                if len(fld.name) > NAME_LIMIT:
+                    problems.append(_FieldProblem(
+                        kind="long_name",
+                        form_name=form.name,
+                        field_name=fld.name,
+                        section_name=section.name,
+                        occurrence=1,
+                        context_sections={section.name: [f.name for f in section.fields]},
+                    ))
 
-# ── Objective change-justification gate ──────────────────────────────────────
-#
-# Haiku will sometimes propose long_name shortenings for fields that are well
-# under the 255-char limit, or duplicate_field renames for names that only
-# appear once. The thresholds are objective, so drop unjustified changes here
-# rather than asking the user to confirm noise.
+        # ── duplicate_field ───────────────────────────────────────────────────
+        name_groups: dict[str, list[tuple[str, str]]] = {}
+        for section in (form.sections or []):
+            for fld in (section.fields or []):
+                key = fld.name.strip().lower()
+                name_groups.setdefault(key, []).append((section.name, fld.name))
 
-
-def _drop_unjustified_changes(
-    changes: list[Change], parser_form: FormSpec
-) -> list[Change]:
-    # Strict: keep only changes that match a real condition in the parser form.
-    # long_name:        change.field must name a field with length > 255.
-    # duplicate_field:  change.field must name a field that appears > 1 time.
-    #
-    # Drops are LLM hallucinations the deterministic gate corrected — logged
-    # for telemetry, not surfaced to the user.
-    long_field_names_lower = {
-        f.name.strip().lower()
-        for f in _all_fields(parser_form)
-        if len(f.name) > NAME_LIMIT
-    }
-    name_counts: dict[str, int] = {}
-    for f in _all_fields(parser_form):
-        key = f.name.strip().lower()
-        name_counts[key] = name_counts.get(key, 0) + 1
-
-    kept: list[Change] = []
-    for ch in changes:
-        key = (ch.field or "").strip().lower()
-        if ch.kind == "long_name":
-            if key not in long_field_names_lower:
-                log.info(
-                    "[enrich] dropped long_name %s — '%s' is not a >%d-char field in form '%s'",
-                    ch.change_id, ch.field[:80], NAME_LIMIT, parser_form.name,
-                )
+        for occurrences in name_groups.values():
+            if len(occurrences) <= 1:
                 continue
-        elif ch.kind == "duplicate_field":
-            if name_counts.get(key, 0) <= 1:
-                log.info(
-                    "[enrich] dropped duplicate_field %s on '%s' — name appears only once in form '%s'",
-                    ch.change_id, ch.field, parser_form.name,
-                )
-                continue
-        kept.append(ch)
-    return kept
+            dup_section_names = {sec for sec, _ in occurrences}
+            context_sections: dict[str, list[str]] = {
+                section.name: [f.name for f in section.fields]
+                for section in (form.sections or [])
+                if section.name in dup_section_names
+            }
+            for occ_idx, (sec_name, field_name) in enumerate(occurrences, 1):
+                problems.append(_FieldProblem(
+                    kind="duplicate_field",
+                    form_name=form.name,
+                    field_name=field_name,
+                    section_name=sec_name,
+                    occurrence=occ_idx,
+                    context_sections=context_sections,
+                ))
+
+    return problems
 
 
-# ── Public entry points ───────────────────────────────────────────────────────
-
-
-def enrich_form(
-    parser_form: FormSpec,
-    df: pd.DataFrame,
-    user_instructions: str | None,
-    llm_helper: LLMHelper,
-) -> tuple[FormSpec, list[Change], list[Change], list[str]]:
-    """
-    Returns (refined_form, auto_applied, pending_changes, warnings).
-
-    `refined_form` is always the parser's form — the LLM is instructed to
-    return the FormSpec unchanged, so we don't trust its copy. `auto_applied`
-    is always [] — every Change is surfaced to the user for confirmation.
-    The tuple shape is preserved so callers don't change.
-    """
-    if _form_is_clean(parser_form, user_instructions) or not llm_helper.is_available():
-        return parser_form, [], [], []
-
-    log.info("[enrich] LLM call for form: %s", parser_form.name)
-    try:
-        enriched = llm_helper.enrich(parser_form, df, user_instructions)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("[enrich] LLM call failed for '%s': %s", parser_form.name, exc)
-        return parser_form, [], [], [
-            f"LLM enrichment failed for form '{parser_form.name}': {exc}"
-        ]
-
-    justified = _drop_unjustified_changes(enriched.changes, parser_form)
-
-    # Namespace change_ids with the form name. Haiku's prompt only requires
-    # uniqueness *within* a form, so two different forms can both emit
-    # "field-1/long_name". The chat agent serializes resolutions as a single
-    # dict keyed by change_id; identical keys would collide and silently drop
-    # one confirmation.
-    justified = [
-        ch.model_copy(update={"change_id": f"{parser_form.name}::{ch.change_id}"})
-        for ch in justified
-    ]
-
-    log.info("[enrich] %s: %d pending", parser_form.name, len(justified))
-    return parser_form, [], justified, []
+# ── Public entry point ────────────────────────────────────────────────────────
 
 
 def enrich_forms(
     forms: list[FormSpec],
-    sheets: dict[str, pd.DataFrame],
     user_instructions: str | None,
     llm_helper: LLMHelper,
 ) -> tuple[list[FormSpec], list[Change], list[Change], list[str]]:
-    """
-    Run enrichment across every form.
+    """Run enrichment across every form.
 
     Returns:
-        refined_forms     — list of FormSpec, same length/order as input
-        applied_changes   — always empty (kept for return-shape stability)
-        pending_changes   — every Change awaiting user confirmation
-        warnings          — any validation/skip warnings worth surfacing
+        refined_forms   — list of FormSpec, same length/order as input (unchanged)
+        applied_changes — always empty (kept for return-shape stability)
+        pending_changes — every Change awaiting user confirmation
+        warnings        — any warnings worth surfacing
     """
-    refined: list[FormSpec] = []
-    applied: list[Change] = []
-    pending: list[Change] = []
-    warnings: list[str] = []
+    problems = _detect_problems(forms)
 
-    for form in forms:
-        df = sheets.get(form.name)
-        if df is None:
-            # No source sheet found — pass through unchanged.
-            refined.append(form)
-            continue
-        new_form, form_applied, form_pending, form_warnings = enrich_form(
-            form, df, user_instructions, llm_helper
+    if not problems:
+        return forms, [], [], []
+
+    if not llm_helper.is_available():
+        log.info(
+            "[enrich] %d problem(s) detected but LLM unavailable; skipping.", len(problems)
         )
-        refined.append(new_form)
-        applied.extend(form_applied)
-        pending.extend(form_pending)
-        warnings.extend(form_warnings)
-    return refined, applied, pending, warnings
+        return forms, [], [], []
+
+    log.info(
+        "[enrich] %d problem(s) detected across %d form(s); calling LLM.",
+        len(problems), len({p.form_name for p in problems}),
+    )
+
+    try:
+        output = llm_helper.suggest_names(problems)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[enrich] LLM call failed: %s", exc)
+        return forms, [], [], [f"LLM enrichment failed: {exc}"]
+
+    suggestion_map = {
+        (s.form_name, s.section_name, s.field_name): s.suggested_name
+        for s in output.suggestions
+    }
+
+    changes: list[Change] = []
+    for problem in problems:
+        key = (problem.form_name, problem.section_name, problem.field_name)
+        suggested = suggestion_map.get(key)
+        if suggested is None:
+            log.warning(
+                "[enrich] no suggestion returned for %s / %s / %s",
+                problem.form_name, problem.section_name, problem.field_name,
+            )
+            continue
+        change_id = (
+            f"{problem.form_name}::{problem.section_name}"
+            f":{problem.field_name}/{problem.kind}"
+        )
+        changes.append(Change(
+            change_id=change_id,
+            form=problem.form_name,
+            field=problem.field_name,
+            kind=problem.kind,
+            before={"name": problem.field_name, "section": problem.section_name},
+            after={"name": suggested},
+            reason="auto-detected",
+        ))
+
+    log.info("[enrich] %d change(s) pending user confirmation.", len(changes))
+    return forms, [], changes, []

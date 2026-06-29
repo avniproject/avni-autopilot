@@ -15,7 +15,6 @@ import os
 import zipfile
 from typing import Any
 
-import pandas as pd
 
 from domain.bundle_editor import apply_field_edits, load_bundle_snapshot
 from domain.changes import apply_resolutions
@@ -28,7 +27,6 @@ from domain.form_links import (
     orphan_entities,
 )
 from domain.generators import (
-    _truncate_name,
     make_address_level_types,
     make_encounter_types,
     make_form_mappings,
@@ -168,26 +166,6 @@ def link_forms_to_entities(state: BundleState) -> dict:
 # ── Node 2.5: LLM enrichment ──────────────────────────────────────────────────
 
 
-def _load_form_sheets(file_paths: list[str]) -> dict[str, pd.DataFrame]:
-    """Re-read every .xlsx sheet keyed by sheet name (matches FormSpec.name)."""
-    sheets: dict[str, pd.DataFrame] = {}
-    for path in file_paths:
-        if not str(path).lower().endswith((".xlsx", ".xls")):
-            continue
-        try:
-            xf = pd.ExcelFile(path)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Could not open %s for enrichment: %s", path, exc)
-            continue
-        for name in xf.sheet_names:
-            try:
-                df = pd.read_excel(xf, sheet_name=name, header=None)
-                sheets[name.strip()] = df
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Could not read sheet '%s' from %s: %s", name, path, exc)
-    return sheets
-
-
 def enrich_with_llm(state: BundleState) -> dict:
     """Call Claude once to refine each form; store any pending changes in state.
 
@@ -209,9 +187,8 @@ def enrich_with_llm(state: BundleState) -> dict:
             "enrich_warnings": ["LLM enrichment skipped: ANTHROPIC_API_KEY not set."],
         }
 
-    sheets = _load_form_sheets(state["file_paths"])
     refined_forms, applied, pending, warnings = enrich_forms(
-        spec.forms, sheets, state.get("user_instructions"), helper,
+        spec.forms, state.get("user_instructions"), helper,
     )
 
     spec.forms = refined_forms
@@ -520,18 +497,13 @@ def _find_form_element_in_json(
 ) -> dict | None:
     """Locate one ``formElement`` dict by (section, field) names.
 
-    Matches against the same truncated names the generator writes into the
-    form JSON (`generators._truncate_name`). Returns None when no matching
-    section or field is present (e.g. the generator deduped a duplicate
-    concept-uuid field — see `generators._build_form`).
+    Returns None when no matching section or field is present.
     """
-    target_section = _truncate_name(section_name)
-    target_field = _truncate_name(field_name)
     for group in form_content.get("formElementGroups") or []:
-        if group.get("name") != target_section:
+        if group.get("name") != section_name:
             continue
         for element in group.get("formElements") or []:
-            if element.get("name") == target_field:
+            if element.get("name") == field_name:
                 return element
     return None
 

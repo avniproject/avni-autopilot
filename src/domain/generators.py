@@ -186,20 +186,6 @@ def make_organisation_config(org_name: str) -> dict:
 
 # ── Forms + concepts ──────────────────────────────────────────────────────────
 
-# TEMPORARY: Avni's name columns (concept, form element, form element group) are
-# varchar(255). LLM-generated bundles occasionally produce long narrative names
-# that exceed this and fail import with `value too long for type character
-# varying(255)`. We truncate here as a stop-gap; the proper fix is to enforce
-# short names in the parser/enricher (long text belongs in a display field).
-MAX_NAME_LEN = 255
-
-
-def _truncate_name(name: str) -> str:
-    if name is None:
-        return name
-    return name if len(name) <= MAX_NAME_LEN else name[:MAX_NAME_LEN]
-
-
 CANCELLATION_OPTIONS = [
     "Data entry error",
     "Rescheduled",
@@ -217,27 +203,15 @@ def _build_form(
     """Build a form JSON dict. Registers all concepts encountered into the registry."""
     form_uuid = make_uuid(f"form:{name}")
     form_element_groups: list[dict] = []
-    # TEMPORARY: Avni rejects forms that reference the same concept twice
-    # (e.g. "If others, please mention" reused across sections). Track concept
-    # UUIDs seen within this form and skip later duplicates. The proper fix
-    # is to differentiate these fields upstream (qualifying name by section).
-    seen_form_concepts: set[str] = set()
 
     for g_idx, section in enumerate(sections, start=1):
         group_uuid = make_uuid(f"formGroup:{name}:{section.name}")
-        section_name = _truncate_name(section.name)
         form_elements: list[dict] = []
         e_idx = 0
 
         for field in section.fields:
-            concept_name = _truncate_name(field.name)
-            # UUID seed uses the (already-truncated) name so concept refs from
-            # forms match the entry registered in concepts.json.
+            concept_name = field.name
             concept_uuid = make_uuid(f"concept:{concept_name}")
-
-            if concept_uuid in seen_form_concepts:
-                continue
-            seen_form_concepts.add(concept_uuid)
             e_idx += 1
 
             # Build the answer list for Coded fields. Dedupe by answer-concept
@@ -248,13 +222,12 @@ def _build_form(
             if field.dataType == "Coded" and field.options:
                 seen: set[str] = set()
                 for opt in field.options:
-                    opt_name = _truncate_name(opt)
-                    opt_uuid = make_uuid(f"concept:{opt_name}")
+                    opt_uuid = make_uuid(f"concept:{opt}")
                     if opt_uuid in seen:
                         continue
                     seen.add(opt_uuid)
                     answers.append({
-                        "name": opt_name,
+                        "name": opt,
                         "uuid": opt_uuid,
                         "order": len(answers),
                         "active": True,
@@ -306,7 +279,7 @@ def _build_form(
 
         form_element_groups.append({
             "uuid": group_uuid,
-            "name": section_name,
+            "name": section.name,
             "displayOrder": g_idx,
             "voided": False,
             "formElements": form_elements,

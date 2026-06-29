@@ -1,186 +1,146 @@
-"""
-LLMHelper — wraps ChatAnthropic (Haiku) with structured-output enrichment.
+"""LLMHelper — wraps ChatAnthropic (Haiku) for form enrichment and classification.
 
 Public surface:
-    helper = LLMHelper()                                      # builds the model + prompt once
-    enriched: EnrichedFormSpec = helper.enrich(form_spec, df, user_instructions)
+    helper = LLMHelper()
+    output = helper.suggest_names(problems)   # one call across all forms
+    result = helper.classify(system, user, ResponseModel)
 
-The helper is invoked once per form by `enricher.py`. It builds a prompt with:
-  - the parser's `FormSpec` (current best-effort parse)
-  - the raw form sheet rendered as a Markdown table
-  - optional `user_instructions` (free-text)
+`suggest_names` accepts a list of _FieldProblem instances (from enricher.py) and
+returns a _SuggestionsOutput with one _NameSuggestion per problem, matched back
+by (form_name, section_name, field_name).
 
-…and asks Claude to return an `EnrichedFormSpec` (the parser's `FormSpec`
-unchanged + a list of `Change` records). The form on the response is ignored
-by `enricher.py`; only the Change records flow downstream, after a
-deterministic justification gate filters them.
+`classify` is a generic single-call helper for any structured-output task that
+needs its own Pydantic response model (form-link classifier, entity resolvers, …).
 
-Caching: the system prompt is constant across forms, so we mark the last block
-with `cache_control={"type": "ephemeral"}` for prompt-cache hits on every call
-after the first.
-
-If `ANTHROPIC_API_KEY` is unset, `LLMHelper.is_available()` returns False and
-the enricher should skip enrichment.
+If ANTHROPIC_API_KEY is unset, `LLMHelper.is_available()` returns False and
+callers should skip the LLM step.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import pandas as pd
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, Field
 
-from models import EnrichedFormSpec, FormSpec
+if TYPE_CHECKING:
+    from domain.enricher import _FieldProblem
 
 MODEL = "claude-haiku-4-5"
-# Refined FormSpecs for large forms (100+ fields with options) can be sizeable.
-# Haiku 4.5 supports up to 64K output; 16K leaves comfortable headroom.
 MAX_TOKENS = 16384
 
 
-# ── System prompt (stable; cached) ────────────────────────────────────────────
+# ── Suggestion schema ─────────────────────────────────────────────────────────
 
-_SYSTEM_PROMPT = """\
-You are an Avni form-modelling assistant. Given a parser's best-effort
-FormSpec for a single form plus the raw form sheet as a Markdown table, you
-identify TWO specific issues and emit Change records for them. You do NOT
-modify the FormSpec itself — return it exactly as the parser produced it.
 
-The TWO kinds of issues you handle (and nothing else):
+class _NameSuggestion(BaseModel):
+    form_name: str
+    section_name: str
+    field_name: str
+    suggested_name: str
 
-1. long_name — A field name longer than 255 characters. Avni's database
-   column is varchar(255), so any name exceeding that MUST be shortened.
-   Propose a shorter name that preserves the original intent.
 
-2. duplicate_field — Two or more fields share the same (case-insensitive)
-   name within this form. Field names must be unique per form. Propose a
-   disambiguated name for each duplicate occurrence based on the context.
+class _SuggestionsOutput(BaseModel):
+    suggestions: list[_NameSuggestion] = Field(default_factory=list)
 
-Change record shape:
-  change_id   — stable, unique within this form (e.g. "field-7/long_name")
-  form        — form name
-  field       — the current field name
-  kind        — EXACTLY "long_name" or "duplicate_field". Any other value
-                will be rejected.
-  before      — long_name:       {"name": "<current long name>"}
-                duplicate_field: {"name": "<dup name>", "section": "<source sections or single section>"}
-                                 (emit ONE change per occurrence; the section
-                                  hint lets the applier find the right one)
-  after       — long_name:       {"name": "<proposed shorter name>"}
-                duplicate_field: {"name": "<disambiguated name>"}
-  reason      — one short sentence explaining why
 
-Hard rules:
-  1. Return the parser's FormSpec UNCHANGED. Do NOT alter any field's name,
-     dataType, options, or any other attribute in the FormSpec you return.
-     The applier performs renames from your Change records after the user
-     has confirmed each one.
-  2. NEVER emit a Change with a `kind` other than "long_name" or
-     "duplicate_field". Out-of-scope refinements (data type, options,
-     selection type, min/max, skip logic, adding/removing fields, etc.) are
-     not handled by this system right now — silently omit them.
-  3. If the form has no long names AND no duplicates, return the FormSpec
-     unchanged with `changes: []`.
+# ── System prompt ─────────────────────────────────────────────────────────────
+
+_SUGGEST_SYSTEM_PROMPT = """\
+You are an Avni form-modelling assistant. You receive a list of field naming
+problems detected in one or more forms. Your only job is to suggest a clear,
+concise replacement name for each problem.
+
+Two kinds of problems:
+
+1. long_name — the field name exceeds 255 characters. Suggest a shorter name
+   that preserves the field's intent in under 255 characters.
+
+2. duplicate_field — two or more fields in the same form share the same name.
+   Suggest a disambiguated name for this occurrence using the section context
+   provided.
+
+For each problem return:
+  form_name      — exactly as listed in the problem
+  section_name   — exactly as listed in the problem
+  field_name     — the original field name, exactly as listed
+  suggested_name — your proposed replacement
+
+Rules:
+  1. suggested_name MUST be ≤ 255 characters.
+  2. Within a form, no two suggested_names may be identical.
+  3. Use section names or neighbouring field names as qualifiers when
+     disambiguating duplicates (e.g. "Remarks (Distribution)" rather than
+     "Remarks 1").
+  4. Return one entry per problem. Do not skip any.
 """
 
 
-def _form_spec_to_compact_dict(form: FormSpec) -> dict[str, Any]:
-    """Strip empty/default fields so the prompt isn't padded with nulls."""
-    out: dict[str, Any] = {
-        "name": form.name,
-        "formType": form.formType,
-    }
-    if form.subjectType:
-        out["subjectType"] = form.subjectType
-    if form.program:
-        out["program"] = form.program
-    if form.encounterType:
-        out["encounterType"] = form.encounterType
-    out["sections"] = [
-        {"name": s.name, "fields": [_field_compact(f) for f in s.fields]}
-        for s in (form.sections or [])
-    ]
-    return out
+# ── Prompt builder ────────────────────────────────────────────────────────────
 
 
-def _field_compact(f: Any) -> dict[str, Any]:
-    d: dict[str, Any] = {"name": f.name, "dataType": f.dataType}
-    if f.group:
-        d["group"] = f.group  # section hint matters for duplicate disambiguation
-    return d
+def _build_problem_prompt(problems: list[_FieldProblem]) -> str:
+    dup_totals: dict[tuple[str, str], int] = {}
+    for p in problems:
+        if p.kind == "duplicate_field":
+            key = (p.form_name, p.field_name.strip().lower())
+            dup_totals[key] = dup_totals.get(key, 0) + 1
 
+    lines: list[str] = []
+    current_form: str | None = None
+    for i, p in enumerate(problems, 1):
+        if p.form_name != current_form:
+            lines.append(f"\nFORM: {p.form_name}")
+            current_form = p.form_name
+        if p.kind == "long_name":
+            lines.append(f'[{i}] long_name — "{p.field_name}"')
+        else:
+            total = dup_totals.get((p.form_name, p.field_name.strip().lower()), 1)
+            lines.append(
+                f'[{i}] duplicate_field ({p.occurrence} of {total}) — "{p.field_name}"'
+            )
+        for sec_name, field_names in p.context_sections.items():
+            lines.append(f'    Section "{sec_name}" fields: {", ".join(field_names)}')
 
-def _df_to_markdown(df: pd.DataFrame, max_rows: int = 200) -> str:
-    """Render the form sheet as a Markdown table, truncating very long sheets."""
-    df_clean = df.copy().fillna("")
-    if len(df_clean) > max_rows:
-        df_clean = df_clean.head(max_rows)
-        return df_clean.to_markdown(index=False) + f"\n\n_(truncated to first {max_rows} rows)_"
-    return df_clean.to_markdown(index=False)
+    return "\n".join(lines).strip()
 
 
 # ── LLMHelper ─────────────────────────────────────────────────────────────────
 
 
 class LLMHelper:
-    """Wraps a ChatAnthropic model bound to the EnrichedFormSpec output schema."""
+    """Wraps ChatAnthropic (Haiku) for enrichment name suggestions and classification."""
 
     def __init__(self, model: str = MODEL, max_tokens: int = MAX_TOKENS) -> None:
         self._has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-        if not self._has_key:
-            self._model = None
-            return
-        chat = ChatAnthropic(model=model, max_tokens=max_tokens)
-        # Bind the structured-output schema once; reuse on every call.
-        self._model = chat.with_structured_output(EnrichedFormSpec)
+        self._model = None
+        if self._has_key:
+            chat = ChatAnthropic(model=model, max_tokens=max_tokens)
+            self._model = chat.with_structured_output(_SuggestionsOutput)
 
     def is_available(self) -> bool:
         return self._has_key and self._model is not None
 
-    def enrich(
-        self,
-        form: FormSpec,
-        df: pd.DataFrame,
-        user_instructions: str | None = None,
-    ) -> EnrichedFormSpec:
-        """Send one form to Claude and get back a refined FormSpec + changes."""
+    def suggest_names(self, problems: list[_FieldProblem]) -> _SuggestionsOutput:
+        """Send all detected field problems to Claude in one call.
+
+        Returns a _SuggestionsOutput whose suggestions are matched back to
+        problems by (form_name, section_name, field_name) in enricher.py.
+        """
         if not self.is_available():
             raise RuntimeError(
                 "LLMHelper called without ANTHROPIC_API_KEY; check is_available() first"
             )
-
-        user_blocks = [
-            f"## Form: {form.name}\n",
-            "### Parser's current FormSpec\n```json\n",
-            _json_dumps(_form_spec_to_compact_dict(form)),
-            "\n```\n",
-            "### Source sheet (Markdown table)\n",
-            _df_to_markdown(df),
-            "\n",
-        ]
-        if user_instructions:
-            user_blocks.append(
-                f"\n### User instructions\n{user_instructions}\n"
-            )
-        user_blocks.append(
-            "\nReturn an EnrichedFormSpec with the refined FormSpec and a "
-            "Change list describing every refinement. If nothing needs to "
-            "change, return the FormSpec unchanged with changes=[]."
+        system = SystemMessage(content=[{
+            "type": "text",
+            "text": _SUGGEST_SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        }])
+        result = self._model.invoke(
+            [system, HumanMessage(content=_build_problem_prompt(problems))]
         )
-        user_text = "".join(user_blocks)
-
-        # The system prompt is identical across calls, so cache it.
-        system = SystemMessage(
-            content=[{
-                "type": "text",
-                "text": _SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }]
-        )
-        result = self._model.invoke([system, HumanMessage(content=user_text)])
-        # `with_structured_output` returns the parsed Pydantic model directly.
         return result  # type: ignore[return-value]
 
     def classify(
@@ -204,13 +164,11 @@ class LLMHelper:
             )
         chat = ChatAnthropic(model=MODEL, max_tokens=MAX_TOKENS)
         model = chat.with_structured_output(response_model)
-        system = SystemMessage(
-            content=[{
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }]
-        )
+        system = SystemMessage(content=[{
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }])
         human = HumanMessage(content=user_prompt)
         last_exc: Exception | None = None
         for _ in range(max(1, retries)):

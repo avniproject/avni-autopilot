@@ -9,7 +9,7 @@ Used by:
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal, get_args
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -300,49 +300,6 @@ class Change(BaseModel):
     before: dict[str, Any] = Field(default_factory=dict)
     after: dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
-
-
-class EnrichedFormSpec(BaseModel):
-    """Wire format for the LLM enrichment call.
-
-    Lives only between `enrich_with_llm` and the change-application step; never
-    persisted, never passed to `generators.py`. The refined `form` flows
-    downstream and `changes` get split into auto-apply vs pending.
-    """
-    form: FormSpec
-    changes: list[Change] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _drop_unsupported_change_kinds(cls, data: Any) -> Any:
-        # Haiku occasionally invents kinds outside ChangeKind (e.g. "skip_logic"
-        # when the source sheet has skip-logic columns). The strict Literal
-        # would otherwise reject the whole response and lose every valid
-        # refinement on this form, so drop unknowns here with a warning.
-        if not isinstance(data, dict):
-            return data
-        raw_changes = data.get("changes")
-        if not isinstance(raw_changes, list):
-            return data
-        allowed = set(get_args(ChangeKind))
-        kept: list[Any] = []
-        dropped: list[str] = []
-        for ch in raw_changes:
-            if not isinstance(ch, dict):
-                kept.append(ch)
-                continue
-            kind = ch.get("kind")
-            if kind in allowed:
-                kept.append(ch)
-            else:
-                dropped.append(f"{ch.get('change_id', '?')}:{kind!r}")
-        if dropped:
-            _log.warning(
-                "EnrichedFormSpec: dropped %d change(s) with unsupported kind: %s",
-                len(dropped), ", ".join(dropped),
-            )
-        data["changes"] = kept
-        return data
 
 
 # ── Bundle field editing (BUNDLE_EDITING_SDD) ────────────────────────────────
