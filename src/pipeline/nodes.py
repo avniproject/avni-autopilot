@@ -432,9 +432,9 @@ def generate_rules(state: BundleState) -> dict:
     form_contexts = contexts[: len(pending_form)]
     field_contexts = contexts[len(pending_form):]
 
-    # Pass 3 — per-rule Sonnet call + validate + write. Generation stays
-    # serial because each prompt is form-specific (different system prompt,
-    # different available concepts) — batching there would hurt quality.
+    # Pass 3 — generate + validate + write.
+    # Form-level rules: one Sonnet call per rule (each has its own system prompt).
+    # Field-level rules: one batched call per form (all fields in one prompt).
     written_form = 0
     written_field = 0
 
@@ -460,37 +460,50 @@ def generate_rules(state: BundleState) -> dict:
         target["content"][kind_value] = result.js
         written_form += 1
 
-    for (form_spec, section_name, field_name, rule_spec), ctx in zip(
-        pending_field, field_contexts,
-    ):
-        ns = (
-            f"rules.{RuleKind.FORM_ELEMENT.value}."
-            f"{form_spec.name}.{section_name}.{field_name}"
+    # Group field-level pending by form so each form is one batch call.
+    by_form: dict[str, list[tuple[int, Any, str, str, Any]]] = {}
+    for i, (form_spec, section_name, field_name, rule_spec) in enumerate(pending_field):
+        by_form.setdefault(form_spec.name, []).append(
+            (i, form_spec, section_name, field_name, rule_spec)
         )
-        result = generator.generate(rule_spec, context=ctx)
-        ok, raw_warnings = validate_and_decide(result, rule_spec)
 
-        for warning in raw_warnings:
-            warnings.append(f"{ns}: {warning}")
+    for form_entries in by_form.values():
+        batch_input = [
+            (fname, section, rs, field_contexts[i])
+            for i, _, section, fname, rs in form_entries
+        ]
+        results = generator.generate_field_batch(batch_input)
 
-        if not ok:
-            continue
-
-        target = forms_by_name.get(form_spec.name)
-        if target is None:
-            warnings.append(f"{ns}: form JSON not found in state; cannot write")
-            continue
-        form_element = _find_form_element_in_json(
-            target["content"], section_name, field_name,
-        )
-        if form_element is None:
-            warnings.append(
-                f"{ns}: matching form element not found in form JSON; "
-                f"the field may have been deduped or renamed by the generator"
+        for (i, form_spec, section_name, field_name, rule_spec), result in zip(
+            form_entries, results
+        ):
+            ns = (
+                f"rules.{RuleKind.FORM_ELEMENT.value}."
+                f"{form_spec.name}.{section_name}.{field_name}"
             )
-            continue
-        form_element["rule"] = result.js
-        written_field += 1
+            ok, raw_warnings = validate_and_decide(result, rule_spec)
+
+            for warning in raw_warnings:
+                warnings.append(f"{ns}: {warning}")
+
+            if not ok:
+                continue
+
+            target = forms_by_name.get(form_spec.name)
+            if target is None:
+                warnings.append(f"{ns}: form JSON not found in state; cannot write")
+                continue
+            form_element = _find_form_element_in_json(
+                target["content"], section_name, field_name,
+            )
+            if form_element is None:
+                warnings.append(
+                    f"{ns}: matching form element not found in form JSON; "
+                    f"the field may have been deduped or renamed by the generator"
+                )
+                continue
+            form_element["rule"] = result.js
+            written_field += 1
 
     log.info(
         "[%s] Rules: %d form-level + %d field-level generated, "

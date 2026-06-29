@@ -178,7 +178,7 @@ class RuleGenerator:
         self,
         entries: list[tuple[str, str, RuleSpec, RetrievedContext | None]],
     ) -> list[RuleResult]:
-        """Generate field-level rules for all fields in one form in a single Haiku call.
+        """Generate field-level rules for all fields in one form in a single LLM call.
 
         entries: list of (field_name, section_name, rule_spec, context).
         Returns one RuleResult per entry, in the same order.

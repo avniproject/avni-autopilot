@@ -34,14 +34,14 @@ from pydantic import BaseModel, Field as PField
 from domain.parser import parse_scoping_docs
 from domain.rules.generator import RuleGenerator, MODEL, _FIELD_BATCH_MODEL
 from domain.rules.rule_spec import RuleSpec, RuleKind
-from domain.rules.validator import validate_and_decide, _walk
+from domain.rules.validator import validate_and_decide
 from pipeline.nodes import _build_rule_spec
 
 logging.basicConfig(level=logging.WARNING)
 
 _RULES_XLSX = Path("resources/rules/rules_ai_automation.xlsx")
 _SHEET = "Field rules"
-_JUDGE_MODEL = _FIELD_BATCH_MODEL  # Haiku — cheap, fast, adequate for comparison
+_JUDGE_MODEL = MODEL  # Sonnet — judge needs strong JS reasoning to compare logic vs intent
 
 # Cost per 1M tokens (input, output) — update if pricing changes
 _MODEL_COST: dict[str, tuple[float, float]] = {
@@ -125,23 +125,11 @@ def _match_form(generated_name: str, expected_names: list[str]) -> str | None:
     return best if best_score >= 0.4 else None
 
 
-def _extract_concepts(js: str) -> set[str]:
-    if not js:
-        return set()
-    try:
-        tree = esprima.parseScript(js)
-    except Exception:
-        return set()
-    concepts: set[str] = set()
-    _walk(tree, concepts, set())
-    return concepts
-
 
 # ── LLM-as-judge ─────────────────────────────────────────────────────────────
 
 class _JudgeItem(BaseModel):
     logic_direction: Literal["correct", "inverted", "different"]
-    condition_accuracy: Literal["exact", "close", "wrong"]
     completeness: Literal["full", "partial", "missing"]
     verdict: Literal["correct", "partial", "wrong"]
     reason: str
@@ -152,85 +140,58 @@ class _JudgeBatchOutput(BaseModel):
 
 
 _JUDGE_SYSTEM = """\
-You are evaluating auto-generated Avni field-visibility rules in JavaScript.
+You evaluate auto-generated Avni field rules in JavaScript.
 
-You will be given the bundle context (form type, entity param, available concepts
-and their answer lists) that the generator had access to. Use this to judge whether
-the generated rule is correct — not just structurally similar to the reference.
+Field rules control more than just visibility — they may show or hide a field,
+raise a validation error, filter which coded answers appear, or compute a value.
+The INTENT tells you which behaviour is expected.
 
-Key context rules:
-- The entity param must match the form type:
-    IndividualProfile / Encounter           → individual / encounter
-    ProgramEnrolment / ProgramExit          → programEnrolment
-    ProgramEncounter / ProgramEncounterCancellation → programEncounter
-- Concept name accessors must match the entity chain:
-    valueInEncounter / valueInRegistration / valueInEnrolment / valueInExit
-  A rule that uses the wrong accessor for the form type is WRONG even if the
-  concept name is correct.
-- Answer strings must match CONCEPT_ANSWERS exactly. A close-but-wrong answer
-  string is condition_accuracy=close, not exact.
+Your job: does the GENERATED JS implement the stated INTENT correctly?
+Use the REFERENCE only as a guide to understand what the intent means in practice.
 
-Score each field:
+Do NOT check:
+- Helper method names or whether they are valid — a separate static validator
+  already covers symbol grounding. You have no helper list, so do not guess.
+- Exact concept names or UUIDs — generated code may use a UUID where the
+  reference uses a name; both can be correct.
+- Answer strings — you do not have the CONCEPT_ANSWERS list, so you cannot
+  verify them. Skip any judgment about answer string correctness.
+
+Focus only on whether the behaviour matches the intent:
+- Does the rule produce the right outcome (show/hide, validation error, answer
+  filter, or computed value) in the right direction?
+- Does it cover all the conditions the intent describes?
 
 logic_direction:
-  correct   — show/hide condition points in the same direction as the reference
-  inverted  — condition is logically inverted (shows when should hide, or vice versa)
-  different — fundamentally different condition or entity
-
-condition_accuracy:
-  exact — same concept name(s), same answer value(s), correct accessor for form type
-  close — right concept and direction, but wrong answer string or minor accessor mismatch
-  wrong — different concept, wrong entity chain, or completely different condition
+  correct   — the rule produces the behaviour the intent describes, in the right
+               direction (shows when it should show, errors when it should error,
+               filters the right answers, computes the stated value)
+  inverted  — the rule does the opposite of what the intent says (shows when it
+               should hide, suppresses an error that should fire, etc.)
+  different — the rule implements something unrelated to the intent, or the
+               behaviour type is completely wrong
 
 completeness:
-  full    — handles all cases the reference handles
-  partial — handles the main case but misses edge cases or secondary conditions
+  full    — all conditions the intent describes are handled
+  partial — main condition is present but secondary conditions or edge cases are missing
   missing — core logic is absent or JS is empty
 
 verdict:
-  correct — logic_direction=correct AND condition_accuracy=exact/close AND completeness=full/partial
-  partial — logic_direction=correct but condition_accuracy=wrong OR completeness=missing
-  wrong   — logic_direction=inverted/different OR entity param mismatch
+  correct — logic_direction=correct AND completeness=full/partial
+  partial — logic_direction=correct AND completeness=missing
+  wrong   — logic_direction=inverted/different
 
 Return one entry per field in the same order as the FIELDS block.
 """
 
 _JUDGE_USER_TEMPLATE = """\
-FORM CONTEXT
-Form type  : {form_type}
-Entity param: {entity_param}
-Subject type: {subject_type}
-Program     : {program}
-Encounter   : {encounter_type}
-
-AVAILABLE_CONCEPTS
-{available_concepts}
-
-CONCEPT_ANSWERS
-{concept_answers}
-
 FIELDS
 {fields_block}
 """
 
 
-def _format_concept_answers(answers: dict[str, list[str]]) -> str:
-    if not answers:
-        return "(none)"
-    lines: list[str] = []
-    for concept, opts in answers.items():
-        lines.append(f"- {concept}")
-        for opt in opts:
-            lines.append(f'    * "{opt}"')
-    return "\n".join(lines)
-
-
-def _build_judge_prompt(
-    entries: list[tuple[str, str, str, str]],
-    shared_spec: RuleSpec,
-) -> str:
+def _build_judge_prompt(entries: list[tuple[str, str, str, str]]) -> str:
     """entries: list of (field_name, intent, reference_js, generated_js)."""
-    from domain.rules.prompts import entity_param_for_form_type
     blocks: list[str] = []
     for i, (fname, intent, ref_js, gen_js) in enumerate(entries, 1):
         blocks.append(
@@ -240,13 +201,6 @@ def _build_judge_prompt(
             f"GENERATED:\n{gen_js or '(empty)'}"
         )
     return _JUDGE_USER_TEMPLATE.format(
-        form_type=shared_spec.form_type,
-        entity_param=entity_param_for_form_type(shared_spec.form_type),
-        subject_type=shared_spec.subject_type or "-",
-        program=shared_spec.program or "-",
-        encounter_type=shared_spec.encounter_type or "-",
-        available_concepts="\n".join(f"- {c}" for c in shared_spec.available_concepts) or "(none)",
-        concept_answers=_format_concept_answers(shared_spec.concept_answers),
         fields_block="\n\n---\n\n".join(blocks),
     )
 
@@ -254,7 +208,6 @@ def _build_judge_prompt(
 @dataclass
 class JudgeVerdict:
     logic_direction: str
-    condition_accuracy: str
     completeness: str
     verdict: str
     reason: str
@@ -263,7 +216,6 @@ class JudgeVerdict:
 def run_judge(
     sonnet_stats: RunStats,
     haiku_stats: RunStats,
-    spec_by_key: dict[tuple[str, str], RuleSpec],
 ) -> tuple[dict[tuple[str, str], JudgeVerdict], dict[tuple[str, str], JudgeVerdict]]:
     """Judge both models' outputs against the reference, batched per form.
 
@@ -288,22 +240,14 @@ def run_judge(
     haiku_verdicts:  dict[tuple[str, str], JudgeVerdict] = {}
 
     for form, field_names in forms.items():
-        # Use the RuleSpec of the first matched field as shared form context
-        shared_spec = next(
-            (spec_by_key[(form, fn)] for fn in field_names if (form, fn) in spec_by_key),
-            None,
-        )
-        if shared_spec is None:
-            continue
-
         for model_label, by_key, verdicts in [
             ("Sonnet", sonnet_by_key, sonnet_verdicts),
             ("Haiku",  haiku_by_key,  haiku_verdicts),
         ]:
-            entries = []
+            entries: list[tuple[str, str, str, str]] = []
             for fname in field_names:
                 r = by_key.get((form, fname))
-                if r is None or not r.has_reference:
+                if r is None or not r.has_reference or not r.js:
                     continue
                 entries.append((fname, r.intent, r.expected_js, r.js))
 
@@ -313,7 +257,7 @@ def run_judge(
             try:
                 output: _JudgeBatchOutput = judge_model.invoke([
                     system_msg,
-                    HumanMessage(content=_build_judge_prompt(entries, shared_spec)),
+                    HumanMessage(content=_build_judge_prompt(entries)),
                 ])
             except Exception as exc:
                 logging.warning(f"Judge call failed for {form} / {model_label}: {exc}")
@@ -322,7 +266,6 @@ def run_judge(
             for (fname, _, _, _), item in zip(entries, output.verdicts):
                 verdicts[(form, fname)] = JudgeVerdict(
                     logic_direction=item.logic_direction,
-                    condition_accuracy=item.condition_accuracy,
                     completeness=item.completeness,
                     verdict=item.verdict,
                     reason=item.reason,
@@ -351,16 +294,6 @@ class FieldResult:
     @property
     def has_reference(self) -> bool:
         return bool(self.expected_js)
-
-    @property
-    def concept_overlap(self) -> float | None:
-        if not self.has_reference:
-            return None
-        gen = _extract_concepts(self.js)
-        exp = _extract_concepts(self.expected_js)
-        if not exp:
-            return None
-        return len(gen & exp) / len(exp) if gen else 0.0
 
 
 @dataclass
@@ -396,14 +329,6 @@ class RunStats:
         for r in self.results:
             out[r.confidence] = out.get(r.confidence, 0) + 1
         return out
-
-    def avg_js_len(self) -> float:
-        lens = [len(r.js) for r in self.results if r.js]
-        return sum(lens) / len(lens) if lens else 0.0
-
-    def avg_concept_overlap(self) -> float | None:
-        scores = [r.concept_overlap for r in self.results if r.concept_overlap is not None]
-        return sum(scores) / len(scores) if scores else None
 
     def judge_counts(self) -> dict[str, int]:
         out: dict[str, int] = {"correct": 0, "partial": 0, "wrong": 0, "unjudged": 0}
@@ -515,11 +440,7 @@ def print_summary(sonnet: RunStats, haiku: RunStats) -> None:
     print("-" * 80)
     matched_s = sum(1 for r in sonnet.results if r.has_reference)
     matched_h = sum(1 for r in haiku.results if r.has_reference)
-    so = sonnet.avg_concept_overlap()
-    ho = haiku.avg_concept_overlap()
     row("Fields with reference", f"{matched_s}/{sonnet.n}", f"{matched_h}/{haiku.n}")
-    row("Concept overlap (vs ref)", f"{so:.0%}" if so is not None else "-",
-        f"{ho:.0%}" if ho is not None else "-")
     print("-" * 80)
     sjc, hjc = sonnet.judge_counts(), haiku.judge_counts()
     judged_s = matched_s - sjc.get("unjudged", 0)
@@ -528,7 +449,6 @@ def print_summary(sonnet: RunStats, haiku: RunStats) -> None:
         row(f"Judge: {verdict}",
             f"{sjc[verdict]} ({sjc[verdict]/judged_s:.0%})" if judged_s else "-",
             f"{hjc[verdict]} ({hjc[verdict]/judged_h:.0%})" if judged_h else "-")
-    row("Avg JS length (chars)", f"{sonnet.avg_js_len():.0f}", f"{haiku.avg_js_len():.0f}")
     print("-" * 80)
     row("Input tokens",  str(sonnet.tracker.input_tokens),  str(haiku.tracker.input_tokens))
     row("Output tokens", str(sonnet.tracker.output_tokens), str(haiku.tracker.output_tokens))
@@ -541,8 +461,8 @@ def print_field_table(sonnet: RunStats, haiku: RunStats) -> None:
     by_key = {(r.form, r.field): r for r in sonnet.results}
 
     print(f"\n{'FORM':<28} {'FIELD':<30} {'S-VAL':<8} {'H-VAL':<8} "
-          f"{'S-JUDGE':<10} {'H-JUDGE':<10} {'OVERLAP'}")
-    print("-" * 104)
+          f"{'S-JUDGE':<10} {'H-JUDGE'}")
+    print("-" * 96)
     for hr in haiku.results:
         sr = by_key.get((hr.form, hr.field))
         if sr is None:
@@ -551,11 +471,10 @@ def print_field_table(sonnet: RunStats, haiku: RunStats) -> None:
         h_val = "OK" if hr.validator_ok else "FAIL"
         s_judge = sr.judge.verdict[0].upper() + sr.judge.verdict[1:] if sr.judge else "-"
         h_judge = hr.judge.verdict[0].upper() + hr.judge.verdict[1:] if hr.judge else "-"
-        overlap = (f"{sr.concept_overlap:.0%}" if sr.concept_overlap is not None else "-")
         differ = " <" if (sr.validator_ok != hr.validator_ok or
                           (sr.judge and hr.judge and sr.judge.verdict != hr.judge.verdict)) else ""
         print(f"{sr.form[:28]:<28} {sr.field[:30]:<30} {s_val:<8} {h_val:<8} "
-              f"{s_judge:<10} {h_judge:<10} {overlap}{differ}")
+              f"{s_judge:<10} {h_judge}{differ}")
 
     # Fields where judge disagrees — show reasons
     diffs = [
@@ -567,7 +486,7 @@ def print_field_table(sonnet: RunStats, haiku: RunStats) -> None:
     ]
     if diffs:
         print(f"\nJUDGE DISAGREEMENTS ({len(diffs)} fields):")
-        print("-" * 104)
+        print("-" * 96)
         for sr, hr in diffs:
             print(f"  {sr.form[:28]} / {sr.field}")
             print(f"    Sonnet ({sr.judge.verdict}): {sr.judge.reason}")
@@ -595,7 +514,6 @@ def main() -> None:
     ]
 
     pending: list[tuple[str, str, str, RuleSpec]] = []
-    spec_by_key: dict[tuple[str, str], RuleSpec] = {}
     for form_spec in field_level_forms:
         for section in (form_spec.sections or []):
             for fld in (section.fields or []):
@@ -607,7 +525,6 @@ def main() -> None:
                     all_forms=spec.forms,
                 )
                 pending.append((form_spec.name, section.name, fld.name, rule_spec))
-                spec_by_key[(form_spec.name, fld.name)] = rule_spec
 
     print(f"Found {len(pending)} fields across {len(field_level_forms)} forms.")
 
@@ -639,7 +556,7 @@ def main() -> None:
         print(f"KB retrieve failed: {exc}")
         sys.exit(1)
 
-    haiku_gen = RuleGenerator(kb=sonnet_gen.kb, field_batch_model=_FIELD_BATCH_MODEL)
+    haiku_gen = RuleGenerator(kb=sonnet_gen.kb, field_batch_model=_FIELD_BATCH_MODEL, max_tokens=8192)
 
     sonnet_tracker = _TokenTracker()
     haiku_tracker  = _TokenTracker()
@@ -657,7 +574,7 @@ def main() -> None:
     judged_count = sum(1 for r in sonnet_stats.results if r.has_reference)
     print(f"\nRunning LLM-as-judge ({_JUDGE_MODEL}) — "
           f"{judged_count} fields × 2 models, batched per form…")
-    sonnet_verdicts, haiku_verdicts = run_judge(sonnet_stats, haiku_stats, spec_by_key)
+    sonnet_verdicts, haiku_verdicts = run_judge(sonnet_stats, haiku_stats)
     attach_verdicts(sonnet_stats, sonnet_verdicts)
     attach_verdicts(haiku_stats, haiku_verdicts)
 

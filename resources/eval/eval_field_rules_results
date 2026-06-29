@@ -1,0 +1,104 @@
+f1='resources/input/astitva/Astitva Modelling (1).xlsx'
+  f2='resources/input/astitva/Astitva Nourish Program Forms (1).xlsx'
+  python scripts/eval_field_rules.py "$f1" "$f2"
+Parsing 2 file(s)…
+WARNING:domain.parser:No location hierarchy found — using default State/District/Village
+Found 34 fields across 10 forms.
+Loading expected rules from rules_ai_automation.xlsx…
+  Anganwadi Registration                   → (no match)
+  Awareness Register                       → Awareness Register
+  Beneficiary Registration                 → Beneficiary Registration
+  Child Monitoring - HCCM Daily C          → Child Monitoring - HCCM Daily Consumption
+  Delivery                                 → Delivery
+  HCCM Distribution for Child              → HCCM Distribution Child
+  HCCM Distribution for Pregnancy          → HCCM Distribution
+  Mother Monitoring - HCCM Daily           → Mother Monitoring - HCCM Daily
+  Nourish  - Child Enrolment               → Nourish  - Child Enrolment
+  Nourish - Pregnancy Enrollment           → Nourish - Pregnancy Enrollment
+
+68 expected rules loaded, 9 forms matched.
+
+Retrieving KB contexts (one Voyage batch, shared)…
+
+Running Sonnet (claude-sonnet-4-6) batched — 10 calls…
+
+
+Running Haiku (claude-haiku-4-5-20251001) batched — 10 calls…
+
+Running LLM-as-judge (claude-sonnet-4-6) — 18 fields × 2 models, batched per form…
+
+================================================================================
+  METRIC                           SONNET (batched)         HAIKU (batched)
+================================================================================
+  Fields evaluated                 34                       34
+  API calls (generation)           10                       10
+  Total time (s)                   134.2                    53.3
+  Avg time / field (s)             3.95                     1.57
+--------------------------------------------------------------------------------
+  JS non-empty rate                82%                      26%
+  Parse valid rate                 82%                      21%
+  Validator pass rate              82%                      21%
+--------------------------------------------------------------------------------
+  Confidence: high                 9 (26%)                  8 (24%)
+  Confidence: medium               18 (53%)                 1 (3%)
+  Confidence: low                  7 (21%)                  25 (74%)
+--------------------------------------------------------------------------------
+  Fields with reference            18/34                    18/34
+--------------------------------------------------------------------------------
+  Judge: correct                   9 (50%)                  5 (83%)
+  Judge: partial                   0 (0%)                   0 (0%)
+  Judge: wrong                     9 (50%)                  1 (17%)
+--------------------------------------------------------------------------------
+  Input tokens                     0                        0
+  Output tokens                    0                        0
+  Estimated cost (USD)             $0.0000                  $0.0000
+================================================================================
+
+FORM                         FIELD                          S-VAL    H-VAL    S-JUDGE    H-JUDGE
+------------------------------------------------------------------------------------------------
+Beneficiary Registration     School Name                    OK       FAIL     -          - <
+Beneficiary Registration     Standard                       OK       FAIL     -          - <
+Beneficiary Registration     Date of Admission at school/ o OK       FAIL     Wrong      - <
+Beneficiary Registration     Student ID                     OK       FAIL     -          - <
+Beneficiary Registration     Guardian Name, if not under th OK       FAIL     Correct    - <
+Beneficiary Registration     Guardian Occupation            OK       FAIL     Correct    - <
+Beneficiary Registration     Guardian Contact Number        OK       FAIL     Correct    - <
+Beneficiary Registration     Anganwadi Center Name          OK       FAIL     Wrong      - <
+Anganwadi Registration       First Name                     FAIL     FAIL     -          -
+Nourish - Pregnancy Enrollme HB Level                       OK       FAIL     Wrong      Correct <
+Nourish - Pregnancy Enrollme Type of Health Issue           OK       FAIL     Wrong      Correct <
+Delivery                     Other complications, please sp OK       OK       Correct    Correct
+Mother Monitoring - HCCM Dai Status for the Day             FAIL     FAIL     -          -
+Mother Monitoring - HCCM Dai Reason for Not Taken           OK       FAIL     -          - <
+Mother Monitoring - HCCM Dai Please Specify Other Reason    OK       FAIL     -          - <
+Mother Monitoring - HCCM Dai Photo Proof                    OK       FAIL     Correct    - <
+Mother Monitoring - HCCM Dai Remarks                        FAIL     FAIL     -          -
+Child Monitoring - HCCM Dail Status for the Day             FAIL     FAIL     -          -
+Child Monitoring - HCCM Dail Reason for Not Taken           OK       FAIL     -          - <
+Child Monitoring - HCCM Dail Please Specify Other Reason    OK       FAIL     -          - <
+Child Monitoring - HCCM Dail Photo Proof                    OK       FAIL     Correct    - <
+Child Monitoring - HCCM Dail Remarks                        FAIL     FAIL     -          -
+HCCM Distribution for Pregna HCCM Distribution Cycle        OK       FAIL     Wrong      - <
+HCCM Distribution for Pregna HCCM Distribution Cycle        OK       FAIL     Wrong      - <
+HCCM Distribution for Child  HCCM Distribution Cycle        OK       FAIL     Wrong      - <
+HCCM Distribution for Child  HCCM Distribution Cycle        OK       FAIL     Wrong      - <
+Nourish  - Child Enrolment   Birth Weight                   OK       OK       Correct    Correct
+Nourish  - Child Enrolment   Birth Height                   OK       OK       Correct    Correct
+Nourish  - Child Enrolment   Gender                         OK       OK       -          -
+Nourish  - Child Enrolment   Order of Birth                 OK       OK       -          -
+Nourish  - Child Enrolment   Nutrition Status               OK       OK       Correct    Wrong <
+Nourish  - Child Enrolment   Remarks                        OK       OK       -          -
+Awareness Register           Topic                          FAIL     FAIL     -          -
+Awareness Register           Total Beneficiraries Participa OK       FAIL     Wrong      - <
+
+JUDGE DISAGREEMENTS (3 fields):
+------------------------------------------------------------------------------------------------
+  Nourish - Pregnancy Enrollme / HB Level
+    Sonnet (wrong): The intent is to show 'HB Level' based on a value in an enrolment (programEnrolment context, using valueInEnrolment), but the generated code uses a programEncounter context with valueInEncounter. This is a fundamentally different entity/context — the condition is checked against encounter data instead of enrolment data, making the behaviour different from what is intended.
+    Haiku  (correct): The generated rule correctly implements a show condition when the answer 'Yes' is selected for the HB Level tested question, which matches the intent. However, the reference uses `valueInEnrolment` (program enrolment context) whereas the generated code uses `valueInEncounter` (encounter context), which is a contextual mismatch. The logic direction and show/hide behaviour are correct, but the entity context differs from the reference.
+  Nourish - Pregnancy Enrollme / Type of Health Issue
+    Sonnet (wrong): The intent is to show 'Type of Health Issue' based on a value in an enrolment (programEnrolment context, using valueInEnrolment), but the generated code uses a programEncounter context with valueInEncounter. This is a fundamentally different entity/context — the condition is checked against encounter data instead of enrolment data, making the behaviour different from what is intended.
+    Haiku  (correct): The generated rule correctly implements a show condition when 'Yes' is selected for the Health Conditions question, matching the intent. Similar to field [1], the generated code uses `valueInEncounter` instead of `valueInEnrolment` as in the reference, representing a context mismatch. The core logic direction and behaviour are correct, but the entity context differs.
+  Nourish  - Child Enrolment / Nutrition Status
+    Sonnet (correct): The generated rule correctly implements: (1) show when Delivery is Yes, (2) answer filtering (skipAnswers) based on Birth Weight ranges matching the intent, and (3) block-save validation errors when the selected Nutrition Status doesn't match the Birth Weight range. However, the reference uses a computed value (auto-setting the answer) rather than answer filtering + validation. The generated code uses answer filtering + validation which satisfies the intent's stated requirements but differs in approach — it does not auto-compute the value. Also, the statusBuilder.build() is returned at the end without the validationErrors being passed through it when no error exists, but the overall behavior covers all three stated requirements (show, filter answers, block save). The missing auto-value-computation is a minor gap relative to the reference but the intent does not explicitly require it; completeness is partial because the reference's auto-value behavior is not replicated.
+    Haiku  (wrong): The intent asks for: (1) show when Delivery is Yes, (2) block save (validation error) based on birth weight ranges, and (3) filter/restrict answer options based on birth weight ranges. The generated rule correctly implements show-when-Delivery-Yes and correctly filters answers via skipAnswers based on birth weight ranges. However, it completely omits the 'block save' (validation error) logic that the intent explicitly requires. More critically, the reference computes a VALUE (auto-selects the nutrition status answer) rather than filtering answers — the intent says 'restrict the answer options' which the generated code does implement via skipAnswers, but it misses the computed value assignment and the validation/block-save requirement. The logic direction for the answer filtering is correct, but the block-save behavior is entirely absent, making this a wrong verdict due to the missing validation error logic being a core part of the intent.
