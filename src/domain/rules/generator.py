@@ -35,8 +35,8 @@ log = logging.getLogger(__name__)
 
 
 MODEL = "claude-sonnet-4-6"
-_FIELD_BATCH_MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 4096
+_FIELD_BATCH_MAX_TOKENS = 8192
 
 
 class _LLMRuleOutput(BaseModel):
@@ -67,7 +67,7 @@ class _LLMFieldRuleItem(BaseModel):
 
 
 class _LLMFieldBatchOutput(BaseModel):
-    """The schema Haiku returns for a per-form field batch call."""
+    """The schema Claude returns for a per-form field batch call."""
 
     rules: list[_LLMFieldRuleItem] = Field(default_factory=list)
 
@@ -84,8 +84,8 @@ class RuleGenerator:
         self,
         kb: KnowledgeBase | None = None,
         model: str = MODEL,
-        field_batch_model: str = _FIELD_BATCH_MODEL,
         max_tokens: int = MAX_TOKENS,
+        field_batch_max_tokens: int = _FIELD_BATCH_MAX_TOKENS,
     ) -> None:
         self._kb = kb or KnowledgeBase()
         self._has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
@@ -94,7 +94,7 @@ class RuleGenerator:
         if self._has_key:
             chat = ChatAnthropic(model=model, max_tokens=max_tokens)
             self._model = chat.with_structured_output(_LLMRuleOutput)
-            field_chat = ChatAnthropic(model=field_batch_model, max_tokens=max_tokens)
+            field_chat = ChatAnthropic(model=model, max_tokens=field_batch_max_tokens)
             self._field_batch_model = field_chat.with_structured_output(_LLMFieldBatchOutput)
 
     def is_available(self) -> bool:
@@ -231,7 +231,7 @@ class RuleGenerator:
             )
         except Exception as exc:  # noqa: BLE001
             log.warning(
-                f"Haiku field batch failed for form {shared_spec.form_name!r}: {exc}"
+                f"Field batch failed for form {shared_spec.form_name!r}: {exc}"
             )
             return [
                 _empty(spec, f"field batch call failed: {exc}")

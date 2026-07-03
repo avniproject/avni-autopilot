@@ -235,7 +235,7 @@ def _format_concept_answers(answers: dict[str, list[str]]) -> str:
     return "\n".join(lines)
 
 
-# ── Field-batch prompt (Haiku, one call per form) ─────────────────────────────
+# ── Field-batch prompt (one Sonnet call per form) ────────────────────────────
 
 _FIELD_BATCH_SYSTEM_PROMPT_TEMPLATE = """\
 You generate Avni form-element rule functions in JavaScript.
@@ -297,7 +297,7 @@ Generate one JS IIFE per field. Return a `rules` list with one entry per field,
 
 
 def build_field_batch_system_prompt(entity_param: str) -> str:
-    """Render the cacheable system prompt for a field-batch Haiku call."""
+    """Render the cacheable system prompt for a field-batch call."""
     return _FIELD_BATCH_SYSTEM_PROMPT_TEMPLATE.format(entity_param=entity_param)
 
 
