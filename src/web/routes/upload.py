@@ -19,6 +19,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Header,
     HTTPException,
     Request,
     UploadFile,
@@ -181,6 +182,7 @@ async def upload_scoping_files(
 async def upload_to_avni(
     session_id: str,
     store: SessionStore = Depends(_get_store),
+    auth_token: str | None = Header(default=None, alias="AUTH-TOKEN"),
 ) -> dict[str, Any]:
     """Relay the generated bundle ZIP to avni-server's import endpoint.
 
@@ -193,6 +195,12 @@ async def upload_to_avni(
     that job id.
     """
     session = _require_session(session_id, store)
+
+    # Prefer the token from the current request — the browser refreshes it
+    # automatically, so this is always fresher than what was captured at
+    # session creation (which may have expired during a long generation run).
+    if auth_token:
+        session.auth_token = auth_token
 
     if session.bundle_path is None or not Path(session.bundle_path).exists():
         raise HTTPException(
