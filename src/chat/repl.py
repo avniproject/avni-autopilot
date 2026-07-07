@@ -61,6 +61,8 @@ def _tool_label(name: str, args: dict) -> str:
     if name == "edit_bundle_fields":
         n = len(args.get("operations") or [])
         return f"Editing {n} field(s)…" if n else "Editing your app's fields…"
+    if name == "answer_avni_question":
+        return "Finding the answer…"
     # Unknown tool — keep the technical fallback so devs aren't left guessing.
     arg_str = json.dumps(args, default=str)
     if len(arg_str) > 80:
