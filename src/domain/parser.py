@@ -114,14 +114,17 @@ def _clean(val: Any) -> str:
 
 # Regex to strip leading numbering prefixes from field/concept names:
 # "1. Name" → "Name", "2) Age" → "Age", "A. Gender" → "Gender",
-# "1.2 Weight" → "Weight", "1.2.3 Height" → "Height"
+# "1.2 Weight" → "Weight", "1.2.3 Height" → "Height".
+# A bare number or letter followed by only a space is content, not numbering
+# ("5 Above and school children", "I don't know") — punctuation is required
+# unless the number is multi-part ("1.2").
 _NUMBER_PREFIX_RE = re.compile(
     r"^\s*"
     r"(?:"
-    r"[0-9]+(?:\.[0-9]+)*"  # "1", "1.2", "1.2.3"
-    r"|[A-Za-z]"  # single letter like "A", "B"
+    r"[0-9]+(?:\.[0-9]+)+(?=\s)"  # "1.2", "1.2.3" before a space
+    r"|(?:[0-9]+(?:\.[0-9]+)*|[A-Za-z])[\.\)\-:]"  # "1.", "2)", "A.", "3:"
     r")"
-    r"[\.\)\-:\s]\s*"  # followed by . ) - : or space
+    r"\s*"
 )
 
 
