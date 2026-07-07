@@ -132,6 +132,7 @@ def enrich_forms(
     }
 
     changes: list[Change] = []
+    seen_ids: dict[str, int] = {}
     for problem in problems:
         key = (problem.form_name, problem.section_name, problem.field_name)
         suggested = suggestion_map.get(key)
@@ -141,10 +142,13 @@ def enrich_forms(
                 problem.form_name, problem.section_name, problem.field_name,
             )
             continue
-        change_id = (
+        base_id = (
             f"{problem.form_name}::{problem.section_name}"
             f":{problem.field_name}/{problem.kind}"
         )
+        count = seen_ids.get(base_id, 0)
+        seen_ids[base_id] = count + 1
+        change_id = base_id if count == 0 else f"{base_id}#{count}"
         changes.append(Change(
             change_id=change_id,
             form=problem.form_name,
