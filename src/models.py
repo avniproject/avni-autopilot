@@ -284,6 +284,7 @@ class ValidateSpecResponse(BaseModel):
 ChangeKind = Literal[
     "long_name",
     "duplicate_field",
+    "conflicting_concept",
 ]
 
 

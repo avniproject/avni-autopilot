@@ -53,7 +53,7 @@ You are an Avni form-modelling assistant. You receive a list of field naming
 problems detected in one or more forms. Your only job is to suggest a clear,
 concise replacement name for each problem.
 
-Two kinds of problems:
+Three kinds of problems:
 
 1. long_name — the field name exceeds 255 characters. Suggest a shorter name
    that preserves the field's intent in under 255 characters.
@@ -61,6 +61,13 @@ Two kinds of problems:
 2. duplicate_field — two or more fields in the same form share the same name.
    Suggest a disambiguated name for this occurrence using the section context
    provided.
+
+3. conflicting_concept — the same field name appears in multiple forms with
+   different answer lists. Avni requires globally unique concept names, so
+   each form's version must be renamed to make it distinct. Suggest a name
+   that makes clear which program or context this field belongs to, using the
+   form name or program as a qualifier (e.g. "Exit Reason (Pregnancy)" rather
+   than "Exit Reason 1").
 
 For each problem return:
   form_name      — exactly as listed in the problem
@@ -74,7 +81,10 @@ Rules:
   3. Use section names or neighbouring field names as qualifiers when
      disambiguating duplicates (e.g. "Remarks (Distribution)" rather than
      "Remarks 1").
-  4. Return one entry per problem. Do not skip any.
+  4. For conflicting_concept, all occurrences must end up with unique names.
+     One occurrence may keep the original name if that is still unambiguous;
+     the rest must be renamed to make them distinct.
+  5. Return one entry per problem. Do not skip any.
 """
 
 
@@ -96,6 +106,11 @@ def _build_problem_prompt(problems: list[_FieldProblem]) -> str:
             current_form = p.form_name
         if p.kind == "long_name":
             lines.append(f'[{i}] long_name — "{p.field_name}"')
+        elif p.kind == "conflicting_concept":
+            lines.append(f'[{i}] conflicting_concept — "{p.field_name}"')
+            lines.append(f'    This form\'s answers: {", ".join(p.own_options)}')
+            for other_form, other_opts in p.conflicting_forms:
+                lines.append(f'    "{other_form}" answers: {", ".join(other_opts)}')
         else:
             total = dup_totals.get((p.form_name, p.field_name.strip().lower()), 1)
             lines.append(

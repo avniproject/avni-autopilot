@@ -17,7 +17,8 @@ Public surface:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import Literal
 
 from domain.llm import LLMHelper
@@ -33,16 +34,68 @@ NAME_LIMIT = 255
 
 @dataclass
 class _FieldProblem:
-    kind: Literal["long_name", "duplicate_field"]
+    kind: Literal["long_name", "duplicate_field", "conflicting_concept"]
     form_name: str
     field_name: str
     section_name: str
     occurrence: int                         # 1-based; 1 for long_name, 1..N for duplicates
     context_sections: dict[str, list[str]]  # section_name → field names in that section
+    # conflicting_concept only: this form's answers and the other conflicting forms
+    own_options: list[str] = field(default_factory=list)
+    conflicting_forms: list[tuple[str, list[str]]] = field(default_factory=list)  # [(form_name, options)]
+
+
+def _detect_cross_form_conflicts(forms: list[FormSpec]) -> list[_FieldProblem]:
+    """Scan across all forms for Coded fields reused with different answer lists.
+
+    Avni enforces globally unique concept names, so the same concept name with
+    different answers in different forms is a data modelling error that must be
+    resolved by renaming.
+    """
+    # concept_name (normalised) → list of (form, section_name, field)
+    occurrences: dict[str, list[tuple[FormSpec, str, FormSpec]]] = defaultdict(list)
+    for form in forms:
+        for section in (form.sections or []):
+            for fld in (section.fields or []):
+                if fld.dataType != "Coded" or not fld.options:
+                    continue
+                occurrences[fld.name.strip().lower()].append((form, section.name, fld))
+
+    problems: list[_FieldProblem] = []
+    for instances in occurrences.values():
+        if len(instances) <= 1:
+            continue
+        option_sets = [frozenset(f.options) for _, _, f in instances]
+        if len(set(option_sets)) <= 1:
+            continue  # identical answers everywhere — not a conflict
+
+        for form, section_name, fld in instances:
+            others = [
+                (other_form.name, list(other_fld.options))
+                for other_form, _, other_fld in instances
+                if other_form.name != form.name
+            ]
+            context_sections = {
+                sec.name: [f.name for f in sec.fields]
+                for sec in (form.sections or [])
+                if sec.name == section_name
+            }
+            problems.append(_FieldProblem(
+                kind="conflicting_concept",
+                form_name=form.name,
+                field_name=fld.name,
+                section_name=section_name,
+                occurrence=1,
+                context_sections=context_sections,
+                own_options=list(fld.options),
+                conflicting_forms=others,
+            ))
+
+    return problems
 
 
 def _detect_problems(forms: list[FormSpec]) -> list[_FieldProblem]:
-    """Scan all forms and return every long_name and duplicate_field problem."""
+    """Scan all forms for long_name and duplicate_field problems."""
     problems: list[_FieldProblem] = []
 
     for form in forms:
@@ -104,7 +157,7 @@ def enrich_forms(
         pending_changes — every Change awaiting user confirmation
         warnings        — any warnings worth surfacing
     """
-    problems = _detect_problems(forms)
+    problems = _detect_cross_form_conflicts(forms) + _detect_problems(forms)
 
     if not problems:
         return forms, [], [], []

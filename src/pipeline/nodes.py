@@ -593,31 +593,23 @@ def _forms_in_scope_for(target: Any, all_forms: list[Any]) -> list[Any]:
 
 
 def _collect_concept_answers(forms: list[Any]) -> dict[str, list[str]]:
-    """Merge coded-field answer lists across in-scope forms.
+    """Collect coded-field answer lists from the target form only.
 
-    On the rare collision (same concept name, different answer lists across
-    forms — usually an authoring smell), the result is the union and a
-    warning is logged so the drift surfaces.
+    `forms[0]` is the target form. Sibling registration/enrolment forms
+    inform `available_concepts` but their answer lists are not included —
+    answers are specific to each form's context.
     """
-    merged: dict[str, list[str]] = {}
-    for form in forms:
-        for section in (form.sections or []):
-            for field in (section.fields or []):
-                if getattr(field, "dataType", None) != "Coded":
-                    continue
-                options = list(getattr(field, "options", None) or [])
-                if not options:
-                    continue
-                existing = merged.get(field.name)
-                if existing is None:
-                    merged[field.name] = options
-                elif set(existing) != set(options):
-                    log.warning(
-                        f"coded concept {field.name!r} has different answer "
-                        f"lists across forms; merging as union"
-                    )
-                    merged[field.name] = list(dict.fromkeys(existing + options))
-    return merged
+    if not forms:
+        return {}
+    answers: dict[str, list[str]] = {}
+    for section in (forms[0].sections or []):
+        for field in (section.fields or []):
+            if getattr(field, "dataType", None) != "Coded":
+                continue
+            options = list(getattr(field, "options", None) or [])
+            if options:
+                answers[field.name] = options
+    return answers
 
 
 # ── Node 6: write JSON files + ZIP bundle ─────────────────────────────────────

@@ -790,10 +790,12 @@ def _collect_concept_answers_for(
         if registration_uuid:
             in_scope_uuids.add(registration_uuid)
 
-    merged: dict[str, list[str]] = {}
+    answers: dict[str, list[str]] = {}
+    target_uuid = target_form.get("uuid", "")
     for form in forms.values():
         if form.get("uuid") not in in_scope_uuids:
             continue
+        is_target = form.get("uuid") == target_uuid
         for group in (form.get("formElementGroups") or []):
             for element in (group.get("formElements") or []):
                 if element.get("voided"):
@@ -804,18 +806,15 @@ def _collect_concept_answers_for(
                 name = element.get("name") or concept.get("name")
                 if not name:
                     continue
+                if not is_target:
+                    continue
                 options = [
                     a.get("name") for a in (concept.get("answers") or [])
                     if a.get("name") and not a.get("voided")
                 ]
-                if not options:
-                    continue
-                existing = merged.get(name)
-                if existing is None:
-                    merged[name] = options
-                elif set(existing) != set(options):
-                    merged[name] = list(dict.fromkeys(existing + options))
-    return merged
+                if options:
+                    answers[name] = options
+    return answers
 
 
 def write_form_rule(

@@ -117,14 +117,14 @@ def _apply_one(form, change: Change, after: dict, warnings: list[str]) -> bool:
         f.name = new_name
         return True
 
-    if kind == "duplicate_field":
-        # `before.section` disambiguates which occurrence to rename.
+    if kind in ("duplicate_field", "conflicting_concept"):
+        # `before.section` disambiguates which field instance to rename.
         before = change.before or {}
         section = before.get("section") if isinstance(before, dict) else None
         f = _find_field(form, field_name, section=section)
         if f is None:
             warnings.append(
-                f"duplicate_field: '{field_name}' not found in section '{section}' of '{form.name}'"
+                f"{kind}: '{field_name}' not found in section '{section}' of '{form.name}'"
             )
             return False
         f.name = new_name
@@ -141,7 +141,7 @@ def _parse_edit(raw: str, kind: str, fallback: dict, warnings: list[str], change
     the new field name.
     """
     out = dict(fallback)
-    if kind in ("long_name", "duplicate_field"):
+    if kind in ("long_name", "duplicate_field", "conflicting_concept"):
         out["name"] = raw.strip()
     else:
         warnings.append(f"edit not supported for kind={kind} on {change_id}; using LLM proposal")
