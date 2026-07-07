@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-integrate-avni-with-sms-or-whats",
+  "title": "Frequently Asked Questions - Implementation — Can I integrate Avni with SMS or WhatsApp alerts",
+  "body": "**Answer:** Avni provides comprehensive communication capabilities through SMS and WhatsApp integrations:\n\n### SMS Integration (MSG91)\n- Password reset OTP and user credential sharing\n- Phone number verification for beneficiaries\n- Multi-language support with secure authentication\n\n### WhatsApp Integration (Glific)\n- Trigger WhatsApp messages on events (registration, enrollment, visits)\n- Bulk and individual messaging capabilities\n\n**Use cases:** Health camp reminders, ANC visit alerts, motivational content, field worker notifications\n\n**Setup:** Organizations need MSG91 and Glific accounts configured in Avni."
+}

@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-use-avni-with-multiple-langua",
+  "title": "Frequently Asked Questions - Implementation — How do I use Avni with multiple languages at once",
+  "body": "There are a few options to achieve this. \n\nIf there are multiple users, and a user needs to work on a specific language, you will first need to set up that language and add translations to it. A user can go to their profile on the \"More\" menu of the home screen of the app, and choose the language of their choice. \n\nYou can also add your question in multiple languages within the question itself to achieve this if you want both languages to show up at once"
+}

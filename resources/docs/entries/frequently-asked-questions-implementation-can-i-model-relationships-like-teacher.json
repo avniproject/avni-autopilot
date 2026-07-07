@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-model-relationships-like-teacher",
+  "title": "Frequently Asked Questions - Implementation — Can I model relationships like teacher  student  guardian",
+  "body": "Yes. You can create separate subject types for Teacher, Student, and Guardian. Then, by using the subject type concept in the forms, you can link them together. For example, a Teacher can be added in the Student form (or vice versa), and a Guardian can also be linked to the Student.\n\nYou can further enhance this by:\n\nUsing summary rules to show the linked values (e.g., Teacher or Guardian name) at the top of a profile.\n\nIf you click on the Teacher’s name in a Student’s profile, it will take you directly to the Teacher’s profile."
+}

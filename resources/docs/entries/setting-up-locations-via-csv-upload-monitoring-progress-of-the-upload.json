@@ -1,0 +1,5 @@
+{
+  "key": "setting-up-locations-via-csv-upload-monitoring-progress-of-the-upload",
+  "title": "Setting Up Locations via CSV Upload — Monitoring Progress of the Upload",
+  "body": "Avni provides users with an easy way to monitor the progress of the CSV file uploads. In the same “Upload” tab of the Admin section, the bottom-half contains a list of all uploads triggered by users of the organization.\n\n![](https://files.readme.io/ac1a32f7738e8035e5ad076005a218693044cfc7f00348d080bdd3a3e50d2d22-image.png)The “Status” column will indicate the overall status of the specific upload activity. With other columns like “Rows/File read” , “Rows/File completed” and “Rows/File skipped” indicating the Granular row-level progress of the file processing.\n\nThe final “Failure” column, will consist of Hyperlinks to Download an Error Information file, which would be present, only upon Erroneous completion of the upload activity."
+}

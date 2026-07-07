@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-edit-a-form-after-it-has-been-de",
+  "title": "Frequently Asked Questions - Implementation — Can I edit a form after it has been deployed",
+  "body": "Yes. You can edit a form after it has been deployed by going to the form either through the \"Forms\" section of the App Designer or through the \"Encounter Types\"/\"Programs\"/\"Subject Types\" section of the Admin section. Any changes you make will be available to users once they sync the app.\nOlder filled forms will still have any questions you delete, but they cannot be modified anymore."
+}

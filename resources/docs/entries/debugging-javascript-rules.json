@@ -1,0 +1,5 @@
+{
+  "key": "debugging-javascript-rules",
+  "title": "Debugging JavaScript Rules",
+  "body": "## TLDR\n\n<!-- TODO: Add 2-3 sentence summary of Debugging JavaScript Rules -->\n\n## Overview\n\n**What:** <!-- TODO: One-sentence description -->\n\n**When to use:** <!-- TODO: Scenarios -->\n\n**Prerequisites:** <!-- TODO: What to know first -->\n\n## Common Rule Errors\n\n<!-- TODO: Add content for common-rule-errors -->\n\n## Debugging Checklist\n\n<!-- TODO: Add content for debugging-checklist -->\n\n## Rule Failure Logs\n\n<!-- TODO: Add content for rule-failure-logs -->\n\n## Related Topics\n\n<!-- TODO: Add links to related documentation -->\n\n\n---\n<!-- Source: 08-troubleshooting/testing-verification-queries.md -->"
+}

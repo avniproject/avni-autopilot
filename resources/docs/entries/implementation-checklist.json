@@ -1,0 +1,5 @@
+{
+  "key": "implementation-checklist",
+  "title": "Implementation Checklist",
+  "body": "## TLDR\n\n<!-- TODO: Add 2-3 sentence summary of Implementation Checklist -->\n\n## Overview\n\n**What:** <!-- TODO: One-sentence description -->\n\n**When to use:** <!-- TODO: Scenarios -->\n\n**Prerequisites:** <!-- TODO: What to know first -->\n\n## Planning Checklist\n\n<!-- TODO: Add content for planning-checklist -->\n\n## Setup Checklist\n\n<!-- TODO: Add content for setup-checklist -->\n\n## Development Checklist\n\n<!-- TODO: Add content for development-checklist -->\n\n## Testing Checklist\n\n<!-- TODO: Add content for testing-checklist -->\n\n## Deployment Checklist\n\n<!-- TODO: Add content for deployment-checklist -->\n\n## Related Topics\n\n<!-- TODO: Add links to related documentation -->\n\n\n---\n<!-- Source: 09-implementation-guides/maternal-health-example.md -->"
+}

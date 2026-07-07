@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-when-i-sign-in-to-avni-it-says-catchme",
+  "title": "Frequently Asked Questions - Implementation — When I sign in to Avni it says catchment not set up What are catchments and how do I set them up",
+  "body": "Avni works on the basis of catchments, where a user needs to be assigned a group of locations (called catchment). This ringfences the data on their phones to just the area they work in, reducing data usage and storage, preventing accidental changes, improving performance. \n\nIn order to work on the Avni field app, you first need to set up \n1. Locations\n2. Catchments\n\nOnce you set up a catchment, you should assign the catchment to the user through the Users section on the Admin screens"
+}

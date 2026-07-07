@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-use-avni-offline-for-a-whole-wee",
+  "title": "Frequently Asked Questions - Implementation — Can I use Avni offline for a whole week",
+  "body": "Yes, Avni can be used fully offline for a week or even longer, since data is stored locally on the device. The only thing to keep in mind is that offline use works reliably as long as another user is not using the app for the same set of individuals or doing data entry for the same records during that period. Once you reconnect to the internet, all pending data will sync back to the server."
+}

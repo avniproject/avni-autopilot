@@ -1,0 +1,5 @@
+{
+  "key": "writing-validation-rules-in-avni-12-hyperlink-menu-item-rule",
+  "title": "Writing Rules in Avni — 12 Hyperlink menu item rule",
+  "body": "- Logical scope = User\n- Trigger = When More navigation is opened in the mobile app\n- In designer = Coming very soon...\n- When to use = When a dynamic link has to be provided to the user (these links cannot be specific to subjects)\n\n### Shape of params object:\n\n```\n{\n  user: {}, // User\n  moment: {}, // moment. note other parameters are not supported yet,\n  token, //Auth-token of the logged-in user\n  myUserGroups //List of Group objects  \n}\n```\n\nUser: [https://github.com/avniproject/avni-models/blob/master/src/UserInfo.js](https://github.com/avniproject/avni-models/blob/master/src/UserInfo.js)\n\nYou need to return a string that is the full URL that can be opened in a browser.\n\n### Example:\n\n```\n({params}) => {return `https://reporting.avniproject.org/public/question/11265388-5909-438e-9d9a-6faaa0c5863f?username=${encodeURIComponent(user.username)}&name=${encodeURIComponent(user.name)}&month=${imports.moment().month() + 1}&year=${imports.moment().year()}`;}\n```\n\n<hr/>"
+}

@@ -1,0 +1,5 @@
+{
+  "key": "offline-report-cards-and-dashboards-overview",
+  "title": "Offline Report Cards and Dashboards — Overview",
+  "body": "Avni allows you to create different indicator reports that are available offline to the field users. These reports help field users to derive more insights on the captured data. \n\nCreating an offline report is a two-step process. First, we need to create a report card that holds the actual query function. Second, we group multiple cards into to a dashboard."
+}

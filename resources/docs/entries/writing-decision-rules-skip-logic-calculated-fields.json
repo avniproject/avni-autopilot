@@ -1,0 +1,5 @@
+{
+  "key": "writing-decision-rules-skip-logic-calculated-fields",
+  "title": "Writing Decision Rules (Skip Logic Calculated Fields)",
+  "body": "## TLDR\n\n<!-- TODO: Add 2-3 sentence summary of Writing Decision Rules (Skip Logic, Calculated Fields) -->\n\n## Overview\n\n**What:** <!-- TODO: One-sentence description -->\n\n**When to use:** <!-- TODO: Scenarios -->\n\n**Prerequisites:** <!-- TODO: What to know first -->\n\n## Skip Logic Basics\n\n<!-- TODO: Add content for skip-logic-basics -->\n\n## Calculated Fields\n\n<!-- TODO: Add content for calculated-fields -->\n\n## Code Examples\n\n<!-- TODO: Add content for code-examples -->\n\n## Common Patterns\n\n<!-- TODO: Add content for common-patterns -->\n\n## Related Topics\n\n<!-- TODO: Add links to related documentation -->\n\n\n---\n<!-- Source: 05-javascript-rules/extension-points.md -->"
+}

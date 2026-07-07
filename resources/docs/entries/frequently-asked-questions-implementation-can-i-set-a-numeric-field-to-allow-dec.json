@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-set-a-numeric-field-to-allow-dec",
+  "title": "Frequently Asked Questions - Implementation — Can I set a numeric field to allow decimals only",
+  "body": "Go to WebApp → App Designer → Form, create a new form element, and add a new concept with the data type set to Numeric. You will need to manually write a rule to ensure the system only accepts decimal values. To learn how to create this rule, refer to the Avni documentation or reach out to our support team for assistance."
+}

@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-assign-subjects-to-specific-user",
+  "title": "Frequently Asked Questions - Implementation — Can I assign subjects to specific users or teams",
+  "body": "Yes, Avni allows you to assign subjects to specific users or teams using the subject assignment feature. This can be configured under Webapp → App Designer → Subject Types → Select Subject, where the toggle “Sync by direct assignment” enables syncing of subjects directly assigned to users. The actual assignment of subjects can then be easily performed from Webapp → Assignment, ensuring that users or teams only access the subjects they are responsible for."
+}

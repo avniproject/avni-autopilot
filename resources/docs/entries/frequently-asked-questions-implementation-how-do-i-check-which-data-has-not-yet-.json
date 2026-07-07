@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-check-which-data-has-not-yet-",
+  "title": "Frequently Asked Questions - Implementation — How do I check which data has not yet synced",
+  "body": "On the Avni app, the top right button is the sync button. If there is data that has not yet synced to the server, it will show a badge with the number of items left to sync. If you don't see a badge, the data is in sync with the server. \n\nThe app does not specifically show which items have not yet been synced"
+}

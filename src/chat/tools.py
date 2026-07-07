@@ -25,6 +25,7 @@ from domain.bundle_editor import (
     list_bundle_fields as _list_bundle_fields,
     load_form_rule_context,
 )
+from domain.docs.knowledge_base import DocsKnowledgeBase
 from domain.rules.generator import RuleGenerator
 from domain.rules.rule_spec import RuleKind, RuleSpec
 from domain.rules.validator import validate_and_decide as _validate_and_decide
@@ -47,6 +48,7 @@ from pipeline.graph import build_phase1_graph, build_phase2_graph
 _phase1_graph = build_phase1_graph()
 _phase2_graph = build_phase2_graph()
 _rule_generator = RuleGenerator()
+_docs_kb = DocsKnowledgeBase()
 _saved_states: dict[str, dict] = {}
 
 
@@ -535,6 +537,35 @@ def suggest_form_element_rule(
     }
 
 
+@tool
+def answer_avni_question(question: str) -> dict:
+    """Retrieve relevant Avni knowledge base excerpts for a question.
+
+    Returns the most relevant documentation excerpts so the agent can answer
+    questions about Avni concepts, form configuration, JavaScript rules,
+    troubleshooting, and implementation patterns. The agent should use these
+    excerpts as its primary source and answer directly — do not call this tool
+    and then restate what it returns.
+
+    Args:
+        question: A natural-language question about Avni.
+    """
+    if not os.environ.get("VOYAGE_API_KEY"):
+        return {"excerpts": [], "note": "VOYAGE_API_KEY not configured — answer from your own knowledge."}
+    try:
+        entries = _docs_kb.retrieve(question, top_k=5)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"Docs KB retrieve failed: {exc}")
+        return {"excerpts": [], "note": f"Knowledge base unavailable: {exc}"}
+
+    if not entries:
+        return {"excerpts": [], "note": "No relevant excerpts found — answer from your own knowledge."}
+
+    return {
+        "excerpts": [{"title": e.title, "content": e.body} for e in entries],
+    }
+
+
 TOOLS = [
     generate_bundle,
     edit_bundle_from_spec,
@@ -543,4 +574,5 @@ TOOLS = [
     edit_bundle_fields,
     suggest_form_rule,
     suggest_form_element_rule,
+    answer_avni_question,
 ]

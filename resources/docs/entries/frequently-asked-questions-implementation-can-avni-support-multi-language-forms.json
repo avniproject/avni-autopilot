@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-avni-support-multi-language-forms",
+  "title": "Frequently Asked Questions - Implementation — Can Avni support multi-language forms",
+  "body": "Yes. Avni can be rolled out in multiple languages at once. To have your app in multiple languages,\n1. Set up your language in Admin -> Languages\n2. Go to Translations and download translations. Make changes in the zip file as appropriate and upload the translations back into the system\n3. Usually an external tool like lokalise is used to add translations to the downloaded zip file"
+}

@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-prevent-form-submission-if-a-rul",
+  "title": "Frequently Asked Questions - Implementation — Can I prevent form submission if a rule fails",
+  "body": "No, Avni does not allow you to block form submission if a rule fails. Instead, when a rule fails, it creates an entry in the rule failure table, which helps developers or implementors identify and debug the issue. This ensures that data collection is not disrupted in the field, while still allowing backend teams to track and resolve rule-related errors."
+}

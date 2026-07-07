@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-find-all-subjects-assigned-to",
+  "title": "Frequently Asked Questions - Implementation — How do I find all subjects assigned to me",
+  "body": "Yes, your app shows you exactly who you're responsible for.\n\nWhy it's possible:\n\nAvni knows which areas and people you're assigned to work with\nThe app filters to show only your assigned people\nYou can search and sort to find people quickly\nHow you can do it:\n\n\nTo find someone specific:\nUse the search box at the top\nType their name or ID number\nTo filter your list:\nLook for filter options (might show \"All\", \"Due for visit\", \"Overdue\")\nSelect the filter you want\nThe app organizes people by:\nWho needs a visit today\nWho is overdue for a visit\nWho you've recently visited"
+}

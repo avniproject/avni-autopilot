@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-can-i-model-household-individual-r",
+  "title": "Frequently Asked Questions - Implementation — How can I model household  individual relationships",
+  "body": "Modeling Household → Individual Relationships in Avni\n1. Define Relationships\n\nNavigate to: Webapp → App Designer → Relationships → Define\n\nHere you can define the types of relationships that exist between individuals in a household.\n\nExamples: Mother, Father, Daughter, Son\n\nYou can also specify which gender each relationship applies to.\n\n2. Configure Relationship Types\n\nGo to: Webapp → App Designer → Relationship Types → Add New\n\nCreate a relationship and its reverse.\n\nExample:\n\nMother → Son → reverse is Son → Mother\n\nMother → Daughter → reverse is Daughter → Mother\n\nFather → Son → reverse is Son → Father\n\nFather → Daughter → reverse is Daughter → Father\n\n3. Usage\n\nOnce defined, these relationships can be assigned to individuals within a household.\n\nThis enables tracking of household members, family hierarchies, and dependent relationships."
+}

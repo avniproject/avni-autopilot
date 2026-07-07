@@ -1,0 +1,5 @@
+{
+  "key": "program-configuration-options",
+  "title": "Program Configuration Options",
+  "body": "## TLDR\n\nEach subject type can have multiple programs within them. If these programs are defined, the user can enroll subjects of these subject types into these programs.\n\n## Overview\n\nEach subject type can have multiple programs within them. If these programs are defined, the user can enroll subjects of these subject types into these programs.\n\nNumber of enrolments per subject\n\n* Typically and hence by default, a subject can have only one active enrolment for a program. This implies that for a subject to be enrolled again the previous enrolment must be exited. e.g. Pregnancy program. Sometimes for chronic diseases, a person may remain in a program forever like diabetes. In such cases, the subject is never exited.\n* Starting release 3.37, Avni also supports multiple active enrolments in a program. This can be done by switching on this per program. When this is switched on the above condition is relaxed by Avni.\n\n\n\n## Related Topics\n\n<!-- Add links to related documentation -->\n\n\n---\n<!-- Source: 04-subject-types-programs/programs.md -->"
+}

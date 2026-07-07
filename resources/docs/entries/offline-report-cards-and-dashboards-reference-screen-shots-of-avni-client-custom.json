@@ -1,0 +1,5 @@
+{
+  "key": "offline-report-cards-and-dashboards-reference-screen-shots-of-avni-client-custom",
+  "title": "Offline Report Cards and Dashboards — Reference screen-shots of Avni-Client Custom Dashboard with Approvals ReportCards and Location filter",
+  "body": "Default state of Approvals Report Cards without any filter applied](https://files.readme.io/18fb944-Subject-list-field-app.png)\n\n***\n\n\n\n***\n\n\n\n***\n\n\n`Dashboard` created here will be shown in the field app.\nYou can add multiple `Sections` to a dashboard.\n`Sections` will be shown in the same order as added here from the app-designer.\n`Sections` can have multiple `Cards`, either in `Tile` or `List` format.\nWithin a `Section`, `Cards` will be shown in the same order as added here.\n\nCollapse all the `Sections` for changing their order.\n\n\nCard contains the actual query that gets executed. Right now query should return a list of individual object."
+}

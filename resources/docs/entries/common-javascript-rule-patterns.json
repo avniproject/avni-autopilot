@@ -1,0 +1,5 @@
+{
+  "key": "common-javascript-rule-patterns",
+  "title": "Common JavaScript Rule Patterns",
+  "body": "## TLDR\n\n<!-- TODO: Add 2-3 sentence summary of Common JavaScript Rule Patterns -->\n\n## Overview\n\n**What:** <!-- TODO: One-sentence description -->\n\n**When to use:** <!-- TODO: Scenarios -->\n\n**Prerequisites:** <!-- TODO: What to know first -->\n\n## Bmi Calculation\n\n<!-- TODO: Add content for bmi-calculation -->\n\n## Age Based Logic\n\n<!-- TODO: Add content for age-based-logic -->\n\n## Phone Validation\n\n<!-- TODO: Add content for phone-validation -->\n\n## Date Validations\n\n<!-- TODO: Add content for date-validations -->\n\n## Conditional Logic\n\n<!-- TODO: Add content for conditional-logic -->\n\n## Related Topics\n\n<!-- TODO: Add links to related documentation -->\n\n\n---\n<!-- Source: 05-javascript-rules/decision-rules.md -->"
+}

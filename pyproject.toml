@@ -28,6 +28,7 @@ dependencies = [
 [project.scripts]
 avni-chat = "chat.repl:run_chat"
 avni-rules-kb = "domain.rules.kb_cli:main"
+avni-docs-kb = "domain.docs.kb_cli:main"
 avni-autopilot = "web.app:run"
 
 [project.optional-dependencies]

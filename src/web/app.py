@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
+from domain.docs.knowledge_base import DocsKnowledgeBase
 from logging_setup import setup_logging
 from web.routes import bundle as bundle_routes
 from web.routes import chat as chat_routes
@@ -41,6 +43,17 @@ log = logging.getLogger(__name__)
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
 
+def _rebuild_docs_kb() -> None:
+    """Rebuild the docs KB embedding cache in a background thread on startup."""
+    if not os.environ.get("VOYAGE_API_KEY"):
+        log.info("VOYAGE_API_KEY not set — skipping docs KB rebuild on startup")
+        return
+    try:
+        DocsKnowledgeBase().rebuild()
+    except Exception as exc:
+        log.warning(f"Docs KB rebuild on startup failed: {exc}")
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Allocate the session store + reaper for the life of the process."""
@@ -51,6 +64,10 @@ async def _lifespan(app: FastAPI):
     )
     app.state.store = store
     reaper = asyncio.create_task(store.run_reaper())
+    # Rebuild docs KB embeddings in a thread so startup is non-blocking.
+    # Content-hash gating makes this a near-instant no-op when nothing changed.
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _rebuild_docs_kb)
     log.info(
         f"avni-ai-web started — session_dir={settings.ai_session_dir} "
         f"idle_min={settings.ai_session_idle_min} max_hours={settings.ai_session_max_hours}"

@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-configure-a-follow-up-encount",
+  "title": "Frequently Asked Questions - Implementation — How do I configure a follow-up encounter",
+  "body": "You can create a follow-up by creating a new encounter type. If you want it to be scheduled at a particular point in time, it can be done through the Visit Schedule Rule. You can find the Visit Schedule rule in the \"Rules\" section of a form. You can navigate to the form either through the \"Forms\" section of the App Designer or through the \"Encounter Types\"/\"Programs\"/\"Subject Types\" section of the Admin section."
+}

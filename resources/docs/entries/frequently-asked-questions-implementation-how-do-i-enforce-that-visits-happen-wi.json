@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-enforce-that-visits-happen-wi",
+  "title": "Frequently Asked Questions - Implementation — How do I enforce that visits happen within 30 days",
+  "body": "You can add two dates when you schedule a visit. \nDue Date - The earliest date on which a visit is expected to happen\nOverdue Date - The latest date by when a visit is expected to happen\n\nVisits that are due and overdue can be shown on the app on the dashboard, and on reports. This allows users to understand which visits are due to be completed, and which ones have gone past the due date"
+}

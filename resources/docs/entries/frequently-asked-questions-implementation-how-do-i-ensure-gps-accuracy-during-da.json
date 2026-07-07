@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-ensure-gps-accuracy-during-da",
+  "title": "Frequently Asked Questions - Implementation — How do I ensure GPS accuracy during data collection",
+  "body": "On Android:\nSettings → Location → Mode → High accuracy (uses GPS + WiFi + mobile networks).\n\nAsk users to wait a few seconds outdoors before capturing, so the GPS can “lock on” to satellites.\n\nEnsure permissions for location services are granted to the Avni app.\n\nCheaper phones may only give ±20–50m accuracy. Higher-end phones can get within 3–5m. If precision is critical (e.g., mapping households), budget for better devices."
+}

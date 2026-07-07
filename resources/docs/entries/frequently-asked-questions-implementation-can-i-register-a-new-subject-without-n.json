@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-register-a-new-subject-without-n",
+  "title": "Frequently Asked Questions - Implementation — Can I register a new subject without network",
+  "body": "Yes, you can register new people even without internet.\n\nWhy it's possible:\n\nAvni works offline - it saves everything on your phone first\nWhen you get internet connection later, it uploads the data automatically\nThis is very helpful when working in remote areas\nHow you can do it:\n\nOpen your Avni app (works even without internet bars)\nTap \"Register\" or \"Add New Person\"\nFill out the registration form completely\nTap \"Save\" - the information is stored on your phone\nYou'll see the person added to your list immediately\nWhen you get internet connection:\nThe app will automatically upload the new registration\nYou'll see a sync notification\nThe person's data is now safely stored on the server"
+}

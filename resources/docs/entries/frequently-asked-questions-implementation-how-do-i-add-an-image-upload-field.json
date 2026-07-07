@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-add-an-image-upload-field",
+  "title": "Frequently Asked Questions - Implementation — How do I add an image upload field",
+  "body": "In Avni, there are two concepts for handling images: Image and ImageV2, where the main difference is that ImageV2 also captures the location of the image. To configure this, navigate to WebApp → App Designer → Form, create a new form element, and add a new concept with the data type set as either Image or ImageV2. You can then select whether it should be Single Select or Multi Select, and save the element. Additionally, if more specific image dimensions are required, you can define the width and height within the form element settings."
+}

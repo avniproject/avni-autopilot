@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-configure-a-one-time-survey-v",
+  "title": "Frequently Asked Questions - Implementation — How do I configure a one-time survey vs ongoing case",
+  "body": "1. One-Time Survey\n\nCan be captured:\n\nWithin the subject registration form itself\n\nOr as a general encounter outside any program\n\nIdeal for surveys or data collection that happens only once per subject.\n\n2. Ongoing Case\n\nBest managed using a program in Avni.\n\nPrograms allow you to:\n\nTrack the enrolment of the subject\n\nCapture multiple encounters over time (e.g., ANC visits, monitoring forms)\n\nRecord exit of the case along with exit reasons (e.g., completed, migrated, dropped out)\n\nSuitable for scenarios requiring longitudinal tracking and multiple touchpoints."
+}

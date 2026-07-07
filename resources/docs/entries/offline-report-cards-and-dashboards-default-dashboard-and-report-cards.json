@@ -1,0 +1,5 @@
+{
+  "key": "offline-report-cards-and-dashboards-default-dashboard-and-report-cards",
+  "title": "Offline Report Cards and Dashboards — Default Dashboard and Report Cards",
+  "body": "Starting in release 10.0, any newly created organisation will have a default dashboard created with the following sections, standard cards and filters.\n\nDefault Dashboard (Filters: 'Subject Type' and 'As On Date')\n\n1. Visit Details Section\n   1. Scheduled Visits Card\n   2. Overdue Visits Card\n2. Recent Statistics Section\n   1. Recent Registrations Card (Recent duration filter configured as - 1 day)\n   2. Recent Enrolments Card (Recent duration filter configured as - 1 day)\n   3. Recent Visits Card (Recent duration filter configured as - 1 day)\n3. Registration Overview Section\n   1. Total Card\n\nThis default dashboard will also be assigned as Primary dashboard on the 'Everyone' user group."
+}

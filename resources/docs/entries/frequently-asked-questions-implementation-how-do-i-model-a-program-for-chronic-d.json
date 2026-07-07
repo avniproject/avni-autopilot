@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-model-a-program-for-chronic-d",
+  "title": "Frequently Asked Questions - Implementation — How do I model a program for chronic disease management",
+  "body": "1. Create a Subject Type\n\nGo to Webapp → App Designer → Subject Types → Create New.\n\nGive it a name like Person or Individual.\n\nSelect Person from the subject type dropdown.\n\nOn save, a default registration form is created.\n\nThis form already includes first name, last name, age, gender, and location. You can add more fields as needed.\n\n2.Create a Program\n\nGo to Webapp → App Designer → Programs → Create New.\n\nName it Chronic Disease.\n\nOn save, Avni automatically creates an Enrolment Form and an Exit Form.\n\n3 Create Encounters\n\nGo to Webapp → App Designer → Encounters → Create New.\n\nSelect your program (Chronic Disease).\n\nGive the encounter a name.\n\nAvni automatically creates and maps the form for this encounter.\n\nCustomize Forms\n\nGo to Forms and edit the Registration, Enrolment, Exit, and Encounter forms.\n\nAdd fields, rules, and logic as per your requirements."
+}

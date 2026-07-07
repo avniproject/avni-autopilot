@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-check-if-my-app-has-the-lates",
+  "title": "Frequently Asked Questions - Implementation — How do I check if my app has the latest forms",
+  "body": "Yes, you can easily check and update your forms.\n\nWhy it's possible:\n\nAvni automatically keeps your forms up to date\nThe app shows you when new forms are available\nYou can update forms even when you have poor internet connection\nHow you can do it:\n\nOpen your Avni app\nLook for a \"Sync\" button (usually at the top or in settings)\nTap \"Sync\" - this will check for new forms and updates\nIf you see \"Last synced: [recent date/time]\" then your forms are current\nIf sync hasn't happened recently, try:\nMake sure you have internet connection\nPull down on the main screen to refresh\nGo to Settings and tap \"Force Sync\"\nThe app will show you if any forms were updated"
+}

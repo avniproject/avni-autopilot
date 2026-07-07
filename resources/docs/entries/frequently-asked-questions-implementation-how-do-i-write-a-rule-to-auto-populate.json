@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-write-a-rule-to-auto-populate",
+  "title": "Frequently Asked Questions - Implementation — How do I write a rule to auto-populate a field",
+  "body": "//Sample rule to autopopulate the height of child from his previously filled encounter - \n'use strict';\n({params, imports}) => {\n  const programEncounter = params.entity;\n  const moment = imports.moment;\n  const formElement = params.formElement;\n  const _ = imports.lodash;\n  let visibility = true;\n  let value = null;\n  let answersToSkip = [];\n  let validationErrors = [];\n\n  let obs = programEncounter.programEnrolment.findLatestObservationFromEncounters('Height', programEncounter);\n  \n   if(obs)\n  {\n  value=obs.getReadableValue();\n  }\n    \n    \n  return new imports.rulesConfig.FormElementStatus(formElement.uuid, visibility, value, answersToSkip, validationErrors);\n};\n\nOR it can be easily achieved via rule designer"
+}

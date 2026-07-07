@@ -1,0 +1,5 @@
+{
+  "key": "adding-documentation-to-forms",
+  "title": "Adding Documentation to Forms",
+  "body": "## TLDR\n\nCustom documentation can be created in Avni. Documentation supports rich text and can be written in different\\\nlanguages supported by an organization.\n\n## Overview\n\nCustom documentation can be created in Avni. Documentation supports rich text and can be written in different\\\nlanguages supported by an organization. Right now you can also link particular documentation to a form element and it'll show up in the mobile app. This is useful where more context is required for any question.\n\n## Steps to configure and link documentation\n\nThe below GIF displays how documentation can be created and linked to a form element.\n\n\n\nOnce documentation is linked to the form element, it'll start appearing in the mobile app. Users can expand and close the documentation while filling out the form.\n\n\n\n\nYou can create documentation for the app. Currently documentation can be attached to a form element.\n\n## Related Topics\n\n<!-- Add links to related documentation -->\n\n\n---\n<!-- Source: 03-concepts-and-forms/form-element-types.md -->"
+}

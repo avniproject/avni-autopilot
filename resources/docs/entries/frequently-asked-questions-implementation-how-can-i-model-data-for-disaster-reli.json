@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-can-i-model-data-for-disaster-reli",
+  "title": "Frequently Asked Questions - Implementation — How can I model data for disaster relief beneficiaries",
+  "body": "You can model disaster relief beneficiaries in Avni by:\n\n1.Creating a Subject Type – e.g., Individual or Household, depending on whether relief is tracked per person or per family.\n\n2.Designing Registration Forms – include fields like name, age, gender, address, disaster-affected status, and relief needs.\n\n3.Creating a Program – e.g., Disaster Relief Support. On save, an enrolment and exit form are created automatically.\n\n4. Adding Encounters – e.g., Relief Distribution, Shelter Support, Medical Check-up.\n\n5. Customizing Forms – capture details such as type of relief provided, date, follow-up needs, or referrals.\n\n6. Using Rules (optional) – to highlight vulnerable groups (children, elderly, disabled) or track milestones like completion of relief support."
+}

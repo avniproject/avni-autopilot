@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-whats-the-best-way-to-model-school-stu",
+  "title": "Frequently Asked Questions - Implementation — Whats the best way to model school  student tracking",
+  "body": "In Avni, registering a school as a subject can be avoided if no specific information needs to be captured against it. Instead, the school can be configured as a location, and classes and students can be registered under the same school location. Classes can be set up as group subjects, and students as person subject types, assigned to their respective classes. Forms can then be configured for any subject or class where data needs to be captured—for example, classrooms can have daily attendance forms scheduled, which users can fill out directly from the app, enabling efficient tracking of students within the school."
+}

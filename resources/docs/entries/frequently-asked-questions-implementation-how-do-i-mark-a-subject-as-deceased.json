@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-mark-a-subject-as-deceased",
+  "title": "Frequently Asked Questions - Implementation — How do I mark a subject as deceased",
+  "body": "Yes, you can update someone's status when they pass away.\n\nWhy it's possible:\n\nUnfortunately, this sometimes happens in health programs\nAvni needs to know so it stops scheduling visits for that person\nAll their previous health records are kept for reporting\nHow you can do it:\n\nFind the person in your subject list\nTap on their name to open their profile\nLook for \"Update Status\" or \"Mark as Deceased\" option\nTap on it and confirm the action\nFill in the date if asked\nSave the changes\nThe person will:\nNo longer appear in your active visit list\nStop getting scheduled for future visits\nTheir historical data remains for reports"
+}

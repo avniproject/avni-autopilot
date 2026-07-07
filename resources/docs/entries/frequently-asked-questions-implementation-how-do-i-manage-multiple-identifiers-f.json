@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-manage-multiple-identifiers-f",
+  "title": "Frequently Asked Questions - Implementation — How do I manage multiple identifiers for the same subject",
+  "body": "Avni does support identifiers, and multiple identifiers can be created and used for the same subject. However, since Avni is primarily an offline data collection tool, there are certain corner cases where duplicate identifiers may get assigned—for example, when the same user enters data on two devices or when the web-based data entry app is used. In such situations, it can become difficult to support and debug issues. Therefore, we generally do not recommend using multiple identifiers unless they are strictly distributed or tracked on the ground, where duplication risks are minimized."
+}

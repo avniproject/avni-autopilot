@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-set-up-a-longitudinal-data-co",
+  "title": "Frequently Asked Questions - Implementation — How do I set up a longitudinal data collection workflow",
+  "body": "Setting Up a Longitudinal Data Collection Workflow in Avni\n\nUnderstand Longitudinal Data Collection\n\nAvni is designed for longitudinal data collection, allowing you to capture data for a subject (the on-ground entity) over time, at predefined intervals and frequencies.\n\nThis ensures structured, continuous tracking of any subject, such as a person, household, or facility.\n\nConfigure Data Collection\n\nDefine your subjects and forms in Webapp → App Designer.\n\nSet up visit schedules, program encounters, or recurring forms to capture data at the required frequency.\n\nExport Longitudinal Data\n\nNavigate to Webapp → Longitudinal Export.\n\nYou can download the data in a format that maintains the chronological order of observations for each subject.\n\nThis gives you a ready-to-analyze dataset showing how data for a subject changes over time."
+}

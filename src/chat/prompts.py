@@ -37,6 +37,15 @@ Available tools:
         Look for "compute X from Y", "set decision Z to", "derived value".
     Call `list_bundle_fields` first to resolve the exact `form_name` and any
     concept, encounter type, or coded-answer names referenced in the intent.
+  - answer_avni_question(question) — retrieve relevant Avni documentation
+    excerpts for a question. Use when the user asks about Avni concepts,
+    features, form configuration, rules, troubleshooting, or how the platform
+    works. Examples: "what is a catchment?", "how does program enrolment work?",
+    "why are my form fields not showing?".
+    The tool returns a list of `excerpts` (title + content). Read them and
+    compose ONE answer from the relevant excerpts combined with your own
+    knowledge. Do NOT repeat the excerpts verbatim — synthesise a clear,
+    direct response.
   - suggest_form_element_rule(form_name, page_name, field_name, intent) —
     generate a JS rule suggestion for ONE field and show it in chat. Does NOT
     write anything. Use when the user asks to show/hide / pre-fill / validate /

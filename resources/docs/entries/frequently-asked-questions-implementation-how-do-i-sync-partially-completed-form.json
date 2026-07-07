@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-sync-partially-completed-form",
+  "title": "Frequently Asked Questions - Implementation — How do I sync partially completed forms",
+  "body": "Yes, your partially filled information is automatically saved.\n\nWhy it's possible:\n\nAvni automatically saves what you've filled in as you type\nIf you leave a form incomplete, your information stays there when you come back\nOnly completely finished forms get sent to the server\nHow it works:\n\nStart filling out a form for someone\nIf you can't complete it right now, just go back or close the form\nYour filled information is automatically saved on your phone\nLater, go back to that person's profile\nTap on the incomplete form - you'll see all your previous answers are still there\nContinue filling from where you left off\nOnly when you complete the entire form and submit it will it sync to the server\nIncomplete forms stay only on your phone until you finish them"
+}

@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-design-a-program-that-ends-after",
+  "title": "Frequently Asked Questions - Implementation — Can I design a program that ends after a specific milestone",
+  "body": "Yes. This can be achieved in multiple ways:\n\n1.Train users to monitor the condition during each follow-up and exit the program when the milestone is reached.\n\n2.Use a decision rule to highlight when a condition is met, and show it as a counselling point to exit the program.\n\n3.Apply a worklist updation rule to prompt exit on the next button. A sample worklist updation rule is available in the Avni README documentation."
+}

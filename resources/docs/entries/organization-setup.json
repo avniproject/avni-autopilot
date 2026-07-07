@@ -1,0 +1,5 @@
+{
+  "key": "organization-setup",
+  "title": "Organization Setup",
+  "body": "Configure your organizational structure, users, locations, and access control.\n\n## Contents\n\n### 1. [Organization Creation](organization-creation.md)\nCreate a new Avni organization (usually done by Avni team).\n\n### 2. [Address Hierarchy](address-hierarchy.md)\nSet up geographic hierarchy (State → District → Block → Village).\n\n### 3. [Location Setup via CSV](location-setup-csv.md)\nBulk upload locations using CSV files.\n\n### 4. [Catchment Configuration](catchment-configuration.md)\nGroup locations to control data access and sync.\n\n### 5. [User Management](user-management.md)\nCreate and manage field workers, supervisors, and admins.\n\n### 6. [User Groups and Privileges](user-groups-privileges.md)\nConfigure permissions and access patterns.\n\n### 7. [Access Control](access-control.md)\nAdvanced access control and operating scopes.\n\n---\n\n**Navigation:**  \n[← Back: Core Concepts](../01-core-concepts/README.md) | [Next: Concepts and Forms →](../03-concepts-and-forms/README.md)\n\n\n---\n<!-- Source: 02-organization-setup/access-control.md -->"
+}

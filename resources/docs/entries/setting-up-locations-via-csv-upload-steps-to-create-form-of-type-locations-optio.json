@@ -1,0 +1,5 @@
+{
+  "key": "setting-up-locations-via-csv-upload-steps-to-create-form-of-type-locations-optio",
+  "title": "Setting Up Locations via CSV Upload — Steps to create Form of type Locations (Optional)",
+  "body": "For your organization, if there is a need to specify additional details as part of each Location, then Avni allows you to configure a “Location” type Form, which can be configured to store those additional details as Observations for each Location. This is an optional feature to be done only if such need arises.\n\n* Navigate to the App Designer app\n\n\n* Click on Forms in the left side tab, to open up the Forms section.  \n* Create a new Form of type “Locations” by clicking on the “CREATE” button on the Top-Right corner of the screen.  \n\n\n* Setup the Locations type Form in the same way as you do for any other Avni Entity Data collection Forms. See below sample screenshot for reference."
+}

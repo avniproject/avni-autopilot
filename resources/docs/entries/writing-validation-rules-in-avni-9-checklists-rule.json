@@ -1,0 +1,5 @@
+{
+  "key": "writing-validation-rules-in-avni-9-checklists-rule",
+  "title": "Writing Rules in Avni — 9 Checklists rule",
+  "body": "Used to add a checklist to an enrolment\n\n### Shape of params object:\n\n```javascript\n{\n  entity: {} //ProgramEnrolment\n  checklistDetails: [] // Array of ChecklistDetail\n  services,\n  user, //Current User's UserInfo object  \n  myUserGroups //List of Group objects  \n}\n```\n\n### Example\n\n```\n({params, imports}) => {\n  let vaccination = params.checklistDetails.find(cd => cd.name === 'Vaccination');\n  if (vaccination === undefined) return [];\n  const vaccinationList = {\n    baseDate: params.entity.individual.dateOfBirth,\n    detail: {uuid: vaccination.uuid},\n    items: vaccination.items.map(vi => ({\n      detail: {uuid: vi.uuid}\n    }))\n  };\n  return [vaccinationList];\n};\n```\n\n<hr/>"
+}

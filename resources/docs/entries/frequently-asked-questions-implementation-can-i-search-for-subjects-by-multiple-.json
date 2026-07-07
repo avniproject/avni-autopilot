@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-search-for-subjects-by-multiple-",
+  "title": "Frequently Asked Questions - Implementation — Can I search for subjects by multiple fields (name  phone)",
+  "body": "Yes. On the App Designer, there are two options - the ability to design the exact fields that you can search subjects by, and also decide which fields should be present in the search result fields. \n\nTo set this up, go to App Designer -> Search Fields. Configure fields that are relevant to each subject typs. Go to Search Result Fields -> Add the fields you would want to see there. \n\nRemember that search result fields only show registration fields, and not all questions on every form"
+}

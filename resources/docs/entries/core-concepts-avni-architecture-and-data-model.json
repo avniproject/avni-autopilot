@@ -1,0 +1,5 @@
+{
+  "key": "core-concepts-avni-architecture-and-data-model",
+  "title": "Core Concepts - Avni Architecture and Data Model",
+  "body": "Understanding Avni's architecture and data model is essential for effective implementation.\n\n## Contents\n\n### 1. [Avni Architecture](avni-architecture.md)\nHigh-level overview of Avni's components and how they work together.\n\n### 2. [Domain Model](domain-model.md)\nHow subjects, programs, and encounters relate to each other.\n\n### 3. [Data Model](data-model.md)\nHow data is structured (forms, observations, JSONB).\n\n### 4. [Offline Sync Basics](offline-sync-basics.md)\nHow offline functionality and data synchronization works.\n\n---\n\n**Navigation:**  \n[← Back to Knowledge Base](../README.md) | [Next: Organization Setup →](../02-organization-setup/README.md)\n\n\n---\n<!-- Source: 01-core-concepts/avni-architecture.md -->"
+}

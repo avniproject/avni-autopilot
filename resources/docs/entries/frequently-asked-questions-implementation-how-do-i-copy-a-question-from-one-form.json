@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-copy-a-question-from-one-form",
+  "title": "Frequently Asked Questions - Implementation — How do I copy a question from one form to another",
+  "body": "**Answer:** Questions in Avni are based on **Concepts**, which are reusable across forms:\n\n- **Concept reuse:** Once a concept is created, it can be used in multiple forms\n- **Form element creation:** Add the same concept to different forms as form elements\n- **Consistency:** Using the same concept ensures data consistency across forms\n- **UUID-based:** Concepts use UUIDs internally, so the same concept can have different display names via translations\n\nThe documentation emphasizes that concepts should be considered \"programming keywords\" representing ideas that can be reused across multiple forms."
+}

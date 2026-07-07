@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-rules-trigger-notifications-for-su",
+  "title": "Frequently Asked Questions - Implementation — Can rules trigger notifications for supervisors",
+  "body": "No, Avni does not have a built-in notification or alert triggering system. However, this need can be addressed by configuring an offline report card on the supervisor’s app dashboard. The report card can be designed to display highlighted cases—such as abnormal conditions or referrals—that supervisors need to track. This way, instead of receiving notifications, supervisors can regularly review the dashboard to monitor the cases that require their attention."
+}

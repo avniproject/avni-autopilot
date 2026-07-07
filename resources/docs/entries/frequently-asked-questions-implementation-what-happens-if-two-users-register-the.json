@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-what-happens-if-two-users-register-the",
+  "title": "Frequently Asked Questions - Implementation — What happens if two users register the same subject",
+  "body": "Yes, the system will catch this and help fix it.\n\nWhy it's handled:\n\nSometimes two health workers might register the same person by mistake\nAvni is smart enough to detect when this might happen\nThe system helps merge duplicate records safely\nHow it works:\n\nBefore registering someone new, always search first:\nUse the search box to look for their name\nCheck if they're already in the system\nIf you accidentally register someone who already exists:\nThe system will notice during sync\nYour supervisor will get a notification about possible duplicates\nYour administrator can then:\nCompare the two records\nMerge them into one correct record\nKeep all the important information from both\nAlways search before registering to avoid this problem"
+}

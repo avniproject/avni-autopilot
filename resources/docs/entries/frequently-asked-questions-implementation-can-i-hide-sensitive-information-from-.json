@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-hide-sensitive-information-from-",
+  "title": "Frequently Asked Questions - Implementation — Can I hide sensitive information from field workers",
+  "body": "Since the data comes from field users, it is best not to collect sensitive information if it does not directly help with the programme. If it directly helps, then the field users will need to use them, therefore there is little value in hiding it from them. \n\n\nIf you consider one form in your application to be sensitive, and want to prevent a cadre of workers from accessing it, you can achieve this using User Groups and Permissions. These options are available in the Admin section"
+}

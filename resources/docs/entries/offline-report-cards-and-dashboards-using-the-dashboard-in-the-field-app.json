@@ -1,0 +1,5 @@
+{
+  "key": "offline-report-cards-and-dashboards-using-the-dashboard-in-the-field-app",
+  "title": "Offline Report Cards and Dashboards — Using the Dashboard in the Field App",
+  "body": "After saving the dashboard sync the field app, and from the bottom \"More\" tab click on the \"Dashboards\" option. It will take you to the dashboard screen and will show all the cards that are added to the dashboard.\n\n\n  Report cards only passing List of subjects.](https://files.readme.io/5093034-Screenshot_2023-12-11_at_4.55.48_PM.png)\n\n\n\nClicking any card will take the user to the subject listing page, which will display all the subject names returned by the card query.\n\n![Users can click on any subject and navigate to their dashboard."
+}

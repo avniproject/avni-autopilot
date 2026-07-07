@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-whats-the-difference-between-subject-p",
+  "title": "Frequently Asked Questions - Implementation — Whats the difference between subject program and encounter",
+  "body": "A Subject is the base entity for which data is collected. A subject can be a person, a household, a class, or even non-human entities like a waterbody or a toilet.\n\nA Program is used to monitor a subject over a defined period.\n\nEvery program has an enrolment form (entry point) and an exit form (exit point).\n\nExample: Pregnancy can be a program, with ANC and Delivery as program encounters. The enrolment form may capture one-time details like LMP and EDD.\n\nIn addition, subjects can have general encounters that are not tied to a program.\n\nExample: Monitoring a waterbody daily without any enrolment or exit."
+}

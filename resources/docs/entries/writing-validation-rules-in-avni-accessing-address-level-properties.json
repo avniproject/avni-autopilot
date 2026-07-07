@@ -1,0 +1,5 @@
+{
+  "key": "writing-validation-rules-in-avni-accessing-address-level-properties",
+  "title": "Writing Rules in Avni — Accessing Address Level Properties",
+  "body": "Old Way is to get the address level properties and extract from the json object. In new way, get the address level and access its observation value as per location attribute form.\n\n```Text JavaScript\n'use strict';\n({params, imports}) => {\n  const programEncounter = params.entity;\n  const moment = imports.moment;\n  const formElement = params.formElement;\n  const _ = imports.lodash;\n  let visibility = false;\n  let value = 'No';\n  let answersToSkip = [];\n  let validationErrors = [];\n  \n  const address_level = programEncounter.programEnrolment.individual.lowestAddressLevel;  \n  \n  const gHighRisk = address_level.getObservationReadableValue(\"Geographically hard to reach village\");\n\n  if(gHighRisk === \"Yes\"){\n      value = 'Yes';\n  }\n\n  \n  return new imports.rulesConfig.FormElementStatus(formElement.uuid, visibility, value, answersToSkip, validationErrors);\n};\n```"
+}

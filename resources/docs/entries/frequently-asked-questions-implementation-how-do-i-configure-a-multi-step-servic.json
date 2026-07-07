@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-configure-a-multi-step-servic",
+  "title": "Frequently Asked Questions - Implementation — How do I configure a multi-step service delivery workflow",
+  "body": "Configuring Multi-Step Service Delivery in Avni\n1. Independent Services\n\nIf the services are independent of each other, Avni allows multiple program enrolments for a subject at the same time.\n\nExample: A person can be enrolled in both:\n\nPregnancy Program\n\nMental Health Program\n\nEach program runs independently, with its own forms, schedules, and follow-ups.\n\n2. Dependent Services / Multi-Step Workflow\n\nIf the service delivery steps are dependent on each other, you can configure them within the same program:\n\nUse assessment forms scheduled at predefined intervals.\n\nAdd logic rules to trigger specific forms based on previous data or conditions.\n\nExample:\n\nStep 1: Initial assessment\n\nStep 2: Trigger counseling form if certain risk indicators are recorded in Step 1\n\nStep 3: Follow-up visit forms automatically scheduled based on Step 2 outcomes"
+}

@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-migrate-data-from-another-sys",
+  "title": "Frequently Asked Questions - Implementation — How do I migrate data from another system into Avni",
+  "body": "Avni provides comprehensive bulk data upload functionality through the Admin web console:\n\n- **Supported uploads:**\n  - Subjects (individuals/entities)\n  - Program enrollments \n  - Program encounters\n  - General encounters\n  - Locations and catchments\n  - Users and their catchments\n\n- **Process:** Download sample CSV templates from the Admin interface, fill with your data, and upload\n- **Validation:** Basic level of form validations and rules executions are done during upload - mandatory fields are enforced, hidden fields are ignored based on form element rules\n- **Automated processing:** Visit schedules and decisions are automatically created based on your configured logic"
+}

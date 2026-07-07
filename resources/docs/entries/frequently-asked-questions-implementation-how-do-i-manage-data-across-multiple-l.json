@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-manage-data-across-multiple-l",
+  "title": "Frequently Asked Questions - Implementation — How do I manage data across multiple locations",
+  "body": "In Avni, data can be collected against a specific location, and users (data entry personnel) can be assigned access to a predefined set of locations. This ensures that each user records data only for the locations they are responsible for. Additionally, MIS reports can be configured with location filters, allowing supervisors and managers to analyze and monitor data across multiple locations efficiently. This setup makes it easy to manage data collection, access control, and reporting for projects spread over different geographic areas."
+}

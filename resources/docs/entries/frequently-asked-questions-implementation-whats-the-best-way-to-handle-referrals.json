@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-whats-the-best-way-to-handle-referrals",
+  "title": "Frequently Asked Questions - Implementation — Whats the best way to handle referrals between workers",
+  "body": "Handling Referrals Between Workers in Avni\n\nSet Up User Roles\n\nNavigate to Webapp → User Groups.\n\nCreate different roles or user groups based on responsibilities.\n\nAssign appropriate permissions to each group and add the respective users.\n\nSchedule Referral Visits\n\nUsing the scheduling feature, you can assign referral visits to the appropriate worker.\n\nThese visits appear in the assigned user’s task list for follow-up.\n\nUse Offline Report Cards\n\nConfigure offline report cards to highlight records that require referrals.\n\nThe responsible user can track and act on these referrals even when offline."
+}

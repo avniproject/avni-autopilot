@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-mark-a-field-as-mandatory",
+  "title": "Frequently Asked Questions - Implementation — How do I mark a field as mandatory",
+  "body": "In the form designer, go to the field you want to mark as mandatory. Check the box, and it will be shown as mandatory.\nRemember that a field is mandatory only if it is visible. If you have created a visibility rule through which your form field is not visible, then the mandatory field on it will not be respected."
+}

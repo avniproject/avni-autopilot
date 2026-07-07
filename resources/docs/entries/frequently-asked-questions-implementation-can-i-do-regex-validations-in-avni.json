@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-do-regex-validations-in-avni",
+  "title": "Frequently Asked Questions - Implementation — Can I do regex validations in Avni",
+  "body": "Yes. Regular expression validations are available for Text concepts in Avni. When you choose a text concept for a question, you get to fill in two other fields - \"Validation Regex\" and \"Validation Description Key\". These allow you to enter the regex, and a description of the error message to show when the text does not match the regular expression"
+}

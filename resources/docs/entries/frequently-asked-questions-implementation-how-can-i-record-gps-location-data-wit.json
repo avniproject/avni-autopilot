@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-can-i-record-gps-location-data-wit",
+  "title": "Frequently Asked Questions - Implementation — How can I record GPS location data with each encounter",
+  "body": "Avni provides the ability to capture GPS location data with each form submission. This can be enabled for any user by going to Webapp → Admin → Users, selecting the desired user, and toggling “Track Location” to true. Once enabled, the GPS coordinates will automatically be recorded whenever that user fills out a form, ensuring location tracking for each encounter."
+}

@@ -1,0 +1,5 @@
+{
+  "key": "creating-and-managing-concepts-in-avni",
+  "title": "Creating and Managing Concepts in Avni",
+  "body": "## TLDR\n\nConcepts define the different pieces of information that you collect as part of your service delivery.\n\n## Overview\n\nConcepts define the different pieces of information that you collect as part of your service delivery.\n\nFor example, if you collect the blood pressure of a subject in a form, then \"Blood Pressure\" should be defined as a concept. You would notice that every question in a form requires a concept\n\n- [More information about concepts](https://avni.readme.io/docs/concepts)\n- [Learn more about Avni's domain model](https://avni.readme.io/docs/avnis-domain-model-of-field-based-work)\n\n## Related Topics\n\n<!-- Add links to related documentation -->\n\n\n---\n<!-- Source: 03-concepts-and-forms/concept-types.md -->"
+}

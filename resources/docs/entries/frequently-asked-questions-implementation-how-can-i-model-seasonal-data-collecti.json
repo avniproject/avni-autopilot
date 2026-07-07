@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-can-i-model-seasonal-data-collecti",
+  "title": "Frequently Asked Questions - Implementation — How can I model seasonal data collection (eg crops)",
+  "body": "Modeling Seasonal Data Collection (e.g., Crops) in Avni\n\n1.Schedule Forms at Predefined Times\n\nIn Avni, forms can be scheduled to appear at specific times of the year using predefined scheduling rules or logic.\n\nThis allows you to capture seasonal crop information at the right time for each subject (e.g., farm, field).\n\n2. Use Conditional Logic for Fields\n\nIf the same form is used across seasons, you can hide or show fields dynamically based on:\n\nSeason\n\nCrop type\n\nOther user input or data logic\n\nThis ensures that only relevant information is captured during each season.\n\nMultiple approaches in Avni allow flexible and accurate collection of seasonal data without creating separate forms for each season."
+}

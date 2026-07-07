@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-configure-a-program-where-onl",
+  "title": "Frequently Asked Questions - Implementation — How do I configure a program where only supervisors can enroll subjects",
+  "body": "Go to Admin → User Groups, create a new group named Supervisor, and add all users who need supervisor access to this group. Then, click on Permissions, select the program, and toggle the Enrollment option to enable it. This ensures that only users in the Supervisor group can enroll program.\nNote:\nMake sure to disable (untoggle) the enrollment option for all other user groups so that only supervisors have this permission."
+}

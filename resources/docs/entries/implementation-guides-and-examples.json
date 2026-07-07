@@ -1,0 +1,5 @@
+{
+  "key": "implementation-guides-and-examples",
+  "title": "Implementation Guides and Examples",
+  "body": "Real-world implementation examples and step-by-step guides for common Avni use cases: health tracking, nutrition programs, and education monitoring.\n\n## Contents\n\n### 1. [Implementation Example: Maternal Health Tracking](maternal-health-example.md)\nmaternal health  health tracking  ANC  pregnancy tracking\n\n### 2. [Implementation Example: Child Nutrition Program](child-nutrition-example.md)\nchild nutrition  nutrition tracking  growth monitoring  implementation example\n\n### 3. [Implementation Example: Education Monitoring](education-monitoring-example.md)\neducation  classroom monitoring  school tracking  implementation example\n\n### 4. [Implementation Checklist](implementation-checklist.md)\nchecklist  implementation steps  setup checklist  go-live checklist\n\n\n---\n<!-- Source: 09-implementation-guides/child-nutrition-example.md -->"
+}

@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-configure-a-calculated-field-",
+  "title": "Frequently Asked Questions - Implementation — How do I configure a calculated field in Avni",
+  "body": "For a calculated field, a javacript snippet needs to written, sharing sample -\n\nuse strict';\n({params, imports}) => {\n    const programEncounter = params.entity;\n    const individual = programEncounter.programEnrolment.individual;\n    const moment = imports.moment;\n    const formElement = params.formElement;\n    const _ = imports.lodash;\n    let visibility = true;\n    let value = null;\n    let answersToSkip = [];\n    let validationErrors = [];\n\n    const totalParticipants = individual.getGroupSubjects();\n\n    const participants = programEncounter.getObservationReadableValue(\"d81c0be9-77fb-4673-af36-4b28773a6378\");\n\n    if(participants && participants.length > 0) value = totalParticipants.length - participants.length;\n    else value = totalParticipants.length;\n\n    return new imports.rulesConfig.FormElementStatus(formElement.uuid, visibility, value, answersToSkip, validationErrors);\n};"
+}

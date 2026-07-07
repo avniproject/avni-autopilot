@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-can-i-model-a-workflow-where-visits-re",
+  "title": "Frequently Asked Questions - Implementation — Can I model a workflow where visits reduce over time",
+  "body": "Yes, this works automatically once your program is set up.\n\nWhy it's possible:\n\nAvni is smart enough to know that older children need fewer check-ups than babies\nThe system can automatically adjust visit schedules based on the child's age\nThis helps you focus more time on children who need it most\nHow it works for you:\n\nWhen you enroll a baby (0-2 years), the app will schedule monthly visits\nFor toddlers (2-5 years), it will automatically change to every 3 months\nFor older children, visits become less frequent (maybe once a year)\nYou don't need to remember this - the app will show you the correct schedule\nYour dashboard will always show you who needs a visit and when"
+}

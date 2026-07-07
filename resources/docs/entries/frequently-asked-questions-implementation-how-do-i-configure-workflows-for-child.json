@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-configure-workflows-for-child",
+  "title": "Frequently Asked Questions - Implementation — How do I configure workflows for child growth monitoring",
+  "body": "Yes, this is possible, but your administrator needs to set it up first.\n\nWhy it's possible:\n\nAvni has built-in features specifically designed for tracking child growth\nThe system can automatically calculate growth charts and detect malnutrition\nIt can remind you when children need their next check-up\nHow you can use it:\n\nAsk your supervisor or IT administrator to set up the \"Child Growth Monitoring\" program for you\nOnce set up, you'll see a \"Child Program\" option in your mobile app\nWhen you register a new child, fill in their weight, height, and age\nThe app will automatically show you if the child's growth is normal or needs attention\nThe app will tell you when to schedule the next visit for each child"
+}

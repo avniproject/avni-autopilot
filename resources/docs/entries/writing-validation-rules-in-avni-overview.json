@@ -1,0 +1,5 @@
+{
+  "key": "writing-validation-rules-in-avni-overview",
+  "title": "Writing Rules in Avni — Overview",
+  "body": "> 🚧 Important Update on Rules Execution\n> \n> Please be informed that all existing rules stored in the rules table will become obsolete by the end of this year, 2024. This means that starting January 1, 2025, these rules will no longer be executed.\n> \n> However, any rules added through the App Designer and avni-health-modules will continue to work as expected.\n> \n> If you have any questions or need assistance with migrating your rules, please contact our support team."
+}

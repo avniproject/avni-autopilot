@@ -1,0 +1,5 @@
+{
+  "key": "data-management-in-avni",
+  "title": "Data Management in Avni",
+  "body": "Managing data in Avni: bulk uploads, data entry, imports, drafts, migrations, and voiding records.\n\n## Contents\n\n### 1. [Bulk Data Upload (v2)](bulk-data-upload.md)\nbulk upload  data upload  CSV upload  data migration\n\n### 2. [Data Import Validation and Pre-checks](data-import-validation.md)\ndata validation  import validation  data quality  pre-import checks\n\n### 3. [Web-Based Data Entry Application](data-entry-app.md)\ndata entry  web app  data entry application  web-based data entry\n\n### 4. [Draft Save Feature](draft-save.md)\ndraft save  save draft  incomplete forms  draft data\n\n### 5. [Migrating Subjects Between Locations](subject-migration.md)\nsubject migration  move subject  location change  migrate location\n\n### 6. [Voiding (Soft Deleting) Data in Avni](voiding-data.md)\nvoid  soft delete  remove data  void subjects\n\n\n---\n<!-- Source: 06-data-management/bulk-data-upload.md -->"
+}

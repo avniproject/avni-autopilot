@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-configure-default-language-fo",
+  "title": "Frequently Asked Questions - Implementation — How do I configure default language for a form",
+  "body": "**Answer:** Avni supports user language preferences that determine the language used throughout the Avni Mobile App, including forms, report cards, menu items, and button text. Avni does not have form-specific default language configuration.\n\n### Translation System\n\n- **Translation framework:** Avni supports multiple languages for all user-facing content\n- **Language-specific translations:** Create translations for each supported language\n- **Default language:** Configure the primary language for your organization\n- **Form element translations:** All form elements can have language-specific display text"
+}

@@ -1,0 +1,5 @@
+{
+  "key": "frequently-asked-questions-implementation-how-do-i-set-up-case-closure-criteria",
+  "title": "Frequently Asked Questions - Implementation — How do I set up case closure criteria",
+  "body": "If a case is managed as a program in Avni, users can decide when it should be closed based on their training and then complete the exit form with the correct exit information. Alternatively, closure criteria can be built into the workflow by assessing the data entered in each form and guiding the user to exit the program when predefined conditions are met. With some customization, the user flow within forms can also be structured to prompt or direct users toward program closure at the right time, ensuring consistency in case management."
+}
