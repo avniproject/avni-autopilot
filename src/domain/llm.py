@@ -7,7 +7,9 @@ Public surface:
 
 `suggest_names` accepts a list of _FieldProblem instances (from enricher.py) and
 returns a _SuggestionsOutput with one _NameSuggestion per problem, matched back
-by (form_name, section_name, field_name).
+by `problem_index` — the 1-based position of the problem in the prompt. Field
+names can exceed 255 characters and span lines, so echoing them back for
+matching is unreliable; a small integer round-trips exactly.
 
 `classify` is a generic single-call helper for any structured-output task that
 needs its own Pydantic response model (form-link classifier, entity resolvers, …).
@@ -36,9 +38,7 @@ MAX_TOKENS = 16384
 
 
 class _NameSuggestion(BaseModel):
-    form_name: str
-    section_name: str
-    field_name: str
+    problem_index: int = Field(description="The [N] number of the problem being answered")
     suggested_name: str
 
 
@@ -70,9 +70,7 @@ Three kinds of problems:
    than "Exit Reason 1").
 
 For each problem return:
-  form_name      — exactly as listed in the problem
-  section_name   — exactly as listed in the problem
-  field_name     — the original field name, exactly as listed
+  problem_index  — the number shown in the problem's [N] marker
   suggested_name — your proposed replacement
 
 Rules:
@@ -142,7 +140,7 @@ class LLMHelper:
         """Send all detected field problems to Claude in one call.
 
         Returns a _SuggestionsOutput whose suggestions are matched back to
-        problems by (form_name, section_name, field_name) in enricher.py.
+        problems by 1-based `problem_index` in enricher.py.
         """
         if not self.is_available():
             raise RuntimeError(

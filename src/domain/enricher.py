@@ -7,7 +7,7 @@ Workflow:
   3. Suggest — send the full problem list to the LLM in ONE call. The LLM only
      proposes replacement names; it does not scan forms or detect issues.
   4. Assemble — build Change records from the LLM suggestions, matched back by
-     (form_name, section_name, field_name).
+     1-based problem index (the [N] markers in the prompt).
   5. Surface — return every Change as pending_changes for user confirmation.
 
 Public surface:
@@ -179,16 +179,26 @@ def enrich_forms(
         log.warning("[enrich] LLM call failed: %s", exc)
         return forms, [], [], [f"LLM enrichment failed: {exc}"]
 
-    suggestion_map = {
-        (s.form_name, s.section_name, s.field_name): s.suggested_name
-        for s in output.suggestions
-    }
+    log.info(
+        "[enrich] LLM returned %d suggestion(s) for %d problem(s).",
+        len(output.suggestions), len(problems),
+    )
+
+    # problem_index is LLM output — validate before indexing into `problems`.
+    suggestions_by_index: dict[int, str] = {}
+    for s in output.suggestions:
+        if 1 <= s.problem_index <= len(problems):
+            suggestions_by_index[s.problem_index] = s.suggested_name
+        else:
+            log.warning(
+                "[enrich] ignoring suggestion with out-of-range problem_index %d",
+                s.problem_index,
+            )
 
     changes: list[Change] = []
     seen_ids: dict[str, int] = {}
-    for problem in problems:
-        key = (problem.form_name, problem.section_name, problem.field_name)
-        suggested = suggestion_map.get(key)
+    for idx, problem in enumerate(problems, 1):
+        suggested = suggestions_by_index.get(idx)
         if suggested is None:
             log.warning(
                 "[enrich] no suggestion returned for %s / %s / %s",
