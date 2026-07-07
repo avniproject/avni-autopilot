@@ -63,6 +63,12 @@ def _tool_label(name: str, args: dict) -> str:
         return f"Editing {n} field(s)…" if n else "Editing your app's fields…"
     if name == "answer_avni_question":
         return "Finding the answer…"
+    if name == "suggest_form_rule":
+        form = args.get("form_name")
+        return f'Writing a rule for "{form}"…' if form else "Writing a form rule…"
+    if name == "suggest_form_element_rule":
+        field = args.get("field_name")
+        return f'Writing a rule for "{field}"…' if field else "Writing a field rule…"
     # Unknown tool — keep the technical fallback so devs aren't left guessing.
     arg_str = json.dumps(args, default=str)
     if len(arg_str) > 80:
