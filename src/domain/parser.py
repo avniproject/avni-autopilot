@@ -1037,7 +1037,12 @@ def parse_form_df(
         for n in names:
             n_lower = n.lower()
             for h, idx in header_row.items():
-                if n_lower == h or n_lower in h or h in n_lower:
+                if n_lower == h or h.startswith(n_lower):
+                    return idx
+        for n in names:
+            n_lower = n.lower()
+            for h, idx in header_row.items():
+                if n_lower in h or h in n_lower:
                     return idx
         return None
 
