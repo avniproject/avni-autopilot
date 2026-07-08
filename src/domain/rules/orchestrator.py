@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+from domain.rules.concept_answers import merge_answer_scopes
 from domain.rules.generator import RuleGenerator
 from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
 from domain.rules.validator import validate_and_decide
@@ -380,20 +381,24 @@ def _forms_in_scope_for(target: Any, all_forms: list[Any]) -> list[Any]:
 
 
 def _collect_concept_answers(forms: list[Any]) -> dict[str, list[str]]:
-    """Collect coded-field answer lists from the target form only.
+    """Collect coded-field answer lists from the target form and its siblings.
 
-    `forms[0]` is the target form. Sibling registration/enrolment forms
-    inform `available_concepts` but their answer lists are not included —
-    answers are specific to each form's context.
+    Rule-generation context only — `forms[0]` is the target; the rest are
+    its registration/enrolment siblings, included so cross-form
+    references are groundable. Traversal of `FormSpec`s only; combining
+    lives in `concept_answers.merge_answer_scopes`.
     """
-    if not forms:
-        return {}
-    answers: dict[str, list[str]] = {}
-    for section in (forms[0].sections or []):
-        for form_field in (section.fields or []):
-            if getattr(form_field, "dataType", None) != "Coded":
-                continue
-            options = list(getattr(form_field, "options", None) or [])
-            if options:
-                answers[form_field.name] = options
-    return answers
+    scopes: list[dict[str, list[str]]] = []
+    for form in forms:
+        scope: dict[str, list[str]] = {}
+        for section in (form.sections or []):
+            for form_field in (section.fields or []):
+                if getattr(form_field, "dataType", None) != "Coded":
+                    continue
+                if form_field.name in scope:
+                    continue
+                options = list(getattr(form_field, "options", None) or [])
+                if options:
+                    scope[form_field.name] = options
+        scopes.append(scope)
+    return merge_answer_scopes(scopes)

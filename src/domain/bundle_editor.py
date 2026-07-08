@@ -23,6 +23,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from domain.generators import make_uuid
+from domain.rules.concept_answers import merge_answer_scopes
 from models import EditOperation, EditResult, RejectedOp
 
 log = logging.getLogger(__name__)
@@ -759,11 +760,17 @@ def _collect_concept_answers_for(
     target_mapping: dict | None,
     target_form: dict,
 ) -> dict[str, list[str]]:
-    """Merge coded-field answer lists across the target form + registration
+    """Collect coded-field answer lists from the target form + registration
     + enrolment (when applicable).
+
+    Rule-generation context only — a rule can reference a sibling form's
+    coded concept (e.g. an encounter rule checking the enrolment's risk
+    level), so sibling answers must be groundable.
 
     Reads each in-scope form's `formElementGroups[*].formElements[*].concept`
     block — coded fields carry their answers as `answers[*].name`.
+    Traversal of bundle JSON only; combining lives in
+    `concept_answers.merge_answer_scopes`.
     """
     in_scope_uuids: set[str] = {target_form.get("uuid", "")}
     target_type = target_form.get("formType", "")
@@ -790,12 +797,15 @@ def _collect_concept_answers_for(
         if registration_uuid:
             in_scope_uuids.add(registration_uuid)
 
-    answers: dict[str, list[str]] = {}
     target_uuid = target_form.get("uuid", "")
-    for form in forms.values():
-        if form.get("uuid") not in in_scope_uuids:
-            continue
-        is_target = form.get("uuid") == target_uuid
+    in_scope_forms = [target_form] + [
+        f for f in forms.values()
+        if f.get("uuid") in in_scope_uuids and f.get("uuid") != target_uuid
+    ]
+
+    scopes: list[dict[str, list[str]]] = []
+    for form in in_scope_forms:
+        scope: dict[str, list[str]] = {}
         for group in (form.get("formElementGroups") or []):
             for element in (group.get("formElements") or []):
                 if element.get("voided"):
@@ -804,17 +814,16 @@ def _collect_concept_answers_for(
                 if concept.get("dataType") != "Coded":
                     continue
                 name = element.get("name") or concept.get("name")
-                if not name:
-                    continue
-                if not is_target:
+                if not name or name in scope:
                     continue
                 options = [
                     a.get("name") for a in (concept.get("answers") or [])
                     if a.get("name") and not a.get("voided")
                 ]
                 if options:
-                    answers[name] = options
-    return answers
+                    scope[name] = options
+        scopes.append(scope)
+    return merge_answer_scopes(scopes)
 
 
 def write_form_rule(
