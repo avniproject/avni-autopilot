@@ -745,8 +745,8 @@ def load_form_rule_context(bundle_path: str, form_name: str) -> dict | None:
         }
 
 
-# Mirrors `_PROGRAM_FORM_TYPES_FOR_GROUNDING` in pipeline.nodes — see
-# CONCEPT_ANSWER_GROUNDING_SDD.md §5.
+# Mirrors `_PROGRAM_FORM_TYPES_FOR_GROUNDING` in domain.rules.orchestrator —
+# see CONCEPT_ANSWER_GROUNDING_SDD.md §5.
 _PROGRAM_FORM_TYPES_FOR_GROUNDING: frozenset[str] = frozenset({
     "ProgramEnrolment", "ProgramExit",
     "ProgramEncounter", "ProgramEncounterCancellation",

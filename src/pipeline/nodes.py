@@ -41,8 +41,11 @@ from domain.generators import (
 from domain.llm import LLMHelper
 from domain.parser import _fuzzy_match, parse_scoping_docs
 from domain.rules.generator import RuleGenerator
-from domain.rules.rule_spec import RuleKind, RuleSpec
-from domain.rules.validator import validate_and_decide
+from domain.rules.orchestrator import (
+    apply_results,
+    collect_pending_rules,
+    generate_all,
+)
 from models import Change
 from pipeline.state import BundleState
 
@@ -313,38 +316,26 @@ def generate_rules(state: BundleState) -> dict:
     """Generate form-level and field-level rule JS for forms with intents.
 
     Runs after `generate_form_mappings` so `RuleSpec` is built from the same
-    bundle shape the chat tool sees on its calls (SDD §4.3).
-    Two passes over every form:
-      - **Form-level** — `FormSpec.rule_intents[kind_value]` → top-level
-        `form_json[kind_value]` (visit-schedule / validation / edit-form /
-        decision; existing behaviour).
-      - **Field-level** — `FieldSpec.rule_intent` → nested
-        `form_json.formElementGroups[i].formElements[j].rule`
-        (FIELD_AND_PAGE_VISIBILITY_RULES_SDD §8). One LLM call per field
-        with a non-empty intent.
-    Forms with no intents are skipped. Failures flow into `parse_warnings`
-    namespaced `rules.<kind>.<form>[.<section>.<field>]: <reason>`.
+    bundle shape the chat tool sees on its calls (SDD §4.3). Collection,
+    concurrent generation, and result application live in
+    `domain.rules.orchestrator`; this node only adapts pipeline state.
+    Failures flow into `parse_warnings` namespaced
+    `rules.<kind>.<form>[.<section>.<field>]: <reason>`.
     """
     spec = state["entity_spec"]
     if spec is None or not spec.forms:
         return {}
 
-    form_level_forms = [f for f in spec.forms if f.rule_intents]
-    field_level_forms = [
-        f for f in spec.forms
-        if any(field.rule_intent for section in (f.sections or [])
-               for field in (section.fields or []))
-    ]
-    if not form_level_forms and not field_level_forms:
+    has_form_intents = any(f.rule_intents for f in spec.forms)
+    has_field_intents = any(
+        field.rule_intent for f in spec.forms
+        for section in (f.sections or []) for field in (section.fields or [])
+    )
+    if not has_form_intents and not has_field_intents:
         return {}
 
     warnings = list(state.get("parse_warnings", []))
     forms_json = state["forms_json"]
-    forms_by_name: dict[str, dict] = {
-        entry["content"]["name"]: entry for entry in forms_json
-    }
-    available_encounter_types = [et["name"] for et in state["encounter_types_json"]]
-    available_programs = [p["name"] for p in state["programs_json"]]
 
     generator = RuleGenerator()
     if not generator.is_available():
@@ -355,261 +346,37 @@ def generate_rules(state: BundleState) -> dict:
                  state["org_name"])
         return {"parse_warnings": warnings}
 
-    # Pass 1 — collect specs from both the form-level and per-field
-    # surfaces. Building specs is cheap and lets us batch the embedding
-    # step that follows.
-    pending_form: list[tuple[Any, str, RuleSpec]] = []
-    pending_field: list[tuple[Any, str, str, RuleSpec]] = []
-
-    for form_spec in form_level_forms:
-        for kind_value, intent in form_spec.rule_intents.items():
-            try:
-                kind = RuleKind(kind_value)
-            except ValueError:
-                warnings.append(
-                    f"rules.{kind_value}.{form_spec.name}: "
-                    f"unknown rule kind, skipped"
-                )
-                continue
-            rule_spec = _build_rule_spec(
-                form_spec, kind, intent,
-                available_encounter_types, available_programs,
-                all_forms=spec.forms,
-            )
-            pending_form.append((form_spec, kind_value, rule_spec))
-
-    for form_spec in field_level_forms:
-        for section in (form_spec.sections or []):
-            for field in (section.fields or []):
-                if not field.rule_intent:
-                    continue
-                rule_spec = _build_rule_spec(
-                    form_spec, RuleKind.FORM_ELEMENT, field.rule_intent,
-                    available_encounter_types, available_programs,
-                    all_forms=spec.forms,
-                )
-                pending_field.append(
-                    (form_spec, section.name, field.name, rule_spec)
-                )
-
-    # Pass 2 — vectorise every query in ONE Voyage request. Critical for
-    # free-tier users (3 RPM) so N rules don't burn N rate-limit slots.
-    all_specs = (
-        [rs for _, _, rs in pending_form]
-        + [rs for _, _, _, rs in pending_field]
+    pending_form, pending_field, collect_warnings = collect_pending_rules(
+        spec,
+        available_encounter_types=[et["name"] for et in state["encounter_types_json"]],
+        available_programs=[p["name"] for p in state["programs_json"]],
     )
-    contexts: list[Any]
+    warnings.extend(collect_warnings)
+
     try:
-        contexts = generator.kb.retrieve_batch(all_specs)
-    except Exception as exc:  # noqa: BLE001
-        log.warning(f"KB batch retrieve failed: {exc}")
-        warnings.append(f"rules: batch retrieval failed ({exc})")
-        contexts = [None] * len(all_specs)
+        max_workers = max(1, int(os.environ.get("AVNI_RULES_MAX_CONCURRENCY", "20")))
+    except ValueError:
+        max_workers = 20
 
-    form_contexts = contexts[: len(pending_form)]
-    field_contexts = contexts[len(pending_form):]
+    outcome = generate_all(generator, pending_form, pending_field, max_workers)
+    warnings.extend(outcome.warnings)
 
-    # Pass 3 — generate + validate + write.
-    # Form-level rules: one Sonnet call per rule (each has its own system prompt).
-    # Field-level rules: one batched call per form (all fields in one prompt).
-    written_form = 0
-    written_field = 0
-
-    for (form_spec, kind_value, rule_spec), ctx in zip(pending_form, form_contexts):
-        result = generator.generate(rule_spec, context=ctx)
-        ok, raw_warnings = validate_and_decide(result, rule_spec)
-
-        for warning in raw_warnings:
-            warnings.append(
-                f"rules.{kind_value}.{form_spec.name}: {warning}"
-            )
-
-        if not ok:
-            continue
-
-        target = forms_by_name.get(form_spec.name)
-        if target is None:
-            warnings.append(
-                f"rules.{kind_value}.{form_spec.name}: "
-                f"form JSON not found in state; cannot write"
-            )
-            continue
-        target["content"][kind_value] = result.js
-        written_form += 1
-
-    # Group field-level pending by form so each form is one batch call.
-    by_form: dict[str, list[tuple[int, Any, str, str, Any]]] = {}
-    for i, (form_spec, section_name, field_name, rule_spec) in enumerate(pending_field):
-        by_form.setdefault(form_spec.name, []).append(
-            (i, form_spec, section_name, field_name, rule_spec)
-        )
-
-    for form_entries in by_form.values():
-        batch_input = [
-            (fname, section, rs, field_contexts[i])
-            for i, _, section, fname, rs in form_entries
-        ]
-        results = generator.generate_field_batch(batch_input)
-
-        for (i, form_spec, section_name, field_name, rule_spec), result in zip(
-            form_entries, results
-        ):
-            ns = (
-                f"rules.{RuleKind.FORM_ELEMENT.value}."
-                f"{form_spec.name}.{section_name}.{field_name}"
-            )
-            ok, raw_warnings = validate_and_decide(result, rule_spec)
-
-            for warning in raw_warnings:
-                warnings.append(f"{ns}: {warning}")
-
-            if not ok:
-                continue
-
-            target = forms_by_name.get(form_spec.name)
-            if target is None:
-                warnings.append(f"{ns}: form JSON not found in state; cannot write")
-                continue
-            form_element = _find_form_element_in_json(
-                target["content"], section_name, field_name,
-            )
-            if form_element is None:
-                warnings.append(
-                    f"{ns}: matching form element not found in form JSON; "
-                    f"the field may have been deduped or renamed by the generator"
-                )
-                continue
-            form_element["rule"] = result.js
-            written_field += 1
+    written_form, written_field, apply_warnings = apply_results(
+        pending_form, pending_field, outcome, forms_json,
+    )
+    warnings.extend(apply_warnings)
 
     log.info(
         "[%s] Rules: %d form-level + %d field-level generated, "
-        "%d form-level + %d field-level written.",
+        "%d form-level + %d field-level written "
+        "(%d single, %d field_batch, max_concurrency=%d).",
         state["org_name"],
         len(pending_form), len(pending_field),
         written_form, written_field,
+        len(pending_form), len(pending_field),
+        max_workers,
     )
     return {"forms_json": forms_json, "parse_warnings": warnings}
-
-
-def _find_form_element_in_json(
-    form_content: dict, section_name: str, field_name: str,
-) -> dict | None:
-    """Locate one ``formElement`` dict by (section, field) names.
-
-    Returns None when no matching section or field is present.
-    """
-    for group in form_content.get("formElementGroups") or []:
-        if group.get("name") != section_name:
-            continue
-        for element in group.get("formElements") or []:
-            if element.get("name") == field_name:
-                return element
-    return None
-
-
-def _build_rule_spec(
-    form_spec: Any,
-    kind: RuleKind,
-    intent: str,
-    available_encounter_types: list[str],
-    available_programs: list[str],
-    all_forms: list[Any] | None = None,
-) -> RuleSpec:
-    """Compose a RuleSpec from a FormSpec and the bundle's vocabulary.
-
-    `all_forms` is the full list of `FormSpec` in the bundle. Both
-    `available_concepts` and `concept_answers` span the in-scope forms —
-    target plus its registration and enrolment siblings — so a rule on a
-    program encounter (e.g. ANC) can reference enrolment fields like
-    `Last Menstrual Period (LMP)` reachable at runtime via the entity
-    chain. Mirrors CONCEPT_ANSWER_GROUNDING_SDD.md §5.
-    """
-    in_scope_forms = _forms_in_scope_for(form_spec, all_forms or [form_spec])
-    available_concepts = sorted({
-        field.name
-        for form in in_scope_forms
-        for section in (form.sections or [])
-        for field in (section.fields or [])
-        if field.name
-    })
-    concept_answers = _collect_concept_answers(in_scope_forms)
-    return RuleSpec(
-        rule_kind=kind,
-        intent=intent,
-        form_name=form_spec.name,
-        form_type=form_spec.formType,
-        subject_type=form_spec.subjectType,
-        program=form_spec.program,
-        encounter_type=form_spec.encounterType,
-        available_concepts=available_concepts,
-        available_encounter_types=available_encounter_types,
-        available_programs=available_programs,
-        concept_answers=concept_answers,
-    )
-
-
-# Form types that participate in a program (so an enrolment form is in
-# scope for cross-form answer grounding). Mirrors generators._PROGRAM_FORM_TYPES.
-_PROGRAM_FORM_TYPES_FOR_GROUNDING: frozenset[str] = frozenset({
-    "ProgramEnrolment", "ProgramExit",
-    "ProgramEncounter", "ProgramEncounterCancellation",
-})
-
-
-def _forms_in_scope_for(target: Any, all_forms: list[Any]) -> list[Any]:
-    """Return target + its registration form + its enrolment form (when applicable).
-
-    Matches the resolution table in CONCEPT_ANSWER_GROUNDING_SDD.md §5: a rule
-    can ground its answer literals against any coded concept the rule can
-    actually reach at runtime via `programEncounter.programEnrolment.individual`.
-    """
-    in_scope: list[Any] = [target]
-    target_type = getattr(target, "formType", "")
-
-    if target_type in _PROGRAM_FORM_TYPES_FOR_GROUNDING and target.program:
-        enrolment = next(
-            (f for f in all_forms
-             if getattr(f, "formType", "") == "ProgramEnrolment"
-             and getattr(f, "program", None) == target.program
-             and f is not target),
-            None,
-        )
-        if enrolment is not None:
-            in_scope.append(enrolment)
-
-    if target_type != "IndividualProfile" and target.subjectType:
-        registration = next(
-            (f for f in all_forms
-             if getattr(f, "formType", "") == "IndividualProfile"
-             and getattr(f, "subjectType", None) == target.subjectType
-             and f is not target),
-            None,
-        )
-        if registration is not None:
-            in_scope.append(registration)
-
-    return in_scope
-
-
-def _collect_concept_answers(forms: list[Any]) -> dict[str, list[str]]:
-    """Collect coded-field answer lists from the target form only.
-
-    `forms[0]` is the target form. Sibling registration/enrolment forms
-    inform `available_concepts` but their answer lists are not included —
-    answers are specific to each form's context.
-    """
-    if not forms:
-        return {}
-    answers: dict[str, list[str]] = {}
-    for section in (forms[0].sections or []):
-        for field in (section.fields or []):
-            if getattr(field, "dataType", None) != "Coded":
-                continue
-            options = list(getattr(field, "options", None) or [])
-            if options:
-                answers[field.name] = options
-    return answers
 
 
 # ── Node 6: write JSON files + ZIP bundle ─────────────────────────────────────
