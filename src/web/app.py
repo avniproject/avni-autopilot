@@ -30,6 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from domain.docs.knowledge_base import DocsKnowledgeBase
+from domain.rules.knowledge_base import KnowledgeBase as RulesKnowledgeBase
 from logging_setup import setup_logging
 from web.routes import bundle as bundle_routes
 from web.routes import chat as chat_routes
@@ -43,15 +44,21 @@ log = logging.getLogger(__name__)
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
 
-def _rebuild_docs_kb() -> None:
-    """Rebuild the docs KB embedding cache in a background thread on startup."""
+def _rebuild_knowledge_bases() -> None:
+    """Rebuild the docs + rules KB embedding caches in a background thread on
+    startup. Sequential on purpose — both hit Voyage, and free-tier rate
+    limits punish concurrent requests."""
     if not os.environ.get("VOYAGE_API_KEY"):
-        log.info("VOYAGE_API_KEY not set — skipping docs KB rebuild on startup")
+        log.info("VOYAGE_API_KEY not set — skipping KB rebuild on startup")
         return
     try:
         DocsKnowledgeBase().rebuild()
     except Exception as exc:
         log.warning(f"Docs KB rebuild on startup failed: {exc}")
+    try:
+        RulesKnowledgeBase().rebuild()
+    except Exception as exc:
+        log.warning(f"Rules KB rebuild on startup failed: {exc}")
 
 
 @asynccontextmanager
@@ -64,10 +71,10 @@ async def _lifespan(app: FastAPI):
     )
     app.state.store = store
     reaper = asyncio.create_task(store.run_reaper())
-    # Rebuild docs KB embeddings in a thread so startup is non-blocking.
+    # Rebuild KB embeddings in a thread so startup is non-blocking.
     # Content-hash gating makes this a near-instant no-op when nothing changed.
     loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, _rebuild_docs_kb)
+    loop.run_in_executor(None, _rebuild_knowledge_bases)
     log.info(
         f"avni-ai-web started — session_dir={settings.ai_session_dir} "
         f"idle_min={settings.ai_session_idle_min} max_hours={settings.ai_session_max_hours}"

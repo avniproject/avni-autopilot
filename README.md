@@ -1,11 +1,8 @@
 # Avni Bundle Generator
 
-LangGraph pipeline that turns Avni modelling + scoping Excel documents into a ready-to-upload Avni bundle ZIP. A deterministic parser does the heavy lifting; Claude Haiku 4.5 then takes a second pass at each form to flag two things the parser can't safely fix on its own — field names longer than 255 chars and duplicate field names within a form. Each proposed rename is shown to the user for confirmation before being applied.
+LangGraph pipeline that turns Avni modelling + scoping Excel documents into a ready-to-upload Avni bundle ZIP. A deterministic parser does the heavy lifting; Claude Haiku 4.5 then takes a second pass at each form to flag two things the parser can't safely fix on its own — field names longer than 255 chars, duplicate field names within a form and duplicate coded concepts across forms with different options. Each proposed rename is shown to the user for confirmation before being applied.
 
-Once a bundle is generated:
-
-- Fields inside it can be **added, renamed, or removed** through the same chat agent without re-running the generator (see [Editing fields](#editing-fields-in-an-existing-bundle)).
-- **Visit-schedule rules** can be generated from natural-language intents. The pipeline picks them up automatically when the scoping workbook has a `Rules` tab (see [Rule generation as part of the pipeline](#rule-generation-as-part-of-the-pipeline)), and the chat agent can also set or update one on an already-built bundle (see [Setting a visit-schedule rule on an already-built bundle](#setting-a-visit-schedule-rule-on-an-already-built-bundle)). Rules are grounded in the bundle's actual concepts, encounter types, and coded answers; the validator rejects any reference that doesn't exist.
+Once a bundle is generated, interaction on UI chat regarding field level rules and form level rules(visit schedule, decision, edit form rule, validation rule) can be done.
 
 ---
 
@@ -29,6 +26,8 @@ VOYAGE_API_KEY=pa-...    # required when generating rules — embeds the KB cata
 ```
 
 Voyage's free tier (3 RPM / 10K TPM) works for first runs but is slow; adding a payment method to the Voyage dashboard unlocks standard limits (200M free tokens included). The embedder retries automatically on rate limits — see `domain/rules/knowledge_base.py` for the env-var overrides if you want to tighten or loosen the throttle.
+
+Both embedding caches (`resources/docs/.embeddings.json` and `resources/rules/.embeddings.json`) are committed to the repo, so a fresh checkout needs no embedding calls at all until the underlying catalogs change.
 
 ### Optional: LangSmith tracing
 
@@ -122,6 +121,8 @@ Hit `GET /health` to verify liveness. Browse `GET /docs` for an OpenAPI view of 
 
 ### What it does
 
+On startup the service warms both knowledge-base embedding caches (docs + rules) in a background thread — content-hash gating makes this a no-op unless a catalog changed, so the first bundle generation or question never pays a cold embedding rebuild.
+
 For each browser-allocated session, the service:
 
 1. Verifies the user's avni-server auth token (`GET /web/userInfo`) and binds the session to the org returned. The browser never picks an org.
@@ -130,20 +131,6 @@ For each browser-allocated session, the service:
 4. On `POST /sessions/{id}/upload-to-avni`, relays the generated ZIP to avni-server's existing Metadata-Zip import endpoint, reusing the admin's auth token captured at session start.
 
 Sessions are in-memory and single-process by design — see SDD §8 for the trade-off, `specs/DEPLOYMENT_SDD.md` for the AWS shape, and SDD §11 for the v2 migration path to a persistent checkpointer.
-
-### Endpoints
-
-```
-POST   /sessions                          create + verify token
-DELETE /sessions/{session_id}             tear down
-POST   /sessions/{session_id}/upload      multipart xlsx
-POST   /sessions/{session_id}/message     one user turn
-POST   /sessions/{session_id}/resolve     respond to a HITL interrupt
-GET    /sessions/{session_id}/events      SSE stream (Last-Event-ID resume)
-GET    /sessions/{session_id}/bundle      download ZIP
-POST   /sessions/{session_id}/upload-to-avni    auto-upload to avni-server
-GET    /health                            operational liveness
-```
 
 The `avni-chat` REPL and the `avni-rules-kb` CLI are unaffected by the service — they continue to read their own env vars and ignore the `AI_*` settings.
 
@@ -275,7 +262,7 @@ avni-rules-kb examples-all   # refresh ALL wired rule kinds in one pass
                             # and rebuilds embeddings once at the end
 ```
 
-The catalog lives at `resources/rules/`; the embedding cache is content-hash-invalidated, so subsequent runs only re-embed entries that changed.
+The catalog lives at `resources/rules/`; the embedding cache (`resources/rules/.embeddings.json`) is content-hash-invalidated, so subsequent runs only re-embed entries that changed. The cache is **committed to the repo** — after any command that changes the catalog (`helpers`, `examples`, `examples-all`, `rebuild`), commit the updated `.embeddings.json` alongside so fresh checkouts and deployments start warm. Forgetting is safe but wasteful: `avni-ai-web` re-embeds drifted entries in the background at every startup until the refreshed cache is committed.
 
 Helper entries with no `applies_to` field match every rule kind — only intentionally narrow scopes (e.g. `imports/visit_schedule.json`, where `VisitScheduleBuilder` is genuinely VS-only) need to declare it explicitly.
 

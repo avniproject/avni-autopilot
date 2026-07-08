@@ -312,6 +312,16 @@ class KnowledgeBase:
             ))
         return out
 
+    def rebuild(self) -> None:
+        """Re-embed changed entries and write the embedding cache.
+
+        Hash-gated like the lazy path — a warm cache makes this a near-instant
+        no-op. Called at web-server startup so the first bundle generation
+        never pays the full catalog embed. For a forced full re-embed use
+        `kb_cli rebuild`, which deletes the cache file first.
+        """
+        self._ensure_catalog_vectors()
+
     # ── Embedding cache ───────────────────────────────────────────────────────
 
     def _ensure_catalog_vectors(self) -> dict[str, np.ndarray]:
