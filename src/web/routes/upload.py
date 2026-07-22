@@ -196,11 +196,14 @@ async def upload_to_avni(
     """
     session = _require_session(session_id, store)
 
-    # Prefer the token from the current request — the browser refreshes it
-    # automatically, so this is always fresher than what was captured at
-    # session creation (which may have expired during a long generation run).
-    if auth_token:
-        session.auth_token = auth_token
+    # The token comes from this request, not the session — the browser
+    # refreshes it automatically, so it is always current, and nothing keeps
+    # a credential in memory between calls.
+    if not auth_token:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "missing AUTH-TOKEN header", "code": "E_AUTH"},
+        )
 
     if session.bundle_path is None or not Path(session.bundle_path).exists():
         raise HTTPException(
@@ -228,7 +231,7 @@ async def upload_to_avni(
     # `user-name` is also set by avni-webapp's httpClient on every request and
     # is consumed by avni-server's auth filter.
     headers = {
-        "AUTH-TOKEN": session.auth_token,
+        "AUTH-TOKEN": auth_token,
         "user-name": session.username,
     }
     file_path = Path(session.bundle_path)

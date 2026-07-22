@@ -286,8 +286,15 @@ def test_get_bundle_streams_zip_when_ready(client: TestClient, tmp_path: Path) -
 def test_upload_to_avni_404_when_no_bundle(client: TestClient) -> None:
     r = client.post("/sessions", headers={"Authorization": "Bearer abc"})
     sid = r.json()["session_id"]
-    r = client.post(f"/sessions/{sid}/upload-to-avni")
+    r = client.post(f"/sessions/{sid}/upload-to-avni", headers={"AUTH-TOKEN": "tok"})
     assert r.status_code == 404 and r.json()["detail"]["code"] == "E_NO_BUNDLE"
+
+
+def test_upload_to_avni_401_when_token_missing(client: TestClient) -> None:
+    r = client.post("/sessions", headers={"Authorization": "Bearer abc"})
+    sid = r.json()["session_id"]
+    r = client.post(f"/sessions/{sid}/upload-to-avni")
+    assert r.status_code == 401 and r.json()["detail"]["code"] == "E_AUTH"
 
 
 def test_upload_to_avni_relays_zip_and_returns_job_id(client: TestClient) -> None:
@@ -301,7 +308,7 @@ def test_upload_to_avni_relays_zip_and_returns_job_id(client: TestClient) -> Non
     zip_path.write_bytes(b"PK\x03\x04zipbytes")
     session.bundle_path = zip_path
 
-    r = client.post(f"/sessions/{sid}/upload-to-avni")
+    r = client.post(f"/sessions/{sid}/upload-to-avni", headers={"AUTH-TOKEN": "tok"})
     assert r.status_code == 200
     assert r.json()["job_id"] == "job-42"
     assert r.json()["status"] == "ok"
@@ -329,7 +336,7 @@ def test_upload_to_avni_401_when_avni_server_rejects(
         zip_path.write_bytes(b"PK")
         session.bundle_path = zip_path
 
-        r = c.post(f"/sessions/{sid}/upload-to-avni")
+        r = c.post(f"/sessions/{sid}/upload-to-avni", headers={"AUTH-TOKEN": "tok"})
         assert r.status_code == 401
 
 

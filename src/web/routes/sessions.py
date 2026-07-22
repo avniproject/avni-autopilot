@@ -66,12 +66,11 @@ async def create_session(
     session = store.create(
         org_name=info.organisation_name,
         username=info.username,
-        auth_token=token,
         shared_input_root=Path(settings.input_root),
         shared_output_root=Path(settings.output_root),
     )
     session.chat_service = ChatService(session)
-    asyncio.create_task(download_org_bundle(session))
+    asyncio.create_task(download_org_bundle(session, token))
 
     # AI_SID cookie — keyed for ALB sticky sessions per DEPLOYMENT_SDD §7.
     # max_age matches the absolute session bound so the cookie expires in

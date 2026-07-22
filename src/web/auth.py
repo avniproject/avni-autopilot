@@ -4,9 +4,10 @@ Single responsibility: take the `Authorization` header the browser sent,
 forward it to avni-server's `/web/userInfo` endpoint, and return the
 username + organisation name on 200 — or `None` on 401.
 
-The token is never logged. Per SDD §6 it lives only in the in-memory
-`ChatSession` record and is dropped on session expiry. Used by
-`web.routes.sessions.create_session` and `web.routes.upload.upload_to_avni`.
+The token is never logged and never stored on the session record — each
+caller forwards the token from its own inbound request and drops it when the
+request ends. Used by `web.routes.sessions.create_session` and
+`web.routes.upload.upload_to_avni`.
 """
 
 from __future__ import annotations

@@ -41,7 +41,6 @@ def _make_session(tmp_path: Path) -> ChatSession:
         session_id="sid-1",
         org_name="srijan",
         username="alice",
-        auth_token="t",
         workdir=tmp_path,
     )
 

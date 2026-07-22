@@ -91,10 +91,10 @@ class ChatSession:
     a server-restart race that the reaper otherwise cleans up).
     """
 
+
     session_id: str
     org_name: str
     username: str
-    auth_token: str
     workdir: Path
     bus: EventBus = field(default_factory=EventBus)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -121,12 +121,15 @@ class ChatSession:
 # ── Bundle download ──────────────────────────────────────────────────────────
 
 
-async def download_org_bundle(session: ChatSession) -> None:
+async def download_org_bundle(session: ChatSession, auth_token: str) -> None:
     """Fetch the org's current bundle from avni-server into session workdir.
 
     Runs as a background task — does not block session creation. Emits
     `session.loading` at start and `session.ready` on completion so the webapp
     can show / hide the "Checking the current setup" indicator.
+
+    The token is passed in from the session-creation request rather than held
+    on the session record, so no credential outlives this call.
     """
     session.bus.publish("session.loading", session_loading("Checking the current setup"))
     url = f"{settings.avni_server_base_url}/implementation/export/false"
@@ -134,7 +137,7 @@ async def download_org_bundle(session: ChatSession) -> None:
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 url,
-                headers={"AUTH-TOKEN": session.auth_token},
+                headers={"AUTH-TOKEN": auth_token},
                 timeout=60,
                 follow_redirects=True,
             )
@@ -178,7 +181,6 @@ class SessionStore:
         self,
         org_name: str,
         username: str,
-        auth_token: str,
         shared_input_root: Optional[Path] = None,
         shared_output_root: Optional[Path] = None,
     ) -> ChatSession:
@@ -197,7 +199,6 @@ class SessionStore:
             session_id=session_id,
             org_name=org_name,
             username=username,
-            auth_token=auth_token,
             workdir=workdir,
         )
         if shared_input_root is not None:
