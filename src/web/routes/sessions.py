@@ -82,7 +82,7 @@ async def create_session(
         max_age=settings.ai_session_max_hours * 3600,
         httponly=True,
         samesite="lax",
-        secure=False,  # toggle to True behind HTTPS-only TLS termination
+        secure=True,
     )
 
     return {
