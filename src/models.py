@@ -137,6 +137,13 @@ class EntitySpec(BaseModel):
     # Populated by the validator; downstream code can inspect these.
     validation_warnings: list[str] = Field(default_factory=list, exclude=True)
 
+    # Rules-tab rows whose form name did not exactly match any form.
+    # `{row_name: {rule_field: intent}}` — resolved by an LLM pass in the
+    # form-link pipeline node, which tolerates typos and naming variants.
+    unmatched_rule_intents: dict[str, dict[str, str]] = Field(
+        default_factory=dict, exclude=True,
+    )
+
     # Set to True to raise on cross-ref errors (strict mode).
     # Default False = lenient mode (store as warnings).
     _strict_validation: bool = False

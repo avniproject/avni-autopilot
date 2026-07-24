@@ -1585,13 +1585,16 @@ def parse_scoping_docs(
     # subject/program/encounter unset); the downstream LLM pass stamps the
     # final linkage.
 
-    # Phase 5c: Attach rule intents harvested from the Rules tab
+    # Phase 5c: Attach rule intents harvested from the Rules tab. Rows whose
+    # name matches no form exactly ride on the spec for the LLM matcher in
+    # the form-link pipeline node.
+    unmatched_rule_intents: dict[str, dict[str, str]] = {}
     if intents_by_form_name:
-        apply_intents_to_forms(all_forms, intents_by_form_name)
+        unmatched_rule_intents = apply_intents_to_forms(all_forms, intents_by_form_name)
         attached = sum(1 for f in all_forms if f.rule_intents)
         logger.info(
-            "Attached rule intents to %d of %d form(s)",
-            attached, len(all_forms),
+            "Attached rule intents to %d of %d form(s); %d row(s) unmatched",
+            attached, len(all_forms), len(unmatched_rule_intents),
         )
 
     # Phase 6: Always include default group
@@ -1609,12 +1612,14 @@ def parse_scoping_docs(
         len(file_paths),
     )
 
-    return EntitySpec(
+    spec = EntitySpec(
         subject_types=all_subjects,
         programs=all_programs,
         encounter_types=all_encounters,
         address_levels=all_address,
         groups=groups,
         forms=all_forms,
-    ), misc_sheets
+    )
+    spec.unmatched_rule_intents = unmatched_rule_intents
+    return spec, misc_sheets
 

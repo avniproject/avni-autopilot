@@ -46,6 +46,7 @@ from domain.rules.orchestrator import (
     collect_pending_rules,
     generate_all,
 )
+from domain.rules.parser import attach_unmatched_rule_intents
 from models import Change
 from pipeline.state import BundleState
 
@@ -134,6 +135,7 @@ def link_forms_to_entities(state: BundleState) -> dict:
         return {"form_link_warnings": warnings}
 
     helper = LLMHelper()
+    warnings.extend(attach_unmatched_rule_intents(spec, helper))
     if not helper.is_available():
         log.info("[%s] %s", state["org_name"], _LLM_SKIP_WARN)
         warnings.append(_LLM_SKIP_WARN)
