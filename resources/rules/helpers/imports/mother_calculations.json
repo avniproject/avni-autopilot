@@ -3,8 +3,8 @@
     "name": "motherCalculations.estimatedDateOfDelivery",
     "signature": "imports.motherCalculations.estimatedDateOfDelivery(programEnrolment)",
     "applies_to": ["formElementRule", "decisionRule", "validationRule"],
-    "use_when": "Compute the Estimated Date of Delivery (EDD) from the Last Menstrual Period (LMP) recorded on the pregnancy enrolment. Use whenever the intent says 'EDD from LMP', 'estimated delivery date', or computes a due date for an antenatal field.",
-    "example_snippet": "const edd = imports.motherCalculations.estimatedDateOfDelivery(programEnrolment); return new imports.rulesConfig.FormElementStatus(formElement.uuid, true, edd);"
+    "use_when": "Compute the Estimated Date of Delivery (EDD = LMP + 9 months + 7 days) whenever the intent says 'EDD from LMP', 'estimated delivery date', or computes a due date for an antenatal field. Always generate the single runtime pattern in the snippet: read LMP with the non-throwing motherCalculations.lmp helper (it only sees a concept named exactly 'Last menstrual period'); when it returns a value, delegate to motherCalculations.estimatedDateOfDelivery (safe behind the guard — calling it WITHOUT the guard throws on blank LMP); when it returns nothing, read the LMP-like concept name from the available concepts list with getObservationValue and compute EDD inline with moment .add(9, 'months').add(7, 'days'). Never use add(280, 'days') — calendar months differ from 280 days by up to 3 days.",
+    "example_snippet": "const helperLmp = imports.motherCalculations.lmp(programEnrolment);\nconst altLmp = helperLmp ? undefined : programEnrolment.getObservationValue('LMP Date');\nconst edd = helperLmp\n    ? imports.motherCalculations.estimatedDateOfDelivery(programEnrolment)\n    : (altLmp ? imports.moment(altLmp).add(9, 'months').add(7, 'days').toDate() : undefined);\nreturn new imports.rulesConfig.FormElementStatus(formElement.uuid, true, edd);"
   },
   {
     "name": "motherCalculations.gestationalAgeAsOn",
