@@ -189,7 +189,7 @@ class ChatService:
                 "error",
                 error_payload(
                     "E_BUSY",
-                    "agent is still processing the previous turn",
+                    "agent is still processing the previous question",
                     recoverable=True,
                 ),
             )
