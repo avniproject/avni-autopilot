@@ -51,6 +51,38 @@ Cells are natural language, same as the `Rules` tab. Common visibility patterns 
 
 ---
 
+# Monitoring a deployed instance
+
+Two independent signals cover a running instance: **LangSmith** for what the agent did (LLM traces, tokens, latency, cost), and **logs** for what the process did (startup, requests, pipeline progress, errors).
+
+### LangSmith tracing
+
+Every LLM call, graph steps, and tool invocation is traced to [LangSmith](https://smith.langchain.com).
+
+| Environment | LangSmith project |
+| --- | --- |
+| prod | `avni-autopilot` |
+| prerelease | `avni-autopilot-prerelease` |
+| staging | `avni-autopilot-staging` |
+
+Deployed instances use the APAC endpoint (`LANGSMITH_ENDPOINT=https://apac.api.smith.langchain.com`).
+
+### Logs
+
+Two streams, split by origin:
+
+- **App log file** (`web.*`, `pipeline.*`, `domain.*` diagnostics) — path is `LOG_FILE`, default `logs/avni.log` locally and `/var/log/avni-autopilot/avni.log` on deployed boxes. Rotating (5 MB × 3 backups), formatted `2026-08-02 07:59:52 INFO    web.app | avni-ai-web started …`. Threshold is `LOG_LEVEL` (default `INFO`); the pipeline and enrichment modules always log at `INFO` so per-run progress is captured.
+- **systemd journal** (uvicorn's own output — request logs, bind/crash errors) — `StandardOutput=journal` on the unit.
+
+```bash
+tail -f /var/log/avni-autopilot/avni.log         # app + pipeline diagnostics
+journalctl -u avni-autopilot -f                  # uvicorn / process-level, follow live
+journalctl -u avni-autopilot -n 200 --no-pager   # recent process output (e.g. bind errors)
+```
+
+Startup logs a single `avni-ai-web started — session_dir=… idle_min=… max_hours=…` line per boot. Repeated `started`/`stopped` pairs in the file log signal a restart loop — check the journal for the cause (e.g. `[Errno 98] address already in use`).
+
+---
 # Local Setup
 
 Requires Python 3.11+.
