@@ -37,6 +37,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from domain.rules.unchecked_rule_code import mark_unchecked_rule_code, normalize_rule_code
 from web.events import (
     agent_message,
     bundle_ready,
@@ -174,6 +175,9 @@ class ChatService:
         # the right pause point.
         self._pending_interrupts: dict[str, dict[str, Any]] = {}
         self._running_task: asyncio.Task[None] | None = None
+        # Normalised JS of every rule a `suggest_*` tool returned as
+        # "suggested"; any other rule code in a reply is marked not checked.
+        self._checked_rule_code: set[str] = set()
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -325,6 +329,7 @@ class ChatService:
                 )
             text = _extract_text(msg.content)
             if text:
+                text = mark_unchecked_rule_code(text, self._checked_rule_code)
                 bus.publish("agent.message", agent_message("assistant", text))
             return
         if isinstance(msg, ToolMessage):
@@ -351,6 +356,8 @@ class ChatService:
             return
 
         status = result.get("status", "")
+        if status == "suggested" and result.get("js"):
+            self._checked_rule_code.add(normalize_rule_code(result["js"]))
         if status == "needs_confirmation":
             self._publish_hitl_pending(result)
         elif status == "done" and result.get("zip_path"):

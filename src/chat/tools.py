@@ -336,15 +336,19 @@ def suggest_form_rule(
 ) -> dict:
     """Generate a form-level rule JS from a natural-language intent.
 
-    Does NOT write to the bundle. Returns the full suggested JS in `js` —
-    always render it to the user as a fenced ```javascript code block.
+    Does NOT write to the bundle. On `status: "suggested"` the checked JS is in
+    `js`; render it to the user as a fenced ```javascript code block. On
+    `status: "rejected"` no JS is returned — relay the `warnings` instead.
 
     `rule_kind` picks which Avni rule field on the form JSON is targeted:
 
       - "visitScheduleRule"  → when the next visit should be scheduled
       - "validationRule"     → block-save messages when the form has bad data
-      - "editFormRule"       → who/when the form can be edited (eligibility)
+      - "editFormRule"       → who/when an already-saved form can be edited
       - "decisionRule"       → values to write into concepts at submit time
+
+    Eligibility rules (programme, visit, member addition) are not form rules
+    and no tool covers them; do not map them to any of these kinds.
 
     Before calling this, ground the user's intent against the bundle. The
     user usually phrases informally — short form names, paraphrased field
@@ -352,6 +356,10 @@ def suggest_form_rule(
     exact form names, concept names, encounter type names, and coded-answer
     strings. Echo the resolved names back to the user when confirming so they
     catch any mis-mapping before acting on the suggestion.
+    When the user asks to send the request straight to this tool, skip
+    `list_bundle_fields` and call it with their names. An unknown form
+    returns an error, and a rule that reads a field not on the form is
+    rejected.
 
     Args:
         form_name: Exact name of the form (matches `form.name` in the bundle).
@@ -412,7 +420,6 @@ def suggest_form_rule(
             "rule_kind": kind.value,
             "confidence": result.confidence,
             "warnings": warnings,
-            "js": result.js,
         }
 
     return {
@@ -438,8 +445,9 @@ def suggest_form_element_rule(
 ) -> dict:
     """Generate a field-level rule JS from a natural-language intent.
 
-    Does NOT write to the bundle. Returns the full suggested JS in `js` —
-    always render it to the user as a fenced ```javascript code block.
+    Does NOT write to the bundle. On `status: "suggested"` the checked JS is in
+    `js`; render it to the user as a fenced ```javascript code block. On
+    `status: "rejected"` no JS is returned — relay the `warnings` instead.
 
     Targets `form.formElementGroups[<page>].formElements[<field>].rule`.
     The behaviour mix (visibility / value / validation / answer-filter) is
@@ -457,6 +465,10 @@ def suggest_form_element_rule(
     `list_bundle_fields` first to discover exact form, page, field, and
     coded-answer names. Echo the resolved names back to the user when
     confirming so any mis-mapping is caught before acting on the suggestion.
+    When the user asks to send the request straight to this tool, skip
+    `list_bundle_fields` and call it with their names. An unknown form
+    returns an error, and a rule that reads a field not on the form is
+    rejected.
 
     Args:
         form_name: Exact name of the form (matches `form.name` in the bundle).
@@ -519,7 +531,6 @@ def suggest_form_element_rule(
             "rule_kind": RuleKind.FORM_ELEMENT.value,
             "confidence": result.confidence,
             "warnings": warnings,
-            "js": result.js,
         }
 
     return {

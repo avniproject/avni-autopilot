@@ -17,6 +17,7 @@ import esprima
 from esprima.error_handler import Error as EsprimaError
 
 from domain.rules.accessors import CONCEPT_ACCESSORS, ENCOUNTER_TYPE_ACCESSORS
+from domain.rules.prompts import ENTITY_PARAMS, entity_param_for_form_type
 from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
 
 log = logging.getLogger(__name__)
@@ -34,6 +35,12 @@ _VALUE_IN_METHODS: frozenset[str] = frozenset({
     "valueInRegistration",
     "valueInEntireEnrolment",
     "valueInLastEncounter",
+})
+# RuleCondition methods that read a field of the form being filled in. The
+# bundle context lists that form's fields, so these names are grounded too.
+# valueInRegistration / valueInEnrolment read other forms and are not checked.
+_CURRENT_FORM_VALUE_METHODS: frozenset[str] = frozenset({
+    "valueInEncounter",
 })
 _CONTAINS_ANSWER_METHODS: frozenset[str] = frozenset({
     "containsAnswerConceptName",
@@ -108,6 +115,7 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
     if bad_encounters:
         hard_warnings.append(f"off-bundle encounter types: {bad_encounters}")
     hard_warnings.extend(_check_answer_grounding(tree, spec))
+    hard_warnings.extend(_check_builder_entity_key(arrow, spec))
 
     # Soft warnings (return-shape mismatches) — surface to the caller but
     # do not block writes. See SDD §5.3.
@@ -201,6 +209,8 @@ def _collect_call_args(
         return
 
     if method in CONCEPT_ACCESSORS:
+        concepts.add(value)
+    elif method in _CURRENT_FORM_VALUE_METHODS and not _UUID_RE.match(value):
         concepts.add(value)
     elif method in ENCOUNTER_TYPE_ACCESSORS:
         encounter_types.add(value)
@@ -598,6 +608,143 @@ def _builder_identifiers_in_scope(arrow: Any) -> set[str]:
         if isinstance(name, str):
             out.add(name)
     return out
+
+
+def _check_builder_entity_key(arrow: Any, spec: RuleSpec) -> list[str]:
+    """Hard check: rulesConfig classes receive the form's record under the form's entity key.
+
+    The rule reads the form's record from `params.entity`. Passing that record
+    to a builder or `RuleCondition` under another entity key (e.g.
+    `{programEncounter: encounter}` on a general-visit form) builds the rule
+    for the wrong form type. Only properties whose value is the form's record
+    (`params.entity` itself, or a variable bound to it) are checked; derived
+    records such as `{programEnrolment: programEncounter.programEnrolment}`
+    are legitimate.
+    """
+    entity_variables = _identifiers_bound_to_params_entity(arrow)
+    expected_key = entity_param_for_form_type(spec.form_type)
+    warnings: list[str] = []
+    for node in _iter_all_nodes(getattr(arrow, "body", None)):
+        if getattr(node, "type", None) != "NewExpression":
+            continue
+        class_name = _rules_config_class_name(getattr(node, "callee", None))
+        if class_name is None:
+            continue
+        for argument in getattr(node, "arguments", None) or []:
+            if getattr(argument, "type", None) != "ObjectExpression":
+                continue
+            for prop in getattr(argument, "properties", None) or []:
+                key = _property_key_name(prop)
+                if (
+                    key in ENTITY_PARAMS
+                    and key != expected_key
+                    and _is_form_record(getattr(prop, "value", None), entity_variables)
+                ):
+                    warnings.append(
+                        f"wrong form type in {class_name}: the form's record is "
+                        f"passed as {key!r}, but a {spec.form_type or 'subject'} "
+                        f"form needs {expected_key!r}"
+                    )
+    return warnings
+
+
+def _is_form_record(value: Any, entity_variables: set[str]) -> bool:
+    """True for `params.entity` or an identifier bound to it."""
+    if getattr(value, "type", None) == "Identifier":
+        return getattr(value, "name", None) in entity_variables
+    return _is_member_chain(value, ("params", "entity"))
+
+
+def _identifiers_bound_to_params_entity(arrow: Any) -> set[str]:
+    """Names in the IIFE that hold the form's record.
+
+    Covers `const x = params.entity`, `const {entity} = params`,
+    `const {entity: x} = params`, and aliases such as `const y = x` of any of
+    those, followed to a fixed point.
+    """
+    declarators = [
+        node for node in _iter_all_nodes(getattr(arrow, "body", None))
+        if getattr(node, "type", None) == "VariableDeclarator"
+    ]
+    names: set[str] = set()
+    for declarator in declarators:
+        names.update(_names_bound_to_params_entity(declarator))
+
+    added = True
+    while added:
+        added = False
+        for declarator in declarators:
+            identifier = getattr(declarator, "id", None)
+            init = getattr(declarator, "init", None)
+            name = getattr(identifier, "name", None)
+            if (
+                getattr(identifier, "type", None) == "Identifier"
+                and getattr(init, "type", None) == "Identifier"
+                and getattr(init, "name", None) in names
+                and isinstance(name, str)
+                and name not in names
+            ):
+                names.add(name)
+                added = True
+    return names
+
+
+def _names_bound_to_params_entity(declarator: Any) -> set[str]:
+    """Names one declarator binds directly to `params.entity`."""
+    identifier = getattr(declarator, "id", None)
+    init = getattr(declarator, "init", None)
+    identifier_type = getattr(identifier, "type", None)
+
+    if identifier_type == "Identifier" and _is_member_chain(init, ("params", "entity")):
+        name = getattr(identifier, "name", None)
+        return {name} if isinstance(name, str) else set()
+
+    is_params = getattr(init, "type", None) == "Identifier" and getattr(init, "name", None) == "params"
+    if identifier_type != "ObjectPattern" or not is_params:
+        return set()
+    names: set[str] = set()
+    for prop in getattr(identifier, "properties", None) or []:
+        if _property_key_name(prop) != "entity":
+            continue
+        target = getattr(prop, "value", None)
+        if getattr(target, "type", None) == "AssignmentPattern":
+            target = getattr(target, "left", None)
+        name = getattr(target, "name", None)
+        if getattr(target, "type", None) == "Identifier" and isinstance(name, str):
+            names.add(name)
+    return names
+
+
+def _rules_config_class_name(callee: Any) -> str | None:
+    """Class name for `new imports.rulesConfig.<X>(...)`, or `new <X>(...)` for a builder or RuleCondition.
+
+    A bare `new <X>(...)` counts only for names ending in `Builder` and for
+    `RuleCondition`, the rulesConfig classes that take the form's record.
+    """
+    callee_type = getattr(callee, "type", None)
+    if callee_type == "MemberExpression":
+        name = getattr(getattr(callee, "property", None), "name", None)
+        if isinstance(name, str) and _is_member_chain(callee, ("imports", "rulesConfig", name)):
+            return name
+        return None
+    if callee_type == "Identifier":
+        name = getattr(callee, "name", None)
+        if isinstance(name, str) and (name.endswith("Builder") or name == "RuleCondition"):
+            return name
+    return None
+
+
+def _property_key_name(prop: Any) -> str | None:
+    """Key of an object-literal property written as an identifier or a string."""
+    if getattr(prop, "computed", False):
+        return None
+    key = getattr(prop, "key", None)
+    key_type = getattr(key, "type", None)
+    if key_type == "Identifier":
+        return getattr(key, "name", None)
+    if key_type == "Literal" and isinstance(getattr(key, "value", None), str):
+        return key.value
+    return None
 
 
 def _is_member_chain(node: Any, expected: tuple[str, ...]) -> bool:

@@ -88,6 +88,9 @@ _FORM_TYPE_TO_ENTITY_PARAM: dict[str, str] = {
 }
 
 
+ENTITY_PARAMS: frozenset[str] = frozenset(_FORM_TYPE_TO_ENTITY_PARAM.values())
+
+
 def entity_param_for_form_type(form_type: str) -> str:
     """The variable name the rule reads via `params.entity` for this formType."""
     return _FORM_TYPE_TO_ENTITY_PARAM.get(form_type, "individual")

@@ -18,6 +18,7 @@ from typing import Any, Iterable
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
+from domain.rules.unchecked_rule_code import UNCHECKED_RULE_CODE_NOTE
 from web.chat_service import ChatService
 from web.sessions import ChatSession
 
@@ -292,3 +293,55 @@ async def test_send_message_while_running_publishes_busy_error(tmp_path: Path) -
     busy = [e for t, e in events if t == "error" and e.get("code") == "E_BUSY"]
     assert len(busy) == 1
     assert busy[0]["recoverable"] is True
+
+
+# ── Rule code provenance ─────────────────────────────────────────────────────
+
+_SUGGESTED_JS = (
+    '"use strict";\n({params, imports}) => {\n'
+    "  const encounter = params.entity;\n"
+    "  return new imports.rulesConfig.FormElementStatus(params.formElement.uuid, true, null);\n"
+    "};"
+)
+
+
+async def _run_rule_turn(tmp_path: Path, tool_result: dict, reply_code: str) -> str:
+    """Run a turn where a rule tool returns `tool_result`, then the agent shows `reply_code`."""
+    session = _make_session(tmp_path)
+    reply = f"Here is the rule:\n\n```javascript\n{reply_code}\n```\n\nIt shows the field."
+    updates = [
+        {"tools": {"messages": [ToolMessage(content=json.dumps(tool_result), tool_call_id="c1")]}},
+        {"agent": {"messages": [AIMessage(content=reply)]}},
+    ]
+    svc = ChatService(session, agent_factory=lambda: _StubAgent(updates))
+    await svc.send_message("show 'Reason' only when consent is No")
+    await asyncio.wait_for(svc._running_task, timeout=1.0)  # type: ignore[arg-type]
+    return next(e["content"] for t, e in _collect_published(session) if t == "agent.message")
+
+
+@pytest.mark.asyncio
+async def test_rule_code_returned_as_suggested_is_shown_unmarked(tmp_path: Path) -> None:
+    content = await _run_rule_turn(
+        tmp_path, {"status": "suggested", "js": _SUGGESTED_JS}, _SUGGESTED_JS,
+    )
+    assert UNCHECKED_RULE_CODE_NOTE not in content
+
+
+@pytest.mark.asyncio
+async def test_rule_code_the_agent_changed_is_marked_not_checked(tmp_path: Path) -> None:
+    content = await _run_rule_turn(
+        tmp_path,
+        {"status": "suggested", "js": _SUGGESTED_JS},
+        _SUGGESTED_JS.replace("true", "false"),
+    )
+    assert UNCHECKED_RULE_CODE_NOTE in content
+
+
+@pytest.mark.asyncio
+async def test_rule_code_shown_after_a_rejection_is_marked_not_checked(tmp_path: Path) -> None:
+    content = await _run_rule_turn(
+        tmp_path,
+        {"status": "rejected", "warnings": ["off-bundle concept names: ['Weight']"]},
+        _SUGGESTED_JS,
+    )
+    assert UNCHECKED_RULE_CODE_NOTE in content
