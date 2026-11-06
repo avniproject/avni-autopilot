@@ -642,9 +642,18 @@ def list_bundle_fields(bundle_path: str) -> dict:
     Useful for the agent to ground edit operations + rule intents in real
     names. Coded fields include their `answers` list so the agent can echo
     exact answer strings back to the user before generating rules.
+
+    Each form carries its `uuid` and `usedIn` — one entry per form mapping,
+    naming the subject type, program and encounter type the form is used
+    for — so the agent can answer "which subject type is this form for"
+    from the bundle. Each field carries its form element `uuid` and its
+    `conceptUuid`, so an ID the user pastes from the admin app can be
+    matched to a field.
     """
     with _open_bundle(bundle_path) as workdir:
         forms = _load_forms(workdir)
+        indexes = _load_mapping_indexes(workdir)
+        mappings = _load_form_mappings(workdir)
         out_forms: list[dict] = []
         for fname in sorted(forms):
             form = forms[fname]
@@ -655,6 +664,8 @@ def list_bundle_fields(bundle_path: str) -> dict:
                     concept = e.get("concept") or {}
                     field: dict = {
                         "name": e.get("name"),
+                        "uuid": e.get("uuid"),
+                        "conceptUuid": concept.get("uuid"),
                         "dataType": concept.get("dataType"),
                         "voided": bool(e.get("voided", False)),
                     }
@@ -668,7 +679,12 @@ def list_bundle_fields(bundle_path: str) -> dict:
             out_forms.append({
                 "file": fname,
                 "form": form.get("name"),
+                "uuid": form.get("uuid"),
                 "formType": form.get("formType"),
+                "usedIn": [
+                    _mapping_names(m, indexes)
+                    for m in _active_mappings_for(form, mappings)
+                ],
                 "sections": sections,
             })
         return {"bundle_path": bundle_path, "forms": out_forms}
@@ -677,8 +693,83 @@ def list_bundle_fields(bundle_path: str) -> dict:
 # ── Rule generation support (VISIT_SCHEDULE_RULE_SDD §9.2) ───────────────────
 
 
-def load_form_rule_context(bundle_path: str, form_name: str) -> dict | None:
+class AmbiguousFormError(ValueError):
+    """Several forms share a name and none can be picked on its own.
+
+    `candidates` holds one entry per copy: its `uuid` and `usedIn` (the
+    subject type / program / encounter type names of each active mapping),
+    so the caller can ask which copy is meant and retry with `form_uuid`.
+    """
+
+    def __init__(self, form_name: str, candidates: list[dict]) -> None:
+        super().__init__(
+            f"{len(candidates)} forms are named {form_name!r}; "
+            f"pass the form_uuid of the one meant"
+        )
+        self.form_name = form_name
+        self.candidates = candidates
+
+
+def _active_mappings_for(form: dict, mappings: list[dict]) -> list[dict]:
+    form_uuid = form.get("uuid")
+    if not form_uuid:
+        return []
+    return [
+        m for m in mappings
+        if m.get("formUUID") == form_uuid and not m.get("voided")
+    ]
+
+
+def _select_rule_form(
+    forms: dict[str, dict],
+    mappings: list[dict],
+    indexes: dict[str, tuple[list[str], dict[str, str]]],
+    form_name: str,
+    form_uuid: str | None,
+) -> str | None:
+    """File name of the form a rule targets, or None when none matches.
+
+    Voided forms are skipped. `form_uuid`, when given, must belong to a form
+    named `form_name`. Among several same-named forms, the only one with an
+    active form mapping wins: an unmapped copy is never filled in, so a rule
+    on it is never run.
+
+    Raises:
+        AmbiguousFormError: several same-named forms remain after that.
+    """
+    named = {
+        file_name: form for file_name, form in forms.items()
+        if form.get("name") == form_name and not form.get("voided")
+    }
+    if form_uuid:
+        return next(
+            (fn for fn, form in named.items() if form.get("uuid") == form_uuid),
+            None,
+        )
+    if len(named) <= 1:
+        return next(iter(named), None)
+    mapped = [fn for fn, form in named.items() if _active_mappings_for(form, mappings)]
+    if len(mapped) == 1:
+        return mapped[0]
+    raise AmbiguousFormError(form_name, [
+        {
+            "uuid": form.get("uuid"),
+            "usedIn": [
+                _mapping_names(m, indexes)
+                for m in _active_mappings_for(form, mappings)
+            ],
+        }
+        for form in named.values()
+    ])
+
+
+def load_form_rule_context(
+    bundle_path: str, form_name: str, form_uuid: str | None = None,
+) -> dict | None:
     """Read everything a RuleSpec needs for one form, in one bundle pass.
+
+    The form is picked by `_select_rule_form`; `form_uuid` names one copy
+    when several forms share `form_name`.
 
     Returns:
         {
@@ -691,16 +782,19 @@ def load_form_rule_context(bundle_path: str, form_name: str) -> dict | None:
           "available_programs": list[str],
         }
         or None if no form with `form_name` exists in the bundle.
+
+    Raises:
+        AmbiguousFormError: several forms share `form_name` and neither
+            `form_uuid` nor the form mappings single one out.
     """
     with _open_bundle(bundle_path) as workdir:
         forms = _load_forms(workdir)
-        target_form: dict | None = None
-        for form in forms.values():
-            if form.get("name") == form_name:
-                target_form = form
-                break
-        if target_form is None:
+        mappings = _load_form_mappings(workdir)
+        indexes = _load_mapping_indexes(workdir)
+        selected = _select_rule_form(forms, mappings, indexes, form_name, form_uuid)
+        if selected is None:
             return None
+        target_form = forms[selected]
 
         concepts = sorted({
             element.get("name")
@@ -709,35 +803,22 @@ def load_form_rule_context(bundle_path: str, form_name: str) -> dict | None:
             if element.get("name") and not element.get("voided")
         })
 
-        subject_names, subject_by_uuid = _load_entity_index(workdir, "subjectTypes.json")
-        program_names, program_by_uuid = _load_entity_index(workdir, "programs.json")
-        encounter_names, encounter_by_uuid = _load_entity_index(workdir, "encounterTypes.json")
-        mappings = _load_form_mappings(workdir)
+        subject_names = indexes["subjectType"][0]
+        program_names = indexes["program"][0]
+        encounter_names = indexes["encounterType"][0]
 
-        form_uuid = target_form.get("uuid")
-        mapping = next(
-            (m for m in mappings if m.get("formUUID") == form_uuid),
-            None,
-        )
+        mapping = next(iter(_active_mappings_for(target_form, mappings)), None)
 
         concept_answers = _collect_concept_answers_for(
             forms, mappings, mapping, target_form,
         )
+        mapped = _mapping_names(mapping, indexes) if mapping else {}
 
         return {
             "form_type": target_form.get("formType", ""),
-            "subject_type": _name_from_uuid(
-                mapping.get("subjectTypeUUID") if mapping else None,
-                subject_by_uuid,
-            ),
-            "program": _name_from_uuid(
-                mapping.get("programUUID") if mapping else None,
-                program_by_uuid,
-            ),
-            "encounter_type": _name_from_uuid(
-                mapping.get("encounterTypeUUID") if mapping else None,
-                encounter_by_uuid,
-            ),
+            "subject_type": mapped.get("subjectType"),
+            "program": mapped.get("program"),
+            "encounter_type": mapped.get("encounterType"),
             "available_concepts": concepts,
             "available_encounter_types": sorted(encounter_names),
             "available_programs": sorted(program_names),
@@ -831,6 +912,7 @@ def write_form_rule(
     *,
     page_name: str | None = None,
     field_name: str | None = None,
+    form_uuid: str | None = None,
 ) -> bool:
     """Write a generated rule body into the bundle and re-zip atomically.
 
@@ -841,16 +923,24 @@ def write_form_rule(
     ``form.formElementGroups[page_name].formElements[field_name].rule``;
     both ``page_name`` and ``field_name`` are required in that case.
 
+    The form is picked exactly as `load_form_rule_context` picks it, so a
+    rule lands on the copy it was generated for.
+
     Returns True when the target slot was located and rewritten; False
     when the form, page, or field could not be found.
+
+    Raises:
+        AmbiguousFormError: as for `load_form_rule_context`.
     """
     with _open_bundle(bundle_path) as workdir:
         forms = _load_forms(workdir)
-        target_fname: str | None = None
-        for fname, form in forms.items():
-            if form.get("name") == form_name:
-                target_fname = fname
-                break
+        target_fname = _select_rule_form(
+            forms,
+            _load_form_mappings(workdir),
+            _load_mapping_indexes(workdir),
+            form_name,
+            form_uuid,
+        )
         if target_fname is None:
             return False
         target_form = forms[target_fname]
@@ -940,3 +1030,35 @@ def _name_from_uuid(uuid: str | None, mapping: dict[str, str]) -> str | None:
     if not uuid:
         return None
     return mapping.get(uuid)
+
+
+# Form-mapping key → (entity file, form-mapping UUID field).
+_MAPPING_ENTITY_SOURCES: dict[str, tuple[str, str]] = {
+    "subjectType": ("subjectTypes.json", "subjectTypeUUID"),
+    "program": ("programs.json", "programUUID"),
+    "encounterType": ("encounterTypes.json", "encounterTypeUUID"),
+}
+
+
+def _load_mapping_indexes(
+    workdir: str,
+) -> dict[str, tuple[list[str], dict[str, str]]]:
+    """Load the (names, uuid→name) index for every entity a form mapping references."""
+    return {
+        key: _load_entity_index(workdir, file_name)
+        for key, (file_name, _) in _MAPPING_ENTITY_SOURCES.items()
+    }
+
+
+def _mapping_names(
+    mapping: dict,
+    indexes: dict[str, tuple[list[str], dict[str, str]]],
+) -> dict[str, str]:
+    """Resolve one form mapping to the names of its subject type, program and
+    encounter type. Keys whose UUID is absent or unknown are omitted."""
+    resolved: dict[str, str] = {}
+    for key, (_, uuid_field) in _MAPPING_ENTITY_SOURCES.items():
+        name = _name_from_uuid(mapping.get(uuid_field), indexes[key][1])
+        if name:
+            resolved[key] = name
+    return resolved

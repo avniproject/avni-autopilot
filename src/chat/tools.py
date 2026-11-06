@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 from config import settings
 from domain.bundle_editor import (
+    AmbiguousFormError,
     apply_field_edits,
     list_bundle_fields as _list_bundle_fields,
     load_form_rule_context,
@@ -260,6 +261,14 @@ def list_bundle_fields(
     summary of every form, section, and field. Coded fields include their
     `answers` list.
 
+    Each form has its `uuid` and `usedIn`: one entry per form mapping with
+    the `subjectType`, `program` and `encounterType` the form is used for
+    (keys absent when they do not apply). Each field has its form element
+    `uuid` and its `conceptUuid`. Use these to answer which subject type,
+    program or visit type a form belongs to, to match an ID the user pastes
+    to its field, and to fill in IDs yourself — never ask the user for an
+    ID or a mapping that is in this output.
+
     Use this BEFORE any tool that takes bundle names as arguments so your
     call uses real names from the bundle. The user often types informally —
     "supporting family", "marital", "baseline form" — but the bundle stores
@@ -332,6 +341,7 @@ def suggest_form_rule(
         "decisionRule",
     ],
     intent: str,
+    form_uuid: str | None = None,
     config: RunnableConfig = None,
 ) -> dict:
     """Generate a form-level rule JS from a natural-language intent.
@@ -359,10 +369,15 @@ def suggest_form_rule(
     When the user asks to send the request straight to this tool, skip
     `list_bundle_fields` and call it with their names. An unknown form
     returns an error, and a rule that reads a field not on the form is
-    rejected.
+    rejected. When several forms share the name, the one used in the app
+    (mapped to a subject type, program or visit type) is picked; if more
+    than one is used, an error lists each copy's `uuid` and `usedIn` —
+    ask the user which one is meant and call again with its `form_uuid`.
 
     Args:
         form_name: Exact name of the form (matches `form.name` in the bundle).
+        form_uuid: The form's `uuid` from `list_bundle_fields`, only when
+            several forms share `form_name`; otherwise leave it out.
         rule_kind: One of "visitScheduleRule", "validationRule",
             "editFormRule", "decisionRule".
         intent: Natural-language description of what the rule should DO, not
@@ -387,14 +402,17 @@ def suggest_form_rule(
         }
 
     try:
-        context = load_form_rule_context(bundle_path, form_name)
+        context = load_form_rule_context(bundle_path, form_name, form_uuid)
+    except AmbiguousFormError as exc:
+        return {"status": "error", "error": str(exc), "forms": exc.candidates}
     except FileNotFoundError as exc:
         return {"status": "error", "error": str(exc)}
     except Exception as exc:  # noqa: BLE001
         return {"status": "error", "error": f"unexpected: {exc}"}
 
     if context is None:
-        return {"status": "error", "error": f"form not found in bundle: {form_name!r}"}
+        missing = f"{form_name!r} with uuid {form_uuid!r}" if form_uuid else repr(form_name)
+        return {"status": "error", "error": f"form not found in bundle: {missing}"}
 
     spec = RuleSpec(
         rule_kind=kind,
@@ -441,6 +459,7 @@ def suggest_form_element_rule(
     page_name: str,
     field_name: str,
     intent: str,
+    form_uuid: str | None = None,
     config: RunnableConfig = None,
 ) -> dict:
     """Generate a field-level rule JS from a natural-language intent.
@@ -468,10 +487,15 @@ def suggest_form_element_rule(
     When the user asks to send the request straight to this tool, skip
     `list_bundle_fields` and call it with their names. An unknown form
     returns an error, and a rule that reads a field not on the form is
-    rejected.
+    rejected. When several forms share the name, the one used in the app
+    (mapped to a subject type, program or visit type) is picked; if more
+    than one is used, an error lists each copy's `uuid` and `usedIn` —
+    ask the user which one is meant and call again with its `form_uuid`.
 
     Args:
         form_name: Exact name of the form (matches `form.name` in the bundle).
+        form_uuid: The form's `uuid` from `list_bundle_fields`, only when
+            several forms share `form_name`; otherwise leave it out.
         page_name: Exact name of the page (matches `formElementGroups[i].name`).
         field_name: Exact name of the field (matches
             `formElementGroups[i].formElements[j].name`).
@@ -496,14 +520,17 @@ def suggest_form_element_rule(
         return {"status": "error", "error": "No bundle available for this session."}
 
     try:
-        context = load_form_rule_context(bundle_path, form_name)
+        context = load_form_rule_context(bundle_path, form_name, form_uuid)
+    except AmbiguousFormError as exc:
+        return {"status": "error", "error": str(exc), "forms": exc.candidates}
     except FileNotFoundError as exc:
         return {"status": "error", "error": str(exc)}
     except Exception as exc:  # noqa: BLE001
         return {"status": "error", "error": f"unexpected: {exc}"}
 
     if context is None:
-        return {"status": "error", "error": f"form not found in bundle: {form_name!r}"}
+        missing = f"{form_name!r} with uuid {form_uuid!r}" if form_uuid else repr(form_name)
+        return {"status": "error", "error": f"form not found in bundle: {missing}"}
 
     spec = RuleSpec(
         rule_kind=RuleKind.FORM_ELEMENT,

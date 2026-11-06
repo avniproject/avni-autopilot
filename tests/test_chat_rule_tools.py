@@ -46,7 +46,7 @@ _CONTEXT = {
 
 @pytest.fixture
 def rule_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    monkeypatch.setattr(tools, "load_form_rule_context", lambda _bundle, _form: _CONTEXT)
+    monkeypatch.setattr(tools, "load_form_rule_context", lambda _bundle, _form, _form_uuid=None: _CONTEXT)
     session = SimpleNamespace(bundle_path=tmp_path / "bundle.zip")
     return {"configurable": {"session": session}}
 

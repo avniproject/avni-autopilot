@@ -56,8 +56,26 @@
   {
     "name": "RuleCondition.and.when",
     "signature": ".and.when(...)",
-    "use_when": "Chain another clause with AND semantics.",
+    "use_when": "Chain another clause with AND semantics. `.and` joins the result of everything before it with everything after it in the chain, so do not mix `.and` and `.or` in one chain — see RuleCondition.and_or_grouping.",
     "example_snippet": ".when.ageInYears.greaterThanOrEqualTo(18).and.when.valueInRegistration(uuid).defined.matches()"
+  },
+  {
+    "name": "RuleCondition.or.when",
+    "signature": ".or.when(...)",
+    "use_when": "Chain another clause with OR semantics. `.or` joins the result of everything before it with everything after it in the chain, so do not mix `.and` and `.or` in one chain — see RuleCondition.and_or_grouping.",
+    "example_snippet": ".when.valueInEncounter('Urine Albumin').containsAnswerConceptName('Positive').or.when.valueInEncounter('Blood sugar').containsAnswerConceptName('Positive').matches()"
+  },
+  {
+    "name": "RuleCondition.not",
+    "signature": ".when.valueInEncounter(conceptName).not.containsAnswerConceptName(answer)",
+    "use_when": "Negate a condition, e.g. to hide a field when an answer is selected: \"hide when X is No\" is `statusBuilder.show().when.valueInEncounter('X').not.containsAnswerConceptName('No')`. Every answer check (containsAnswerConceptName, containsAnyAnswerConceptName, containsAnswerConceptNameOtherThan, and greaterThan / lessThan on a number) is false while the question is unanswered; a date comparison with a unit treats a blank date as today instead, and `.not` turns that into true, so this keeps the field visible until 'No' is chosen. `containsAnswerConceptName('Yes')` and `containsAnswerConceptNameOtherThan('No')` instead hide the field while the question is unanswered, so they are not the same as \"hide when No\". `.not` applies to the whole rest of the chain.",
+    "example_snippet": "statusBuilder.show().when.valueInEncounter('Was there a surgery done?').not.containsAnswerConceptName('No');"
+  },
+  {
+    "name": "RuleCondition.and_or_grouping",
+    "signature": "A.and.B.or.C.and.D  ===  A && (B || (C && D))",
+    "use_when": "Combine AND and OR conditions. A RuleCondition or StatusBuilder chain is evaluated from the right: each `.and` / `.or` (and `.not`) applies to the whole rest of the chain, so `A.and.B.or.C.and.D` means A && (B || (C && D)), not (A && B) || (C && D). For any grouping that mixes AND and OR, build one RuleCondition per condition or per same-join group, call `.matches()` on each, and combine the booleans with JavaScript && / || in exactly the intent's bracket structure, without repeating a condition in several groups.",
+    "example_snippet": "// 'Danger signs if any?' is 'Yes' AND ('Blood Pressure (Systolic)' > 140 OR ('Urine Albumin' is 'Positive' AND 'Blood sugar' is 'Positive'))\nconst dangerSigns = new imports.rulesConfig.RuleCondition({programEncounter}).when.valueInEncounter('Danger signs if any?').containsAnswerConceptName('Yes').matches();\nconst highSystolic = new imports.rulesConfig.RuleCondition({programEncounter}).when.valueInEncounter('Blood Pressure (Systolic)').greaterThan(140).matches();\nconst albuminAndSugar = new imports.rulesConfig.RuleCondition({programEncounter}).when.valueInEncounter('Urine Albumin').containsAnswerConceptName('Positive').and.when.valueInEncounter('Blood sugar').containsAnswerConceptName('Positive').matches();\nconst visibility = dangerSigns && (highSystolic || albuminAndSugar);"
   },
   {
     "name": "RuleCondition.matches",

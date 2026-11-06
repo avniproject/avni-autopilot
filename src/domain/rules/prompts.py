@@ -126,7 +126,20 @@ Hard constraints:
      the user's informal phrasing verbatim — look up the right answer
      string. Example: if the user says "supporting family" and the concept's
      answers include "can support my family", use "can support my family".
-  7. If the intent cannot be expressed within these constraints, return an
+  7. A RuleCondition or StatusBuilder chain is evaluated from the right:
+     each `.and` / `.or` / `.not` applies to the whole rest of the chain, so
+     `A.and.B.or.C.and.D` means A && (B || (C && D)). Never mix `.and` and
+     `.or` in one chain. When the intent groups conditions with both AND and
+     OR, build one condition per group, call `.matches()` on each, and
+     combine the booleans with && / || exactly as the intent groups them.
+  8. Express each condition exactly as the intent states it; never swap it
+     for one that only seems the same. Every coded-answer check is false while
+     the question is unanswered and `.not` turns that into true, so "hide
+     when X is No" is `show().when.valueInEncounter('X').not.containsAnswerConceptName('No')`
+     (visible until No is chosen), not `containsAnswerConceptName('Yes')`
+     or `containsAnswerConceptNameOtherThan('No')` (both hidden while X
+     is unanswered).
+  9. If the intent cannot be expressed within these constraints, return an
      empty `js` string and set `confidence` to "low".
 
 Self-report `confidence` ("high" / "medium" / "low"):
@@ -263,7 +276,12 @@ Hard constraints:
   6. When using `containsAnswerConceptName(...)` the string MUST match an exact
      entry under the relevant concept in CONCEPT_ANSWERS. Never use the user's
      informal phrasing — look up the right answer string.
-  7. If a field's intent is empty, a dash, or cannot be expressed within these
+  7. Express each condition exactly as the intent states it. Every coded-answer
+     check is false while the question is unanswered and `.not` turns that
+     into true, so "hide when X is No" is
+     `show().when.valueInEncounter('X').not.containsAnswerConceptName('No')`,
+     not `containsAnswerConceptName('Yes')` (hidden while X is unanswered).
+  8. If a field's intent is empty, a dash, or cannot be expressed within these
      constraints, return empty `js` and set `confidence` to "low".
 
 Self-report `confidence` per field ("high" / "medium" / "low"):
