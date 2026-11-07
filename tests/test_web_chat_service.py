@@ -118,12 +118,13 @@ async def test_ai_message_with_tool_calls_publishes_one_event_per_call(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_tool_result_done_with_zip_path_publishes_bundle_ready(tmp_path: Path) -> None:
+async def test_tool_result_done_with_bundle_updated_publishes_bundle_ready(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
+    session.bundle_path = Path("/tmp/srijan/Srijan.zip")
     result_payload = {
         "status": "done",
         "org": "srijan",
-        "zip_path": "/tmp/srijan/Srijan.zip",
+        "bundle_updated": True,
         "subject_types": 1,
         "programs": 2,
         "encounter_types": 9,

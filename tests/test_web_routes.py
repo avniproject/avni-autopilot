@@ -210,6 +210,42 @@ def test_upload_rejects_non_xlsx(client: TestClient) -> None:
     assert r.json()["detail"]["code"] == "E_BAD_FILE_TYPE"
 
 
+@pytest.mark.parametrize("file_name", ["old.xls", "~$Modelling.xlsx", "notes.csv"])
+def test_upload_rejects_unreadable_workbooks(client: TestClient, file_name: str) -> None:
+    r = client.post("/sessions", headers={"Authorization": "Bearer abc"})
+    sid = r.json()["session_id"]
+    files = [("files", (file_name, io.BytesIO(b"x"), "application/octet-stream"))]
+    r = client.post(f"/sessions/{sid}/upload", files=files)
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "E_BAD_FILE_TYPE"
+    assert "save an .xls file as .xlsx" in r.json()["detail"]["error"]
+
+
+def test_a_rejected_upload_writes_none_of_its_files(client: TestClient) -> None:
+    from config import settings
+
+    r = client.post("/sessions", headers={"Authorization": "Bearer abc"})
+    sid = r.json()["session_id"]
+    files = [
+        ("files", ("good.xlsx", io.BytesIO(b"PK\x03\x04"), "application/x")),
+        ("files", ("old.xls", io.BytesIO(b"x"), "application/x")),
+    ]
+    r = client.post(f"/sessions/{sid}/upload", files=files)
+    assert r.status_code == 400
+    assert "'old.xls'" in r.json()["detail"]["error"]
+    assert "good.xlsx" not in r.json()["detail"]["error"]
+    assert not list(Path(settings.input_root).rglob("good.xlsx"))
+
+
+def test_upload_accepts_upper_case_xlsx(client: TestClient) -> None:
+    r = client.post("/sessions", headers={"Authorization": "Bearer abc"})
+    sid = r.json()["session_id"]
+    files = [("files", ("MODELLING.XLSX", io.BytesIO(b"PK\x03\x04"), "application/x"))]
+    r = client.post(f"/sessions/{sid}/upload", files=files)
+    assert r.status_code == 200
+    assert Path(r.json()["paths"][0]).name == "MODELLING.XLSX"
+
+
 def test_upload_404_when_session_missing(client: TestClient) -> None:
     files = [("files", ("a.xlsx", io.BytesIO(b"x"), "application/x"))]
     r = client.post("/sessions/does-not-exist/upload", files=files)

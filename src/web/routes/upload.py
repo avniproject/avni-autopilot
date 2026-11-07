@@ -26,6 +26,7 @@ from fastapi import (
 )
 
 from config import settings
+from domain.spreadsheets import is_spreadsheet_name
 from web.sessions import ChatSession, SessionStore
 
 log = logging.getLogger(__name__)
@@ -41,7 +42,6 @@ IMPORT_TYPE = "metadataZip"
 # asynchronously — the response is just job-acceptance, so 30 s is enough.
 UPLOAD_TIMEOUT_SEC = 30.0
 
-ALLOWED_UPLOAD_SUFFIXES = {".xlsx", ".xls"}
 # 1 MiB per read — small enough to stay responsive on a slow disk, big
 # enough that 10 MB workbooks copy in ~10 reads.
 COPY_CHUNK_SIZE = 1024 * 1024
@@ -140,25 +140,32 @@ async def upload_scoping_files(
     from the user's authenticated org (NOT user-supplied), so the chat agent
     can call `generate_bundle(org=<slug>)` without asking the user for it.
 
-    Files with non-xlsx suffixes are rejected — the pipeline only reads
-    xlsx — so the user catches mistakes early.
+    Files with non-xlsx suffixes (including old-format .xls, which the
+    pipeline cannot read) and Office lock files are rejected before any file
+    is written, so a rejected upload leaves nothing behind.
     """
     session = _require_session(session_id, store)
+    file_names = [Path(upload.filename or "").name for upload in files]
+    rejected = [name for name in file_names if not is_spreadsheet_name(name)]
+    if rejected:
+        listed = ", ".join(f"'{name}'" for name in rejected)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"Nothing was uploaded: {listed} "
+                    f"{'is not an .xlsx workbook' if len(rejected) == 1 else 'are not .xlsx workbooks'}. "
+                    "Only .xlsx files can be read; save an .xls file as .xlsx and upload it again."
+                ),
+                "code": "E_BAD_FILE_TYPE",
+            },
+        )
     input_dir = Path(settings.input_root) / session.org_slug
     input_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[str] = []
-    for upload in files:
-        suffix = Path(upload.filename or "").suffix.lower()
-        if suffix not in ALLOWED_UPLOAD_SUFFIXES:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"unsupported file type: {upload.filename!r}",
-                    "code": "E_BAD_FILE_TYPE",
-                },
-            )
-        target = input_dir / Path(upload.filename).name
+    for upload, file_name in zip(files, file_names):
+        target = input_dir / file_name
         try:
             with target.open("wb") as out:
                 while chunk := await upload.read(COPY_CHUNK_SIZE):

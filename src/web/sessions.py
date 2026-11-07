@@ -20,13 +20,15 @@ import secrets
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import httpx
 
 from config import settings
-from web.events import EventBus, session_loading, session_ready
+from domain.bundle_editor import BundleOrigin, classify_bundle
+from web.events import EventBus, error_payload, session_loading, session_ready
 
 
 log = logging.getLogger(__name__)
@@ -81,6 +83,15 @@ REAPER_INTERVAL_SEC = 60.0
 # ── Session record ────────────────────────────────────────────────────────────
 
 
+class OrgSetupStatus(str, Enum):
+    """State of the org's current bundle download from avni-server."""
+
+    LOADING = "loading"
+    LOADED = "loaded"
+    FAILED = "failed"
+
+
+
 @dataclass
 class ChatSession:
     """One in-memory session.
@@ -106,11 +117,40 @@ class ChatSession:
     # Last bundle path published via `bundle.ready` — used by GET /bundle and
     # POST /upload-to-avni to know where the ZIP lives without re-deriving it.
     bundle_path: Optional[Path] = None
+    org_setup_status: OrgSetupStatus = OrgSetupStatus.LOADING
+    # User-facing reason the org's current bundle could not be loaded; set
+    # only when `org_setup_status` is FAILED.
+    org_setup_error: Optional[str] = None
+    # Origin of the forms in the bundle at `bundle_path`; refreshed whenever
+    # that bundle is replaced or edited.
+    bundle_origin: Optional[BundleOrigin] = None
+    # True once a tool in this chat has built or edited the bundle at
+    # `bundle_path` (its card with Download is then in the chat).
+    bundle_changed_in_chat: bool = False
 
     @property
     def org_slug(self) -> str:
         """Folder-safe slug derived from `org_name` (e.g. "Durga India" → "durga_india")."""
         return slugify_org_name(self.org_name)
+
+    @property
+    def org_setup_loading(self) -> bool:
+        """True while the org's current bundle is still downloading."""
+        return self.org_setup_status is OrgSetupStatus.LOADING and not self.bundle_changed_in_chat
+
+    @property
+    def build_needs_confirmation(self) -> bool:
+        """True when a fresh build may duplicate what the org already has.
+
+        That is when the org's setup could not be loaded (its contents are
+        unknown) or its forms were set up outside Autopilot, and no
+        Autopilot bundle has been built in this chat since.
+        """
+        if self.bundle_changed_in_chat:
+            return self.bundle_origin is BundleOrigin.OTHER
+        if self.org_setup_status is OrgSetupStatus.FAILED:
+            return True
+        return self.bundle_origin is BundleOrigin.OTHER
 
     def touch(self) -> None:
         """Bump `last_activity_at` to now. Called on every request that hits
@@ -121,12 +161,36 @@ class ChatSession:
 # ── Bundle download ──────────────────────────────────────────────────────────
 
 
+def org_setup_failure_reason(exc: Exception) -> str:
+    """User-facing reason for a failed `/implementation/export` download."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status == 403:
+            return (
+                "you do not have the 'Download bundle' privilege. Ask an "
+                "administrator of your organisation to grant it, then start "
+                "a fresh chat"
+            )
+        if status == 401:
+            return "your sign-in has expired. Sign in again, then start a fresh chat"
+        return f"the Avni server returned an error (HTTP {status})"
+    if isinstance(exc, httpx.TimeoutException):
+        return "the Avni server took too long to respond"
+    if isinstance(exc, httpx.HTTPError):
+        return "the Avni server could not be reached"
+    if isinstance(exc, FileNotFoundError):
+        return "the Avni server's reply was not a bundle"
+    return "of an unexpected error while saving it"
+
+
 async def download_org_bundle(session: ChatSession, auth_token: str) -> None:
     """Fetch the org's current bundle from avni-server into session workdir.
 
     Runs as a background task — does not block session creation. Emits
     `session.loading` at start and `session.ready` on completion so the webapp
-    can show / hide the "Checking the current setup" indicator.
+    can show / hide the "Checking the current setup" indicator. On failure,
+    the reason is kept on the session for the chat agent's context and
+    published to the user as a recoverable `error` event.
 
     The token is passed in from the session-creation request rather than held
     on the session record, so no credential outlives this call.
@@ -144,10 +208,26 @@ async def download_org_bundle(session: ChatSession, auth_token: str) -> None:
         resp.raise_for_status()
         dest = session.workdir / "bundle.zip"
         dest.write_bytes(resp.content)
+        session.bundle_origin = await asyncio.to_thread(classify_bundle, str(dest))
         session.bundle_path = dest
-        log.info(f"bundle downloaded session={session.session_id} size={len(resp.content)}")
+        session.org_setup_status = OrgSetupStatus.LOADED
+        log.info(
+            f"bundle downloaded session={session.session_id} size={len(resp.content)} "
+            f"origin={session.bundle_origin.value}"
+        )
     except Exception as exc:  # noqa: BLE001
+        reason = org_setup_failure_reason(exc)
+        session.org_setup_status = OrgSetupStatus.FAILED
+        session.org_setup_error = reason
         log.warning(f"bundle download failed session={session.session_id}: {exc}")
+        session.bus.publish(
+            "error",
+            error_payload(
+                "E_SETUP_NOT_LOADED",
+                f"Your organisation's current setup could not be loaded because {reason}.",
+                recoverable=True,
+            ),
+        )
     finally:
         session.bus.publish("session.ready", session_ready())
 

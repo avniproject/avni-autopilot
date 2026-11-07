@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Literal
 
 from langchain_core.runnables import RunnableConfig
@@ -22,7 +23,9 @@ log = logging.getLogger(__name__)
 from config import settings
 from domain.bundle_editor import (
     AmbiguousFormError,
+    BundleOrigin,
     apply_field_edits,
+    classify_bundle,
     list_bundle_fields as _list_bundle_fields,
     load_form_rule_context,
 )
@@ -30,6 +33,7 @@ from domain.docs.knowledge_base import DocsKnowledgeBase
 from domain.rules.generator import RuleGenerator
 from domain.rules.rule_spec import RuleKind, RuleSpec
 from domain.rules.validator import validate_and_decide as _validate_and_decide
+from domain.spreadsheets import find_spreadsheets
 from pipeline import initial_state
 from pipeline.graph import build_phase1_graph, build_phase2_graph
 
@@ -56,6 +60,95 @@ _saved_states: dict[str, dict] = {}
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
+_NO_SPREADSHEET_ERROR = (
+    "No spreadsheet has been uploaded. Ask the user to upload their "
+    "scoping / modelling .xlsx files first."
+)
+
+
+def _session_of(config: RunnableConfig | None):
+    """The webapp `ChatSession` for this tool call, or None in the REPL."""
+    return (config or {}).get("configurable", {}).get("session")
+
+
+_NO_BUNDLE_ERROR = (
+    "No bundle available — the organisation's current setup is not loaded "
+    "in this chat and none was built here."
+)
+
+
+def _resolve_bundle_path(bundle_path: str | None, config: RunnableConfig | None) -> str | None:
+    """The webapp session's bundle, or the explicit `bundle_path` in the REPL.
+
+    A webapp session only ever reads or edits its own bundle; a path the
+    agent passes there is ignored.
+    """
+    session = _session_of(config)
+    if session is not None:
+        return str(session.bundle_path) if session.bundle_path else None
+    return bundle_path or None
+
+
+_SETUP_LOADING_ERROR = (
+    "The organisation's current setup is still loading. Ask the user to try "
+    "again in a moment."
+)
+
+_SEPARATE_BUILD_NOT_CONFIRMED_ERROR = (
+    "Not built. The organisation's current setup could not be loaded, or its "
+    "forms were set up outside Autopilot, so a build makes a separate new set "
+    "of forms that uploading would add next to the existing ones (possible "
+    "duplicate forms and questions). Tell the user this in plain words; call "
+    "again with confirmed_separate_build=true only after they say to go ahead."
+)
+
+_UNUPDATABLE_BUNDLE_ERRORS = {
+    BundleOrigin.NO_FORMS: (
+        "The organisation's bundle has no forms yet, so there is nothing to "
+        "update. Build the app from the spreadsheets instead."
+    ),
+    BundleOrigin.OTHER: (
+        "The organisation's forms were set up outside Autopilot, so they "
+        "cannot be updated from spreadsheets. Field changes can still be made "
+        "by name; a build from the spreadsheets would make a separate new set "
+        "of forms."
+    ),
+}
+
+
+_UNREADABLE_BUNDLE_ERROR = (
+    "The bundle could not be read; it is not a bundle ZIP file or folder."
+)
+
+
+def _has_spreadsheets(input_dir: str) -> bool:
+    return bool(find_spreadsheets(input_dir))
+
+
+def _unreadable_bundle(exc: FileNotFoundError) -> dict:
+    """Error result for a bundle that cannot be opened; the path goes to the log only."""
+    log.warning(f"unreadable bundle: {exc}")
+    return {"status": "error", "error": _UNREADABLE_BUNDLE_ERROR}
+
+
+def _report_bundle(result: dict, config: RunnableConfig | None) -> dict:
+    """Keep server paths out of what the agent reads in a webapp session.
+
+    The session takes the changed bundle's path and the result carries only
+    `bundle_updated`; the chat service shows the bundle card from it. In the
+    REPL the result keeps `zip_path` for the person at the terminal.
+    """
+    session = _session_of(config)
+    if session is None:
+        return result
+    zip_path = result.pop("zip_path", "")
+    if zip_path:
+        session.bundle_path = Path(zip_path)
+        result["bundle_updated"] = True
+    return result
+
+
+
 def _summarize(state: dict) -> dict:
     """Build the success-summary dict the chat agent reports."""
     cancel_count = sum(
@@ -80,10 +173,46 @@ def _summarize(state: dict) -> dict:
         "parse_warnings": state.get("parse_warnings", []),
         "errors": state.get("errors", []),
     }
-    # edit_from_spec adds a diff summary
     if state.get("mode") == "edit_from_spec":
-        summary["edit_result"] = state.get("edit_result", {})
+        _shape_edit_from_spec_summary(summary, state)
     return summary
+
+
+# Counts of the bundle built from the spreadsheets; an update applies only
+# the diff, so these do not describe the updated bundle.
+_SPEC_COUNT_KEYS = (
+    "subject_types", "programs", "encounter_types", "main_forms",
+    "cancellation_forms", "concepts", "form_mappings",
+)
+
+
+def _shape_edit_from_spec_summary(summary: dict, state: dict) -> None:
+    """Report what an update applied, what it could not, and whether it changed anything.
+
+    `zip_path` is set only when the bundle changed, so the bundle card is
+    shown only then.
+    """
+    for key in _SPEC_COUNT_KEYS:
+        summary.pop(key, None)
+    summary["edit_result"] = state.get("edit_result", {})
+    unmatched = state.get("unmatched_forms") or []
+    summary["unmatched_forms"] = unmatched
+    errors = list(summary["errors"])
+    if unmatched:
+        errors.append(
+            "These spreadsheet forms are not in the current bundle, and an "
+            "update cannot add new forms, so they were left out: "
+            + ", ".join(unmatched) + "."
+        )
+    summary["errors"] = errors
+    if summary["zip_path"]:
+        return
+    if errors:
+        summary["status"] = "error"
+        summary["error"] = "Nothing in the bundle was changed. " + " ".join(errors)
+    else:
+        summary["no_changes"] = True
+        summary["message"] = "The bundle already matches the spreadsheets; nothing was changed."
 
 
 async def _run_phase1_then_pause_or_finish(initial: dict, thread_id: str) -> dict:
@@ -136,11 +265,16 @@ async def _run_phase2(phase1_state: dict, thread_id: str) -> dict:
 
 
 @tool
-async def generate_bundle(org: str, user_instructions: str | None = None) -> dict:
+async def generate_bundle(
+    org: str,
+    user_instructions: str | None = None,
+    confirmed_separate_build: bool = False,
+    config: RunnableConfig = None,
+) -> dict:
     """Start an Avni bundle generation for a specific org.
 
-    Reads all .xlsx files in resources/input/<org>/ and produces
-    resources/output/<org>/<Org>.zip. The deterministic parser runs first,
+    Reads the org's uploaded .xlsx files and builds a new bundle with new
+    UUIDs. The deterministic parser runs first,
     then Claude (Haiku) enriches each form's spec — fixing option splits,
     inferring missing data types, predicting min/max bounds, etc.
 
@@ -156,31 +290,43 @@ async def generate_bundle(org: str, user_instructions: str | None = None) -> dic
         user_instructions: Optional natural-language instruction passed to
             the LLM enrichment step (e.g. "also add a Sponsor field to
             Pregnancy Enrolment").
+        confirmed_separate_build: Set to true only after the user has heard
+            that this build is separate from the organisation's existing
+            forms and still wants it. Required when the organisation's setup
+            could not be loaded or its forms were set up outside Autopilot.
     """
     org = org.strip().lower()
     input_dir = os.path.join(settings.input_root, org)
     output_dir = os.path.join(settings.output_root, org)
-    if not os.path.isdir(input_dir):
-        return {
-            "status": "error",
-            "error": f"Input dir not found: {input_dir}",
-        }
+    if not _has_spreadsheets(input_dir):
+        return {"status": "error", "error": _NO_SPREADSHEET_ERROR}
+    session = _session_of(config)
+    if session is not None:
+        if session.org_setup_loading:
+            return {"status": "error", "error": _SETUP_LOADING_ERROR}
+        if session.build_needs_confirmation and not confirmed_separate_build:
+            return {"status": "error", "error": _SEPARATE_BUILD_NOT_CONFIRMED_ERROR}
 
     thread_id = f"bundle-{org}-{int(time.time())}"
     initial = initial_state(org, input_dir, output_dir, user_instructions)
-    return await _run_phase1_then_pause_or_finish(initial, thread_id)
+    return _report_bundle(await _run_phase1_then_pause_or_finish(initial, thread_id), config)
 
 
 @tool
-async def edit_bundle_from_spec(org: str, user_instructions: str | None = None) -> dict:
-    """Update an already-generated bundle from the current source .xlsx (the spec).
+async def edit_bundle_from_spec(
+    org: str,
+    user_instructions: str | None = None,
+    config: RunnableConfig = None,
+) -> dict:
+    """Update the org's existing bundle from the current source .xlsx (the spec).
 
-    Reads resources/input/<org>/*.xlsx, re-runs the deterministic parser and
+    Reads the org's uploaded .xlsx files, re-runs the deterministic parser and
     the LLM enrichment pass (may pause for user confirmation of long-name
     shortenings / duplicate-field disambiguations — same as generate_bundle),
-    then diffs the regenerated desired bundle against the existing
-    resources/output/<org>/<Org>.zip and applies the resulting field-level
-    edits (add / remove / reorder) atomically.
+    then diffs the regenerated desired bundle against the existing bundle and
+    applies the resulting field-level edits (add / remove / reorder)
+    atomically. In a webapp session the existing bundle is the org's current
+    setup loaded at the start of the chat, or the bundle built in this chat.
 
     Field UUIDs are preserved across the edit. Removed fields are voided so
     Avni soft-deletes the records on re-upload; surviving fields keep their
@@ -197,15 +343,30 @@ async def edit_bundle_from_spec(org: str, user_instructions: str | None = None) 
     """
     org = org.strip().lower()
     input_dir = os.path.join(settings.input_root, org)
-    bundle_path = os.path.join(settings.output_root, org, f"{org.capitalize()}.zip")
-    if not os.path.isdir(input_dir):
-        return {"status": "error", "error": f"Input dir not found: {input_dir}"}
-    if not os.path.exists(bundle_path):
+    session = _session_of(config)
+    if session is not None:
+        bundle_path = str(session.bundle_path) if session.bundle_path else ""
+    else:
+        bundle_path = os.path.join(settings.output_root, org, f"{org.capitalize()}.zip")
+    if not _has_spreadsheets(input_dir):
+        return {"status": "error", "error": _NO_SPREADSHEET_ERROR}
+    if session is not None and session.org_setup_loading:
+        return {"status": "error", "error": _SETUP_LOADING_ERROR}
+    if not bundle_path or not os.path.exists(bundle_path):
         return {
             "status": "error",
-            "error": (f"Bundle not found: {bundle_path}. "
-                      f"Use generate_bundle('{org}') first to create one."),
+            "error": (
+                "The organisation has no bundle to update — its current setup "
+                "is not loaded in this chat and none was built here. Do not "
+                "build a new one without telling the user why and asking."
+            ),
         }
+    try:
+        origin = classify_bundle(bundle_path)
+    except FileNotFoundError as exc:
+        return _unreadable_bundle(exc)
+    if origin is not BundleOrigin.AUTOPILOT:
+        return {"status": "error", "error": _UNUPDATABLE_BUNDLE_ERRORS[origin]}
 
     output_dir = os.path.join(settings.output_root, org)
     thread_id = f"bundle-{org}-{int(time.time())}"
@@ -213,11 +374,15 @@ async def edit_bundle_from_spec(org: str, user_instructions: str | None = None) 
         org, input_dir, output_dir, user_instructions,
         mode="edit_from_spec", bundle_path=bundle_path,
     )
-    return await _run_phase1_then_pause_or_finish(initial, thread_id)
+    return _report_bundle(await _run_phase1_then_pause_or_finish(initial, thread_id), config)
 
 
 @tool
-async def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
+async def resume_bundle(
+    thread_id: str,
+    resolutions: dict[str, str],
+    config: RunnableConfig = None,
+) -> dict:
     """Resume a paused bundle run after the user confirms pending changes.
 
     Args:
@@ -249,7 +414,7 @@ async def resume_bundle(thread_id: str, resolutions: dict[str, str]) -> dict:
             ),
         }
     saved["user_resolutions"] = resolutions or {}
-    return await _run_phase2(saved, thread_id)
+    return _report_bundle(await _run_phase2(saved, thread_id), config)
 
 
 @tool
@@ -275,25 +440,32 @@ def list_bundle_fields(
     exact phrasings. Match is EXACT downstream (case + punctuation), so
     ground your args against this tool's output first.
 
-    In a webapp session `bundle_path` may be omitted — the session's
-    downloaded org bundle is used automatically.
+    In a webapp session omit `bundle_path` — the session's bundle (the org's
+    current setup, or the bundle built in this chat) is always used.
 
     Args:
         bundle_path: Path to a bundle ZIP file or an unpacked bundle directory.
-            Optional in a webapp session; required in the REPL.
+            Ignored in a webapp session; required in the REPL.
     """
-    session = (config or {}).get("configurable", {}).get("session") if config else None
-    resolved = bundle_path or (str(session.bundle_path) if session and session.bundle_path else None)
+    resolved = _resolve_bundle_path(bundle_path, config)
     if not resolved:
-        return {"status": "error", "error": "No bundle available. Provide bundle_path or generate a bundle first."}
+        return {"status": "error", "error": _NO_BUNDLE_ERROR}
     try:
-        return {"status": "done", "result": _list_bundle_fields(resolved)}
+        fields = _list_bundle_fields(resolved)
+    except FileNotFoundError as exc:
+        return _unreadable_bundle(exc)
     except Exception as exc:  # noqa: BLE001
         return {"status": "error", "error": str(exc)}
+    fields.pop("bundle_path", None)
+    return {"status": "done", "result": fields}
 
 
 @tool
-def edit_bundle_fields(bundle_path: str, operations: list[dict]) -> dict:
+def edit_bundle_fields(
+    operations: list[dict],
+    bundle_path: str | None = None,
+    config: RunnableConfig = None,
+) -> dict:
     """Add, rename, or remove fields in an already-generated bundle ZIP.
 
     Each operation has shape:
@@ -318,17 +490,31 @@ def edit_bundle_fields(bundle_path: str, operations: list[dict]) -> dict:
     the corresponding record on re-upload. Re-adding the same field name later
     reinstates the original element (UUID preserved).
 
+    When at least one form or concept was changed, the chat shows the bundle
+    card with its Download button (the result carries `bundle_updated` in a
+    webapp session, or the edited bundle's `zip_path` in the REPL).
+
+    In a webapp session omit `bundle_path` — the session's bundle (the org's
+    current setup, or the bundle built in this chat) is always used.
+
     Args:
-        bundle_path: Bundle ZIP or unpacked directory.
         operations: List of edit operation dicts (see above).
+        bundle_path: Bundle ZIP or unpacked directory. Ignored in a webapp
+            session; required in the REPL.
     """
+    resolved = _resolve_bundle_path(bundle_path, config)
+    if not resolved:
+        return {"status": "error", "error": _NO_BUNDLE_ERROR}
     try:
-        result = apply_field_edits(bundle_path, operations)
-        return {"status": "done", "result": result.model_dump()}
+        result = apply_field_edits(resolved, operations)
     except FileNotFoundError as exc:
-        return {"status": "error", "error": str(exc)}
+        return _unreadable_bundle(exc)
     except Exception as exc:  # noqa: BLE001
         return {"status": "error", "error": f"unexpected: {exc}"}
+    response = {"status": "done", "result": result.model_dump(exclude={"bundle_path"})}
+    if result.forms_modified or result.concepts_appended:
+        response["zip_path"] = resolved
+    return _report_bundle(response, config)
 
 
 @tool
@@ -406,7 +592,7 @@ def suggest_form_rule(
     except AmbiguousFormError as exc:
         return {"status": "error", "error": str(exc), "forms": exc.candidates}
     except FileNotFoundError as exc:
-        return {"status": "error", "error": str(exc)}
+        return _unreadable_bundle(exc)
     except Exception as exc:  # noqa: BLE001
         return {"status": "error", "error": f"unexpected: {exc}"}
 
@@ -524,7 +710,7 @@ def suggest_form_element_rule(
     except AmbiguousFormError as exc:
         return {"status": "error", "error": str(exc), "forms": exc.candidates}
     except FileNotFoundError as exc:
-        return {"status": "error", "error": str(exc)}
+        return _unreadable_bundle(exc)
     except Exception as exc:  # noqa: BLE001
         return {"status": "error", "error": f"unexpected: {exc}"}
 

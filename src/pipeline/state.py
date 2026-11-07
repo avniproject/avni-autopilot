@@ -24,6 +24,7 @@ class BundleState(TypedDict):
     mode: Mode                              # "generate" (default) | "edit_from_spec"
     bundle_path: str                        # only used in edit_from_spec mode
     diff_ops: list[dict]                    # computed by diff_against_bundle
+    unmatched_forms: list[str]              # spec forms absent from the bundle (cannot be added)
     edit_result: dict                       # set by apply_diff_edits (an EditResult dump)
     # Form ↔ entity linking
     form_link_warnings: list[str]
@@ -71,6 +72,7 @@ def initial_state(
         "mode": mode,
         "bundle_path": bundle_path,
         "diff_ops": [],
+        "unmatched_forms": [],
         "edit_result": {},
         "user_instructions": user_instructions,
         "pending_changes": [],

@@ -18,11 +18,12 @@ import os
 import shutil
 import tempfile
 import zipfile
+from enum import Enum
 from typing import Any
 
 from pydantic import ValidationError
 
-from domain.generators import make_uuid
+from domain.generators import form_uuid, make_uuid
 from domain.rules.concept_answers import merge_answer_scopes
 from models import EditOperation, EditResult, RejectedOp
 
@@ -87,8 +88,9 @@ def apply_field_edits(bundle_path: str, operations: list[dict]) -> EditResult:
         if result.concepts_appended:
             _write_json(os.path.join(workdir, "concepts.json"), list(concepts.values()))
 
-        # Repackage if the original was a ZIP.
-        if zipfile.is_zipfile(bundle_path):
+        # Repackage only when something was written, so a no-op edit leaves the ZIP untouched.
+        changed = bool(result.forms_modified or result.concepts_appended)
+        if changed and zipfile.is_zipfile(bundle_path):
             _repackage_zip(workdir, bundle_path)
 
     return result
@@ -631,6 +633,38 @@ def load_bundle_snapshot(bundle_path: str) -> dict:
         ],
         "concepts": list(concepts_map.values()),
     }
+
+
+# ── Bundle origin ─────────────────────────────────────────────────────────────
+
+
+class BundleOrigin(str, Enum):
+    """Who built a bundle's forms — decides whether a spreadsheet update can work.
+
+    An update from spreadsheets matches forms by the UUID the generator
+    derives from each form's name, so only forms the generator built can be
+    updated that way.
+    """
+
+    NO_FORMS = "no_forms"
+    AUTOPILOT = "autopilot"
+    OTHER = "other"
+
+
+def classify_bundle(bundle_path: str) -> BundleOrigin:
+    """Classify a bundle by its live (non-voided) forms.
+
+    AUTOPILOT when at least one form carries the generator's UUID for its
+    name, OTHER when forms exist but none does, NO_FORMS when there are none.
+    Raises FileNotFoundError when the path is not a bundle ZIP or directory.
+    """
+    with _open_bundle(bundle_path) as workdir:
+        forms = [f for f in _load_forms(workdir).values() if not f.get("voided")]
+    if not forms:
+        return BundleOrigin.NO_FORMS
+    if any(f.get("uuid") == form_uuid(f.get("name", "")) for f in forms):
+        return BundleOrigin.AUTOPILOT
+    return BundleOrigin.OTHER
 
 
 # ── Helper for the agent: a compact summary of bundle fields ──────────────────

@@ -22,8 +22,8 @@ Event translation contract (SDD §4.2):
   ToolMessage(content=...)          → publishes `tool.result`; additionally:
     status == "needs_confirmation"  → publishes `hitl.pending`, stores the
                                       interrupt context for `resolve(...)`
-    status == "done" and zip_path   → publishes `bundle.ready`, captures
-                                      bundle_path on the session
+    status == "done" and            → publishes `bundle.ready` for the bundle
+      bundle_updated                  the tool handed to the session
 """
 
 from __future__ import annotations
@@ -37,6 +37,9 @@ from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from config import settings
+from domain.bundle_editor import BundleOrigin, classify_bundle
+from domain.spreadsheets import find_spreadsheets
 from domain.rules.unchecked_rule_code import mark_unchecked_rule_code, normalize_rule_code
 from web.events import (
     agent_message,
@@ -46,7 +49,7 @@ from web.events import (
     tool_call,
     tool_result,
 )
-from web.sessions import ChatSession
+from web.sessions import ChatSession, OrgSetupStatus
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +86,7 @@ def _parse_tool_result(content: Any) -> dict[str, Any] | None:
     """Parse a `ToolMessage.content` back into a dict, if possible.
 
     LangChain serialises tool returns to JSON strings on the message; the
-    structured-output detection (needs_confirmation, done + zip_path) needs
+    structured-output detection (needs_confirmation, done + bundle_updated) needs
     the dict back. Returns `None` when the content isn't a recognisable
     JSON object — non-fatal, the tool.result event still fires.
     """
@@ -108,26 +111,120 @@ def _summarize_tool_result(content: Any) -> str:
         return repr(content)[:TOOL_RESULT_SUMMARY_MAX]
 
 
+def _uploaded_spreadsheet_names(session: ChatSession) -> list[str]:
+    """Names of the .xlsx workbooks uploaded for this org."""
+    input_dir = Path(settings.input_root) / session.org_slug
+    return [Path(p).name for p in find_spreadsheets(str(input_dir))]
+
+
+def _spreadsheet_context(session: ChatSession) -> str:
+    names = _uploaded_spreadsheet_names(session)
+    if names:
+        return (
+            "Spreadsheets uploaded in this chat: "
+            + ", ".join(f"`{n}`" for n in names) + "."
+        )
+    return (
+        "No spreadsheet has been uploaded in this chat. Never say a "
+        "spreadsheet or file is uploaded or in place. To build or update "
+        "the app from spreadsheets, ask the user to upload their scoping / "
+        "modelling .xlsx files first, using the upload area at the top of "
+        "the chat."
+    )
+
+
+_SEPARATE_BUILD_WARNING = (
+    "A build from spreadsheets (generate_bundle) makes a separate, new set "
+    "of forms; uploading it adds them next to whatever the organisation "
+    "already has and can create duplicate forms and questions. Before "
+    "building, tell the user this in plain words and build only if they "
+    "still want it, passing confirmed_separate_build=true."
+)
+
+
+def _bundle_origin_context(origin: BundleOrigin) -> str:
+    if origin is BundleOrigin.AUTOPILOT:
+        return (
+            "Its forms were built by Autopilot, so a request to make, update "
+            "or rebuild the app updates them (edit_bundle_from_spec from "
+            "spreadsheets, edit_bundle_fields for named field changes). Use "
+            "generate_bundle only when the user explicitly asks to start "
+            "from scratch."
+        )
+    if origin is BundleOrigin.NO_FORMS:
+        return (
+            "It has no forms yet, so there is nothing to update: build the "
+            "app from spreadsheets with generate_bundle."
+        )
+    return (
+        "Its forms were set up outside Autopilot (for example in App "
+        "Designer), so Autopilot cannot update them from spreadsheets — "
+        "never offer or call edit_bundle_from_spec for it. Named field "
+        "changes (edit_bundle_fields), field lists and rule suggestions do "
+        f"work on it. {_SEPARATE_BUILD_WARNING}"
+    )
+
+
+def _bundle_context(session: ChatSession) -> str:
+    """What the chat may do with the session's bundle, and why."""
+    status = session.org_setup_status
+    lines: list[str] = []
+    if status is OrgSetupStatus.FAILED:
+        lines.append(
+            "The organisation's current setup could NOT be loaded because "
+            f"{session.org_setup_error}. The user has been shown this reason; "
+            "repeat it when it matters. Do not act as if the organisation has "
+            "no setup — it may well have one."
+        )
+    if session.bundle_changed_in_chat:
+        origin = session.bundle_origin
+        lines.append(
+            "A bundle was built or edited in this chat and is the one the "
+            "tools now use. Its card, with a Download button and an Upload "
+            "to org button where the organisation allows it, is shown in "
+            "the chat."
+            + (f" {_bundle_origin_context(origin)}" if origin is not None else "")
+        )
+        return "\n- ".join(lines)
+    if status is OrgSetupStatus.LOADING:
+        lines.append(
+            "The organisation's current setup is still being loaded. If the "
+            "user asks to build, update or inspect the app, say it is still "
+            "loading and ask them to try again in a moment."
+        )
+    elif status is OrgSetupStatus.FAILED:
+        lines.append(
+            "Field lists and edits of the current setup are unavailable, and "
+            f"there is no bundle to update. {_SEPARATE_BUILD_WARNING}"
+        )
+    else:
+        lines.append(
+            "The organisation's current setup is loaded. "
+            f"{_bundle_origin_context(session.bundle_origin)}"
+        )
+    lines.append("No bundle has been built or edited in this chat yet.")
+    return "\n- ".join(lines)
+
+
 def _build_org_context(session: ChatSession) -> str:
     """Session-specific block appended to the agent's system prompt.
 
-    Tells the agent which org the signed-in user belongs to so it can call
-    `generate_bundle(org=…)`, `edit_bundle_from_spec(org=…)`, etc. without
-    asking the user. The slug is derived from `/web/userInfo`'s
-    `organisationName` (NOT user-supplied), so the agent cannot be coerced
-    into cross-org access by anything the user types.
+    Rebuilt before every model call so it reflects the session's current
+    state: uploaded spreadsheets, whether the org's current bundle loaded
+    (and why not), and whether a bundle card is in the chat. The slug is
+    derived from `/web/userInfo`'s `organisationName` (NOT user-supplied),
+    so the agent cannot be coerced into cross-org access by anything the
+    user types.
     """
     return (
         f"The signed-in user is an admin for the **{session.org_name}** "
         f"organisation. Its folder slug is `{session.org_slug}`. "
         f"Whenever a tool takes an `org` argument (generate_bundle, "
-        f"edit_bundle_from_spec, resume_bundle's underlying flow), use "
-        f"`{session.org_slug}` — do NOT prompt the user for the org name; "
-        f"it is implicit from the session.\n\n"
-        f"Their uploaded scoping/modelling .xlsx files have already been "
-        f"placed under `resources/input/{session.org_slug}/`. The generated "
-        f"bundle ZIP will land at "
-        f"`resources/output/{session.org_slug}/{session.org_name.capitalize()}.zip`."
+        f"edit_bundle_from_spec), use `{session.org_slug}` — do NOT prompt "
+        f"the user for the org name; it is implicit from the session.\n\n"
+        f"Current state of this chat:\n"
+        f"- {_spreadsheet_context(session)}\n"
+        f"- {_bundle_context(session)}"
     )
 
 
@@ -139,7 +236,7 @@ class ChatService:
 
     Constructed once per `ChatSession`; lifetime matches the session's. Holds
     a reference to the session record so it can publish events to its bus
-    and update `bundle_path` when the agent finishes a generation.
+    and record the bundle state when a tool changes the bundle.
 
     `agent_factory` defaults to `chat.agent.build_agent` but is injectable so
     tests can substitute a stub that drives a canned event stream.
@@ -159,7 +256,7 @@ class ChatService:
             # the agent never asks the user for an org name (the org is
             # implicit from their authenticated session).
             agent_factory = lambda: build_agent(  # noqa: E731
-                extra_context=_build_org_context(session),
+                session_context=lambda: _build_org_context(session),
             )
         self._session = session
         self._agent = agent_factory()
@@ -360,7 +457,7 @@ class ChatService:
             self._checked_rule_code.add(normalize_rule_code(result["js"]))
         if status == "needs_confirmation":
             self._publish_hitl_pending(result)
-        elif status == "done" and result.get("zip_path"):
+        elif status == "done" and result.get("bundle_updated"):
             self._publish_bundle_ready(result)
 
     def _publish_hitl_pending(self, result: dict[str, Any]) -> None:
@@ -377,9 +474,14 @@ class ChatService:
         )
 
     def _publish_bundle_ready(self, result: dict[str, Any]) -> None:
-        """Convert a successful generate/edit tool return into `bundle.ready`."""
-        zip_path = result.get("zip_path", "")
-        self._session.bundle_path = Path(zip_path) if zip_path else None
+        """Convert a generate/edit tool return that changed the session's bundle into `bundle.ready`."""
+        zip_path = str(self._session.bundle_path)
+        try:
+            self._session.bundle_origin = classify_bundle(zip_path)
+        except FileNotFoundError as exc:
+            log.warning(f"bundle origin unknown sid={self._session.session_id}: {exc}")
+            self._session.bundle_origin = None
+        self._session.bundle_changed_in_chat = True
         # The summary the REPL prints today (subject_types, programs, etc.)
         # is already in `result` — pass it through unchanged for the browser.
         summary = {

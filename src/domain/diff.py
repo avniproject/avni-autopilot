@@ -64,6 +64,19 @@ def diff(desired_bundle: dict, current_bundle: dict) -> list[dict]:
     return ops
 
 
+def unmatched_desired_forms(desired_bundle: dict, current_bundle: dict) -> list[str]:
+    """Names of desired forms with no form of the same UUID in current_bundle.
+
+    `diff` cannot add whole forms, so these are left out of an update.
+    """
+    current_uuids = {f["content"].get("uuid") for f in current_bundle.get("forms", [])}
+    return sorted({
+        f["content"].get("name", "")
+        for f in desired_bundle.get("forms", [])
+        if f["content"].get("uuid") not in current_uuids
+    })
+
+
 # ── Per-form diff ─────────────────────────────────────────────────────────────
 
 

@@ -194,6 +194,11 @@ CANCELLATION_OPTIONS = [
 ]
 
 
+def form_uuid(form_name: str) -> str:
+    """Deterministic UUID the generator gives a form with this name."""
+    return make_uuid(f"form:{form_name}")
+
+
 def _build_form(
     name: str,
     form_type: str,
@@ -201,7 +206,7 @@ def _build_form(
     concepts_registry: dict,  # mutated in-place: lower(name) → concept dict
 ) -> dict:
     """Build a form JSON dict. Registers all concepts encountered into the registry."""
-    form_uuid = make_uuid(f"form:{name}")
+    built_form_uuid = form_uuid(name)
     form_element_groups: list[dict] = []
 
     for g_idx, section in enumerate(sections, start=1):
@@ -287,7 +292,7 @@ def _build_form(
 
     return {
         "name": name,
-        "uuid": form_uuid,
+        "uuid": built_form_uuid,
         "formType": form_type,
         # Populated later by the generate_rules pipeline node if the form
         # carries a rule intent; otherwise stays the empty default that

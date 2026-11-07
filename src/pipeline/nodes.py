@@ -8,7 +8,6 @@ shape and any LangGraph mechanics (`interrupt()` for human-in-the-loop).
 
 from __future__ import annotations
 
-import glob
 import json
 import logging
 import os
@@ -18,7 +17,8 @@ from typing import Any
 
 from domain.bundle_editor import apply_field_edits, load_bundle_snapshot
 from domain.changes import apply_resolutions
-from domain.diff import diff
+from domain.diff import diff, unmatched_desired_forms
+from domain.spreadsheets import find_spreadsheets
 from domain.enricher import enrich_forms
 from domain.form_links import (
     apply_form_link_results,
@@ -80,7 +80,7 @@ def discover_files(state: BundleState) -> dict:
         errors.append(f"Input directory not found: {input_dir}")
         return {"file_paths": [], "errors": errors}
 
-    file_paths = sorted(glob.glob(os.path.join(input_dir, "*.xlsx")))
+    file_paths = find_spreadsheets(input_dir)
     if not file_paths:
         errors.append(f"No .xlsx files found in: {input_dir}")
 
@@ -468,13 +468,14 @@ def diff_against_bundle(state: BundleState) -> dict:
     current_bundle = load_bundle_snapshot(bundle_path)
 
     ops = diff(desired_bundle, current_bundle)
+    unmatched_forms = unmatched_desired_forms(desired_bundle, current_bundle)
 
     log.info(
         "[%s] diff vs %s: %d op(s) (%s)",
         state["org_name"], os.path.basename(bundle_path), len(ops),
         ", ".join(f"{kind}={n}" for kind, n in _count_by_kind(ops).items()) or "none",
     )
-    return {"diff_ops": ops, "errors": errors}
+    return {"diff_ops": ops, "unmatched_forms": unmatched_forms, "errors": errors}
 
 
 def apply_diff_edits(state: BundleState) -> dict:
@@ -490,8 +491,7 @@ def apply_diff_edits(state: BundleState) -> dict:
     if not ops:
         log.info("[%s] edit_from_spec: no ops to apply (bundle already in sync)",
                  state["org_name"])
-        return {"edit_result": {"bundle_path": bundle_path, "applied": [],
-                                "rejected": [], "warnings": [],
+        return {"edit_result": {"applied": [], "rejected": [], "warnings": [],
                                 "forms_modified": []}}
 
     result = apply_field_edits(bundle_path, ops)
@@ -506,8 +506,9 @@ def apply_diff_edits(state: BundleState) -> dict:
         state["org_name"], result.form_elements_added, result.form_elements_voided,
         result.form_elements_renamed, result.form_elements_reinstated,
     )
-    return {"edit_result": result.model_dump(), "errors": errors,
-            "zip_path": bundle_path}
+    changed = bool(result.forms_modified or result.concepts_appended)
+    return {"edit_result": result.model_dump(exclude={"bundle_path"}), "errors": errors,
+            "zip_path": bundle_path if changed else ""}
 
 
 def _count_by_kind(ops: list[dict]) -> dict[str, int]:
