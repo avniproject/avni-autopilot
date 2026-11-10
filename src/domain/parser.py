@@ -63,12 +63,19 @@ _DATA_TYPE_MAP: dict[str, str] = {
     "float": "Numeric",
     "date": "Date",
     "datetime": "DateTime",
+    "date time": "DateTime",
+    "date-time": "DateTime",
+    "date and time": "DateTime",
+    "time": "Time",
     "pre added options": "Coded",
     "coded": "Coded",
     "single select": "Coded",
     "single-select": "Coded",
     "multi select": "Coded",
     "multi-select": "Coded",
+    "multiselect": "Coded",
+    "multiple select": "Coded",
+    "singleselect": "Coded",
     "dropdown": "Coded",
     "radio": "Coded",
     "checkbox": "Coded",
@@ -267,6 +274,16 @@ def _resolve_subject_type(raw: str, known: set[str]) -> str:
         if match:
             return match
     return _clean_subject_name(raw)
+
+
+def _selection_type(text: str) -> str | None:
+    """'MultiSelect' / 'SingleSelect' when the text names one, else None."""
+    lower = text.lower()
+    if "multi" in lower:
+        return "MultiSelect"
+    if "single" in lower:
+        return "SingleSelect"
+    return None
 
 
 def _map_data_type(raw: str) -> str:
@@ -1074,6 +1091,7 @@ def parse_form_df(
 
     current_section = "General Information"
     fields: list[FieldSpec] = []
+    unrecognised_data_types: dict[str, str] = {}
 
     for row_idx in range(data_start, df.shape[0]):
         row = df.iloc[row_idx]
@@ -1128,6 +1146,15 @@ def parse_form_df(
                     avni_dtype = _DATA_TYPE_MAP[candidate_type]
                     break
 
+        if (
+            dtype_idx is not None
+            and raw_dtype
+            and raw_dtype not in _DATA_TYPE_MAP
+            and avni_dtype == "Text"
+            and not _dtype_displaced_options
+        ):
+            unrecognised_data_types[field_name] = _clean(row.iloc[dtype_idx])
+
         mandatory = _parse_yes_no(row.iloc[mand_idx]) if mand_idx is not None else False
 
         options = None
@@ -1163,17 +1190,13 @@ def parse_form_df(
 
         selection_type = None
         if selection_idx is not None:
-            sel_raw = _clean(row.iloc[selection_idx]).lower()
-            if "multi" in sel_raw:
-                selection_type = "MultiSelect"
-            elif "single" in sel_raw:
-                selection_type = "SingleSelect"
-        # Infer selection type from displaced keyword when no explicit selection column
+            selection_type = _selection_type(_clean(row.iloc[selection_idx]))
+        # Without a selection cell, a type keyword such as "Multi Select" in
+        # the data-type cell (or displaced into the options cell) decides it.
+        if selection_type is None and avni_dtype == "Coded" and raw_dtype in _DATA_TYPE_MAP:
+            selection_type = _selection_type(raw_dtype)
         if selection_type is None and _displaced_type_keyword:
-            if "multi" in _displaced_type_keyword:
-                selection_type = "MultiSelect"
-            elif "single" in _displaced_type_keyword:
-                selection_type = "SingleSelect"
+            selection_type = _selection_type(_displaced_type_keyword)
 
         min_val, max_val = None, None
         if min_max_idx is not None:
@@ -1254,6 +1277,7 @@ def parse_form_df(
         program=program,
         encounterType=encounter_type,
         sections=sections,
+        unrecognised_data_types=unrecognised_data_types,
     )
 
 
@@ -1320,6 +1344,37 @@ def _struck_cell_coords_per_sheet(path: Path) -> dict[str, set[tuple[int, int]]]
     return out
 
 
+class UnreadableSpreadsheetsError(ValueError):
+    """One or more uploaded files are not readable Excel workbooks."""
+
+    def __init__(self, file_names: list[str]) -> None:
+        self.file_names = file_names
+        super().__init__(
+            "These files could not be read as Excel workbooks: "
+            + ", ".join(file_names)
+            + ". They may be damaged or saved in another format; open each in "
+            "Excel or Google Sheets, save it as .xlsx and upload it again."
+        )
+
+
+def _load_all_files(paths: list[Path]) -> dict[Path, list[tuple[str, pd.DataFrame]]]:
+    """Sheets of every file; raises UnreadableSpreadsheetsError naming each unreadable one."""
+    loaded: dict[Path, list[tuple[str, pd.DataFrame]]] = {}
+    unreadable: list[str] = []
+    for path in paths:
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        logger.info("Loading file: %s", path)
+        try:
+            loaded[path] = _load_file(path)
+        except Exception as exc:  # noqa: BLE001 — any reader failure means the file is unusable
+            logger.warning(f"Unreadable spreadsheet {path}: {type(exc).__name__}: {exc}")
+            unreadable.append(path.name)
+    if unreadable:
+        raise UnreadableSpreadsheetsError(unreadable)
+    return loaded
+
+
 def _load_file(path: Path) -> list[tuple[str, pd.DataFrame]]:
     """Load any supported file format."""
     if path.suffix.lower() in (".xlsx", ".xls"):
@@ -1369,13 +1424,8 @@ def parse_scoping_docs(
     }
 
     # Phase 1: Load all files and classify each sheet
-    for file_path in file_paths:
-        path = Path(file_path)
-        if not path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-
-        logger.info("Loading file: %s", path)
-        sheets = _load_file(path)
+    loaded_files = _load_all_files([Path(p) for p in file_paths])
+    for path, sheets in loaded_files.items():
 
         for sheet_name, df in sheets:
             if df.empty or df.shape[1] < 2:
@@ -1621,5 +1671,16 @@ def parse_scoping_docs(
         forms=all_forms,
     )
     spec.unmatched_rule_intents = unmatched_rule_intents
+    spec.validation_warnings.extend(_unrecognised_data_type_warnings(all_forms))
     return spec, misc_sheets
+
+
+def _unrecognised_data_type_warnings(forms: list[FormSpec]) -> list[str]:
+    """One warning per field whose Data Type cell was not recognised."""
+    return [
+        f"Form {form.name!r}, field {field_name!r}: Data Type {raw!r} is not one "
+        f"the builder reads, so the field was read as Text."
+        for form in forms
+        for field_name, raw in form.unrecognised_data_types.items()
+    ]
 

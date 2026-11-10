@@ -126,14 +126,14 @@ class RuleGenerator:
         raise. The caller can treat any empty-`js` result uniformly.
         """
         if not self.is_available():
-            return _empty(spec, "ANTHROPIC_API_KEY not set; rule generation skipped")
+            return _empty(spec, _AI_UNAVAILABLE)
 
         if context is None:
             try:
                 ctx = self._kb.retrieve(spec)
             except Exception as exc:  # noqa: BLE001
                 log.warning(f"KB retrieve failed for form {spec.form_name!r}: {exc}")
-                return _empty(spec, f"KB retrieval failed: {exc}")
+                return _empty(spec, _EXAMPLES_UNAVAILABLE)
         else:
             ctx = context
 
@@ -157,7 +157,7 @@ class RuleGenerator:
             )
         except Exception as exc:  # noqa: BLE001
             log.warning(f"Claude rule generation failed for form {spec.form_name!r}: {exc}")
-            return _empty(spec, f"Claude call failed: {exc}")
+            return _empty(spec, _AI_FAILED)
 
         warnings: list[str] = []
         if output.notes:
@@ -187,7 +187,7 @@ class RuleGenerator:
             return []
         if not self.is_available():
             return [
-                _empty(spec, "ANTHROPIC_API_KEY not set; rule generation skipped")
+                _empty(spec, _AI_UNAVAILABLE)
                 for _, _, spec, _ in entries
             ]
 
@@ -234,7 +234,7 @@ class RuleGenerator:
                 f"Field batch failed for form {shared_spec.form_name!r}: {exc}"
             )
             return [
-                _empty(spec, f"field batch call failed: {exc}")
+                _empty(spec, _AI_FAILED)
                 for _, _, spec, _ in entries
             ]
 
@@ -258,6 +258,13 @@ class RuleGenerator:
                 warnings=warnings,
             ))
         return results
+
+
+# Reasons a rule was left unwritten, worded for the person reading the build
+# result; the underlying error is logged where it is caught.
+_AI_UNAVAILABLE = "The AI service is not available, so this rule was not written."
+_AI_FAILED = "The AI service did not answer, so this rule was not written."
+_EXAMPLES_UNAVAILABLE = "Rule examples could not be loaded, so this rule was not written."
 
 
 def _empty(spec: RuleSpec, reason: str) -> RuleResult:

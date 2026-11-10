@@ -62,6 +62,10 @@ def validate_and_decide(
     Returns:
         (ok, warnings). When False, the caller must skip the write.
     """
+    if not result.js and result.warnings:
+        # The generator already said why no rule was written; "empty JS"
+        # would only repeat it in technical terms.
+        return False, list(result.warnings)
     check_ok, validator_warnings = check(result, spec)
     warnings = [*result.warnings, *validator_warnings]
     return (check_ok and bool(result.js)), warnings

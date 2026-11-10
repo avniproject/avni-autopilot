@@ -66,6 +66,9 @@ class FormSpec(BaseModel):
     # Natural-language rule intents keyed by RuleKind value (e.g. "visitScheduleRule").
     # Populated from the modelling-doc Scheduling Rule column or via the chat tool.
     rule_intents: dict[str, str] = Field(default_factory=dict)
+    # Data Type cells the parser did not recognise, keyed by field name; those
+    # fields were read as Text.
+    unrecognised_data_types: dict[str, str] = Field(default_factory=dict, exclude=True)
 
 
 # ── Entity-level ───────────────────────────────────────────────────────────────
@@ -317,6 +320,7 @@ EditOpKind = Literal[
     "field.add",
     "field.rename",
     "field.remove",
+    "field.set_selection_type",
     "section.reorder_fields",
 ]
 
@@ -353,4 +357,5 @@ class EditResult(BaseModel):
     form_elements_reinstated: int = 0
     form_elements_voided: int = 0
     form_elements_renamed: int = 0
+    form_elements_retyped: int = 0
     concepts_appended: int = 0

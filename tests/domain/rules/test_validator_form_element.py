@@ -142,6 +142,20 @@ def test_empty_js_is_rejected_before_shape_check() -> None:
     assert warnings == ["empty JS"]
 
 
+def test_an_unwritten_rule_reports_only_the_generator_reason() -> None:
+    from domain.rules.validator import validate_and_decide
+
+    reason = "The AI service did not answer, so this rule was not written."
+    unwritten = RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js="", confidence="low", warnings=[reason])
+    assert validate_and_decide(unwritten, _spec()) == (False, [reason])
+
+
+def test_an_empty_rule_without_a_reason_still_says_empty_js() -> None:
+    from domain.rules.validator import validate_and_decide
+
+    assert validate_and_decide(_result(""), _spec()) == (False, ["empty JS"])
+
+
 def test_off_bundle_concept_is_a_hard_reject_even_with_good_shape() -> None:
     """The constructor return is well-formed but the rule reads an
     observation by a concept that isn't on the bundle's allowlist →

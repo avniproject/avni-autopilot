@@ -199,6 +199,11 @@ def form_uuid(form_name: str) -> str:
     return make_uuid(f"form:{form_name}")
 
 
+def form_element_type(selection_type: str | None) -> str:
+    """The form element `type` Avni reads to tell multi-select from single-select."""
+    return "MultiSelect" if selection_type == "MultiSelect" else "SingleSelect"
+
+
 def _build_form(
     name: str,
     form_type: str,
@@ -254,7 +259,7 @@ def _build_form(
                     "answers": answers,
                 }
 
-            # keyValues: unit, min, max, multiSelect
+            # keyValues: unit, min, max
             key_values: list[dict] = []
             if field.unit:
                 key_values.append({"key": "unit", "value": field.unit})
@@ -262,14 +267,13 @@ def _build_form(
                 key_values.append({"key": "min", "value": field.min})
             if field.max is not None:
                 key_values.append({"key": "max", "value": field.max})
-            if field.selectionType == "MultiSelect":
-                key_values.append({"key": "multiSelect", "value": True})
 
             form_elements.append({
                 "uuid": make_uuid(f"formElement:{name}:{concept_name}"),
                 "name": concept_name,
                 "displayOrder": e_idx,
                 "mandatory": field.mandatory,
+                "type": form_element_type(field.selectionType),
                 "keyValues": key_values,
                 "validationDeclarativeRule": "",
                 "rule": "",
@@ -461,6 +465,29 @@ _CANCELLATION_FORM_TYPES = {
     "ProgramEncounterCancellation",
     "IndividualEncounterCancellation",
 }
+
+
+def unlinked_form_names(forms: list[dict], form_mappings: list[dict]) -> list[str]:
+    """Forms with no mapping, or whose mapping lacks a subject type, program
+    or visit type its form type needs.
+
+    Such a form is in the bundle but no screen in Avni opens it.
+    """
+    linked_form_uuids: set[str] = set()
+    for mapping in form_mappings:
+        form_type = mapping.get("formType", "")
+        linked = bool(mapping.get("subjectTypeUUID"))
+        if form_type in _PROGRAM_FORM_TYPES:
+            linked = linked and bool(mapping.get("programUUID"))
+        if form_type in _ENCOUNTER_FORM_TYPES:
+            linked = linked and bool(mapping.get("encounterTypeUUID"))
+        if linked:
+            linked_form_uuids.add(mapping.get("formUUID", ""))
+    return [
+        form["content"].get("name", "")
+        for form in forms
+        if form["content"].get("uuid") not in linked_form_uuids
+    ]
 
 
 def make_form_mappings(

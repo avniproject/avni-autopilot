@@ -13,7 +13,9 @@ Bridges the pipeline node and the single-call `RuleGenerator`:
   bundle's form JSON, sequentially and in collection order, so warnings
   and writes stay deterministic.
 
-Warnings are namespaced `rules.<kind>.<form>[.<section>.<field>]: <reason>`.
+Warnings start with a plain label naming the rule, e.g. "Validation rule for
+form 'ANC': <reason>" or "Field rule for 'Weight' (page 'Vitals') in form
+'ANC': <reason>", because they reach the person reading the build result.
 """
 
 from __future__ import annotations
@@ -31,6 +33,14 @@ from domain.rules.validator import validate_and_decide
 log = logging.getLogger(__name__)
 
 
+_RULE_KIND_LABELS: dict[str, str] = {
+    RuleKind.VISIT_SCHEDULE.value: "Visit schedule rule",
+    RuleKind.VALIDATION.value: "Validation rule",
+    RuleKind.EDIT_FORM.value: "Edit form rule",
+    RuleKind.DECISION.value: "Decision rule",
+}
+
+
 @dataclass(frozen=True)
 class PendingFormRule:
     """One form-level rule intent awaiting generation."""
@@ -40,8 +50,9 @@ class PendingFormRule:
     rule_spec: RuleSpec
 
     @property
-    def namespace(self) -> str:
-        return f"rules.{self.kind_value}.{self.form_spec.name}"
+    def label(self) -> str:
+        kind = _RULE_KIND_LABELS.get(self.kind_value, "Rule")
+        return f"{kind} for form {self.form_spec.name!r}"
 
 
 @dataclass(frozen=True)
@@ -54,10 +65,10 @@ class PendingFieldRule:
     rule_spec: RuleSpec
 
     @property
-    def namespace(self) -> str:
+    def label(self) -> str:
         return (
-            f"rules.{RuleKind.FORM_ELEMENT.value}."
-            f"{self.form_spec.name}.{self.section_name}.{self.field_name}"
+            f"Field rule for {self.field_name!r} (page {self.section_name!r}) "
+            f"in form {self.form_spec.name!r}"
         )
 
 
@@ -93,8 +104,8 @@ def collect_pending_rules(
                 kind = RuleKind(kind_value)
             except ValueError:
                 warnings.append(
-                    f"rules.{kind_value}.{form_spec.name}: "
-                    f"unknown rule kind, skipped"
+                    f"Form {form_spec.name!r}: {kind_value!r} is not a rule the "
+                    f"builder writes, so it was skipped."
                 )
                 continue
             rule_spec = _build_rule_spec(
@@ -133,7 +144,7 @@ def generate_all(
     critical for free-tier users (3 RPM) so N rules don't burn N
     rate-limit slots. Form-level rules are one call each (each kind has
     its own system prompt); field-level rules are one batched call per
-    form. A worker failure yields a `None` result and a namespaced
+    form. A worker failure yields a `None` result and a labelled
     warning for the affected entries only.
     """
     outcome = GenerationOutcome(
@@ -149,7 +160,9 @@ def generate_all(
         contexts = generator.kb.retrieve_batch(all_specs)
     except Exception as exc:  # noqa: BLE001
         log.warning(f"KB batch retrieve failed: {exc}")
-        outcome.warnings.append(f"rules: batch retrieval failed ({exc})")
+        outcome.warnings.append(
+            "Shared rule examples could not be loaded; each rule loaded its own."
+        )
         contexts = [None] * len(all_specs)
 
     form_contexts = contexts[: len(pending_form)]
@@ -185,7 +198,7 @@ def generate_all(
                     f"{pending.form_spec.name!r} kind {pending.kind_value!r}: {exc}"
                 )
                 outcome.warnings.append(
-                    f"{pending.namespace}: generation worker failed: {exc}"
+                    f"{pending.label}: the rule could not be generated."
                 )
         for future, indices in field_futures.items():
             try:
@@ -196,7 +209,7 @@ def generate_all(
                     f"Field batch worker failed for form {form_name!r}: {exc}"
                 )
                 outcome.warnings.extend(
-                    f"{pending_field[i].namespace}: generation worker failed: {exc}"
+                    f"{pending_field[i].label}: the rule could not be generated."
                     for i in indices
                 )
                 continue
@@ -233,14 +246,14 @@ def apply_results(
             "Rule path=single form=%s kind=%s written=%s",
             pending.form_spec.name, pending.kind_value, ok,
         )
-        warnings.extend(f"{pending.namespace}: {w}" for w in raw_warnings)
+        warnings.extend(f"{pending.label}: {w}" for w in raw_warnings)
         if not ok:
             continue
 
         target = forms_by_name.get(pending.form_spec.name)
         if target is None:
             warnings.append(
-                f"{pending.namespace}: form JSON not found in state; cannot write"
+                f"{pending.label}: the form is not in the built app, so the rule was not written."
             )
             continue
         target["content"][pending.kind_value] = result.js
@@ -254,14 +267,14 @@ def apply_results(
             "Rule path=field_batch form=%s field=%s written=%s",
             pending.form_spec.name, pending.field_name, ok,
         )
-        warnings.extend(f"{pending.namespace}: {w}" for w in raw_warnings)
+        warnings.extend(f"{pending.label}: {w}" for w in raw_warnings)
         if not ok:
             continue
 
         target = forms_by_name.get(pending.form_spec.name)
         if target is None:
             warnings.append(
-                f"{pending.namespace}: form JSON not found in state; cannot write"
+                f"{pending.label}: the form is not in the built app, so the rule was not written."
             )
             continue
         form_element = _find_form_element_in_json(
@@ -269,9 +282,9 @@ def apply_results(
         )
         if form_element is None:
             warnings.append(
-                f"{pending.namespace}: matching form element not found in form "
-                f"JSON; the field may have been deduped or renamed by the "
-                f"generator"
+                f"{pending.label}: the field is not in the built form (it may "
+                f"have been merged with a field of the same name or renamed), so "
+                f"the rule was not written."
             )
             continue
         form_element["rule"] = result.js

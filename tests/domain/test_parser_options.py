@@ -51,3 +51,35 @@ class TestParseOptions:
     def test_empty_cell(self):
         assert _parse_options(None) == []
         assert _parse_options("") == []
+
+
+# ── Selection type from the data-type cell ───────────────────────────────────
+
+
+def _parse_selection(rows: list[list[str]]) -> dict[str, str | None]:
+    import pandas as pd
+
+    from domain.parser import parse_form_df
+
+    form = parse_form_df(pd.DataFrame(rows), "Form", None)
+    return {f.name: f.selectionType for s in form.sections for f in s.fields}
+
+
+def test_multi_select_data_type_makes_a_multi_select_field() -> None:
+    selection = _parse_selection([
+        ["Field Name", "Data Type", "Options"],
+        ["Danger signs", "Multi Select", "Bleeding\nFever"],
+        ["Blood group", "Single Select", "A\nB"],
+        ["Remarks", "Text", ""],
+    ])
+    assert selection == {"Danger signs": "MultiSelect", "Blood group": "SingleSelect", "Remarks": None}
+
+
+def test_a_filled_selection_type_cell_overrides_the_data_type() -> None:
+    selection = _parse_selection([
+        ["Field Name", "Data Type", "Options", "Selection Type"],
+        ["Smoker", "Multi Select", "Yes\nNo", "Single"],
+        ["Conditions", "Coded", "Anaemia\nDiabetes", "Multi"],
+        ["Danger signs", "Multi-select", "Bleeding\nFever", ""],
+    ])
+    assert selection == {"Smoker": "SingleSelect", "Conditions": "MultiSelect", "Danger signs": "MultiSelect"}

@@ -47,6 +47,17 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
+def _env_float(key: str, default: float | None) -> float | None:
+    """A float from the environment; a value that is not a number is refused."""
+    raw = os.environ.get(key)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise ValueError(f"{key} must be a number, got {raw!r}") from None
+
+
 @dataclass(frozen=True)
 class Settings:
     project_root: str = _PROJECT_ROOT
@@ -57,6 +68,10 @@ class Settings:
     anthropic_api_key: str = _env("ANTHROPIC_API_KEY", "")
     model: str = _env("CHAT_MODEL", "claude-sonnet-4-6")
     max_tokens: int = _env_int("CHAT_MAX_TOKENS", 8192)
+
+    # Docs search: entries scoring below this cosine similarity are not
+    # offered as answers. Pick the value with `avni-docs-kb calibrate`.
+    docs_min_relevance: float | None = _env_float("DOCS_MIN_RELEVANCE", None)
 
     # LangSmith tracing (optional). Set LANGSMITH_TRACING=true and provide
     # LANGSMITH_API_KEY to send traces. Project defaults to the package name.
@@ -93,6 +108,13 @@ class Settings:
     # avni-ai infra slot autopilot inherits; ALBs map 443/80 → this port.
     ai_web_port: int = _env_int("AI_WEB_PORT", 8023)
 
+
+    def __post_init__(self) -> None:
+        relevance = self.docs_min_relevance
+        if relevance is not None and not 0.0 <= relevance <= 1.0:
+            raise ValueError(
+                f"DOCS_MIN_RELEVANCE must be between 0 and 1, got {relevance!r}"
+            )
 
 settings = Settings()
 

@@ -171,3 +171,48 @@ def test_update_whose_edits_are_all_rejected_shows_no_card(offline_pipeline: Pat
     assert update["zip_path"] == ""
     assert update["edit_result"]["rejected"]
     assert bundle.read_bytes() == before
+
+
+def _as_built_by_the_old_generator(bundle: Path, dest: Path) -> Path:
+    """Elements without `type`, multi-select recorded only as a `multiSelect` key-value."""
+    with zipfile.ZipFile(bundle) as src, zipfile.ZipFile(dest, "w") as out:
+        for item in src.infolist():
+            data = src.read(item)
+            if item.filename.startswith("forms/"):
+                form = json.loads(data)
+                for group in form.get("formElementGroups", []):
+                    for element in group.get("formElements", []):
+                        if element.pop("type", None) == "MultiSelect":
+                            element["keyValues"].append({"key": "multiSelect", "value": True})
+                data = json.dumps(form)
+            out.writestr(item, data)
+    return dest
+
+
+def _multi_select_elements(bundle: Path) -> set[str]:
+    with zipfile.ZipFile(bundle) as archive:
+        return {
+            element["uuid"]
+            for name in archive.namelist() if name.startswith("forms/")
+            for group in json.loads(archive.read(name)).get("formElementGroups", [])
+            for element in group["formElements"]
+            if element.get("type") == "MultiSelect" and not element.get("voided")
+        }
+
+
+def test_update_fixes_multi_select_fields_of_a_bundle_built_by_the_old_generator(
+    offline_pipeline: Path, tmp_path: Path,
+) -> None:
+    built = _build()
+    expected = _multi_select_elements(built)
+    assert expected
+    old = _as_built_by_the_old_generator(built, tmp_path / "old.zip")
+    assert _multi_select_elements(old) == set()
+
+    result = _update(old)
+    assert result["status"] == "done", result.get("error")
+    assert result["bundle_updated"] is True
+    assert result["edit_result"]["form_elements_retyped"] == len(expected)
+    assert _multi_select_elements(old) == expected
+
+    assert _update(old)["no_changes"] is True

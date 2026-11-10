@@ -184,11 +184,12 @@ def test_worker_failure_isolated_to_one_rule(monkeypatch):
 
     warnings = result["parse_warnings"]
     assert any(
-        w.startswith("rules.validationRule.Registration:")
-        and "generation worker failed" in w
+        w.startswith("Validation rule for form 'Registration':")
+        and "the rule could not be generated" in w
         for w in warnings
     )
     assert len(warnings) == 1
+    assert "stubbed worker failure" not in warnings[0]
 
     forms = {f["content"]["name"]: f["content"] for f in result["forms_json"]}
     assert "validationRule" not in forms["Registration"]

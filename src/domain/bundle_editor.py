@@ -23,7 +23,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from domain.generators import form_uuid, make_uuid
+from domain.generators import form_element_type, form_uuid, make_uuid
 from domain.rules.concept_answers import merge_answer_scopes
 from models import EditOperation, EditResult, RejectedOp
 
@@ -125,6 +125,10 @@ def _apply_one(
         _apply_rename(op, form, section, concepts, result, form_name)
     elif op.kind == "field.remove":
         _apply_remove(op, section, result)
+    elif op.kind == "field.set_selection_type":
+        if not _apply_set_selection_type(op, section, result):
+            result.applied.append(op.op_id)
+            return
     elif op.kind == "section.reorder_fields":
         _apply_reorder(op, section, result)
     else:
@@ -204,6 +208,7 @@ def _apply_rename(
     captured = {
         "displayOrder": existing.get("displayOrder"),
         "mandatory": existing.get("mandatory", False),
+        "type": existing.get("type") or form_element_type(None),
         "keyValues": existing.get("keyValues", []),
         "dataType": existing.get("concept", {}).get("dataType", "Text"),
         "answers": existing.get("concept", {}).get("answers", []),
@@ -266,6 +271,38 @@ def _apply_remove(op: EditOperation, section: dict, result: EditResult) -> None:
     result.form_elements_voided += 1
 
 
+_SELECTION_TYPES = ("SingleSelect", "MultiSelect")
+
+
+def _apply_set_selection_type(op: EditOperation, section: dict, result: EditResult) -> bool:
+    """Make a live field single- or multi-select; False when it already is.
+
+    Payload: {"selectionType": "SingleSelect" | "MultiSelect"}. Avni reads the
+    element's `type`, so a stale `multiSelect` key-value is dropped with it.
+    """
+    field_name = op.target.get("field", "").strip()
+    if not field_name:
+        raise _OpReject("schema", "target.field is required for field.set_selection_type")
+    selection_type = op.payload.get("selectionType")
+    if selection_type not in _SELECTION_TYPES:
+        raise _OpReject("schema", f"payload.selectionType must be one of {list(_SELECTION_TYPES)}")
+
+    existing = _find_live_element_by_name(section, field_name)
+    if existing is None:
+        raise _OpReject(
+            "not_found",
+            f"live field {field_name!r} not found in section {section.get('name')!r}",
+        )
+    if form_element_type(existing.get("type")) == selection_type:
+        return False
+    existing["type"] = selection_type
+    existing["keyValues"] = [
+        kv for kv in existing.get("keyValues", []) if kv.get("key") != "multiSelect"
+    ]
+    result.form_elements_retyped += 1
+    return True
+
+
 def _apply_reorder(op: EditOperation, section: dict, result: EditResult) -> None:
     """Reassign displayOrder values for the section's live form elements.
 
@@ -314,6 +351,7 @@ def _build_element(form_name: str, field_name: str, payload: dict, uuid: str, di
         "name": field_name,
         "displayOrder": display_order,
         "mandatory": bool(payload.get("mandatory", False)),
+        "type": form_element_type(payload.get("selectionType")),
         "keyValues": _build_key_values(payload),
         "validationDeclarativeRule": "",
         "rule": "",
@@ -334,6 +372,7 @@ def _build_element_from_captured(field_name: str, captured: dict, uuid: str) -> 
         "name": field_name,
         "displayOrder": captured["displayOrder"],
         "mandatory": bool(captured.get("mandatory", False)),
+        "type": captured["type"],
         "keyValues": captured.get("keyValues", []),
         "validationDeclarativeRule": "",
         "rule": "",
@@ -384,8 +423,6 @@ def _build_key_values(payload: dict) -> list[dict]:
         out.append({"key": "min", "value": payload["min"]})
     if payload.get("max") is not None:
         out.append({"key": "max", "value": payload["max"]})
-    if payload.get("selectionType") == "MultiSelect":
-        out.append({"key": "multiSelect", "value": True})
     return out
 
 
@@ -394,6 +431,7 @@ def _apply_properties(elem: dict, payload: dict, field_name: str) -> None:
     data_type = payload.get("dataType", elem.get("concept", {}).get("dataType", "Text"))
     answers = _build_answers(data_type, payload.get("options"))
     elem["mandatory"] = bool(payload.get("mandatory", elem.get("mandatory", False)))
+    elem["type"] = form_element_type(payload.get("selectionType"))
     elem["keyValues"] = _build_key_values(payload)
     elem["concept"]["dataType"] = data_type
     elem["concept"]["answers"] = answers

@@ -25,7 +25,7 @@ from domain.rules.knowledge_base import (
     VoyageEmbedder,
     _content_hash,
     _default_embedder,
-    _top_k,
+    _scored_top_k,
 )
 
 log = logging.getLogger(__name__)
@@ -69,13 +69,29 @@ class DocsKnowledgeBase:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def retrieve(self, query: str, top_k: int = _TOP_K_ENTRIES) -> list[DocEntry]:
-        """Embed the query and return top-K entries by cosine similarity."""
+    def retrieve(
+        self, query: str, top_k: int = _TOP_K_ENTRIES, min_relevance: float | None = None,
+    ) -> list[DocEntry]:
+        """Top-K entries by cosine similarity, leaving out any scoring below `min_relevance`."""
+        return [
+            entry for score, entry in self.search([query], top_k)[0]
+            if min_relevance is None or score >= min_relevance
+        ]
+
+    def embedded_keys(self) -> set[str]:
+        """Keys of entries that have a vector, embedding stale entries first."""
+        return set(self._ensure_catalog_vectors())
+
+    def search(
+        self, queries: list[str], top_k: int = _TOP_K_ENTRIES,
+    ) -> list[list[tuple[float, DocEntry]]]:
+        """(score, entry) pairs, best first, for each query; one embedding call for all."""
         vectors = self._ensure_catalog_vectors()
-        emb = _default_embedder()
-        query_vecs = emb.embed([query], input_type="query")
-        query_vec = np.asarray(query_vecs[0], dtype=np.float32)
-        return _top_k(query_vec, self.entries, vectors, top_k)
+        query_vecs = _default_embedder().embed(queries, input_type="query")
+        return [
+            _scored_top_k(np.asarray(vec, dtype=np.float32), self.entries, vectors, top_k)
+            for vec in query_vecs
+        ]
 
     def rebuild(self) -> None:
         """Re-embed changed entries and write the embedding cache."""

@@ -30,6 +30,7 @@ from domain.bundle_editor import (
     load_form_rule_context,
 )
 from domain.docs.knowledge_base import DocsKnowledgeBase
+from domain.generators import unlinked_form_names
 from domain.rules.generator import RuleGenerator
 from domain.rules.rule_spec import RuleKind, RuleSpec
 from domain.rules.validator import validate_and_decide as _validate_and_decide
@@ -175,11 +176,47 @@ def _summarize(state: dict) -> dict:
     }
     if state.get("mode") == "edit_from_spec":
         _shape_edit_from_spec_summary(summary, state)
+    elif summary["zip_path"]:
+        _shape_generate_summary(summary, state)
     return summary
 
 
-# Counts of the bundle built from the spreadsheets; an update applies only
-# the diff, so these do not describe the updated bundle.
+_NO_FORM_LINKED_ERROR = (
+    "None of the forms could be linked to a subject type, program or visit "
+    "type, so the app would have no screens to open them and the bundle is "
+    "not offered. Try building again; if it fails again, ask the Avni team."
+)
+
+
+def _shape_generate_summary(summary: dict, state: dict) -> None:
+    """Name forms the build could not link, and withhold a bundle that links none.
+
+    Linking forms is done by the model alone; when that call is skipped or
+    fails every form is left unlinked, and such a bundle must not be shown
+    as ready.
+    """
+    forms = state.get("forms_json", [])
+    unlinked = unlinked_form_names(forms, state.get("form_mappings_json", []))
+    if not unlinked:
+        return
+    summary["unlinked_forms"] = unlinked
+    if len(unlinked) == len(forms):
+        log.warning(f"build withheld: none of {len(forms)} form(s) linked")
+        summary["status"] = "error"
+        summary["error"] = _NO_FORM_LINKED_ERROR
+        summary["zip_path"] = ""
+        for key in _SPEC_COUNT_KEYS:
+            summary.pop(key, None)
+        return
+    summary["errors"] = [
+        *summary["errors"],
+        "These forms could not be linked to a subject type, program or visit "
+        "type, so no screen in the app opens them: " + ", ".join(unlinked) + ".",
+    ]
+
+
+# Counts of the bundle built from the spreadsheets. An update applies only
+# the diff, and a withheld build offers no bundle, so neither reports them.
 _SPEC_COUNT_KEYS = (
     "subject_types", "programs", "encounter_types", "main_forms",
     "cancellation_forms", "concepts", "form_mappings",
@@ -224,6 +261,10 @@ async def _run_phase1_then_pause_or_finish(initial: dict, thread_id: str) -> dic
     LangGraph 1.x's internal awaits would have no event loop.
     """
     phase1_state = await _phase1_graph.ainvoke(initial)
+    if phase1_state.get("entity_spec") is None:
+        errors = phase1_state.get("errors") or ["The spreadsheets could not be read."]
+        log.info(f"phase1-aborted thread_id={thread_id} errors={len(errors)}")
+        return {"status": "error", "error": " ".join(errors)}
     pending = phase1_state.get("pending_changes") or []
     log.info(
         "phase1-done thread_id=%s pending=%d errors=%d",
@@ -324,7 +365,8 @@ async def edit_bundle_from_spec(
     the LLM enrichment pass (may pause for user confirmation of long-name
     shortenings / duplicate-field disambiguations — same as generate_bundle),
     then diffs the regenerated desired bundle against the existing bundle and
-    applies the resulting field-level edits (add / remove / reorder)
+    applies the resulting field-level edits (add / remove / reorder, and
+    single/multi-select changes on existing fields)
     atomically. In a webapp session the existing bundle is the org's current
     setup loaded at the start of the chat, or the bundle built in this chat.
 
@@ -466,12 +508,13 @@ def edit_bundle_fields(
     bundle_path: str | None = None,
     config: RunnableConfig = None,
 ) -> dict:
-    """Add, rename, or remove fields in an already-generated bundle ZIP.
+    """Add, rename, or remove fields, or switch single/multi-select, in an already-generated bundle ZIP.
 
     Each operation has shape:
       {
         "op_id":  "<your-id>",
-        "kind":   "field.add" | "field.rename" | "field.remove",
+        "kind":   "field.add" | "field.rename" | "field.remove"
+                  | "field.set_selection_type",
         "target": { "form": "...", "section": "...", "field": "..."? },
         "payload": { ... }     # kind-specific
       }
@@ -481,6 +524,8 @@ def edit_bundle_fields(
       max?.
     field.rename payload: new_name (required).
     field.remove payload: empty.
+    field.set_selection_type payload: selectionType ('SingleSelect' or
+      'MultiSelect') — whether the field takes one answer or several.
 
     Matching is case-folded + whitespace-stripped EXACT (no fuzzy). On a
     mismatch the op is rejected with kind 'not_found' / 'ambiguous_target' /
@@ -761,32 +806,53 @@ def suggest_form_element_rule(
     }
 
 
+_DOCS_UNAVAILABLE_NOTE = (
+    "The Avni docs could not be searched just now. Tell the user so and do "
+    "not answer the question from memory."
+)
+
+_DOCS_NO_MATCH_NOTE = (
+    "No docs entry matches this question. Tell the user the Avni docs do not "
+    "cover it; do not answer it from memory."
+)
+
+_DOCS_EXCERPTS_NOTE = (
+    "Answer only with what these excerpts say and name the title of each "
+    "entry used. If none of them answers the question, tell the user the "
+    "Avni docs do not cover it; do not fill the gap from memory."
+)
+
+
 @tool
 def answer_avni_question(question: str) -> dict:
-    """Retrieve relevant Avni knowledge base excerpts for a question.
+    """Search the Avni docs for excerpts that answer a question about Avni.
 
-    Returns the most relevant documentation excerpts so the agent can answer
-    questions about Avni concepts, form configuration, JavaScript rules,
-    troubleshooting, and implementation patterns. The agent should use these
-    excerpts as its primary source and answer directly — do not call this tool
-    and then restate what it returns.
+    Returns up to five entries (`title` + `content`) ranked by similarity and
+    a `note` on how to use them. Entries too far from the question are left
+    out; an empty `excerpts` list means the docs were not searched or no
+    entry is close enough. A returned entry may still not answer the
+    question, so read it before relying on it.
 
     Args:
         question: A natural-language question about Avni.
     """
     if not os.environ.get("VOYAGE_API_KEY"):
-        return {"excerpts": [], "note": "VOYAGE_API_KEY not configured — answer from your own knowledge."}
+        log.warning("Docs KB search skipped: VOYAGE_API_KEY not configured")
+        return {"excerpts": [], "note": _DOCS_UNAVAILABLE_NOTE}
     try:
-        entries = _docs_kb.retrieve(question, top_k=5)
+        entries = _docs_kb.retrieve(
+            question, top_k=5, min_relevance=settings.docs_min_relevance,
+        )
     except Exception as exc:  # noqa: BLE001
         log.warning(f"Docs KB retrieve failed: {exc}")
-        return {"excerpts": [], "note": f"Knowledge base unavailable: {exc}"}
+        return {"excerpts": [], "note": _DOCS_UNAVAILABLE_NOTE}
 
     if not entries:
-        return {"excerpts": [], "note": "No relevant excerpts found — answer from your own knowledge."}
+        return {"excerpts": [], "note": _DOCS_NO_MATCH_NOTE}
 
     return {
         "excerpts": [{"title": e.title, "content": e.body} for e in entries],
+        "note": _DOCS_EXCERPTS_NOTE,
     }
 
 

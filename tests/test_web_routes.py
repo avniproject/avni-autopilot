@@ -132,6 +132,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         monkeypatch,
         avni_server_base_url="https://x.test",
         ai_session_dir=str(tmp_path / "sessions"),
+        input_root=str(tmp_path / "input"),
     )
     _install_stub_chat_service(monkeypatch)
     _install_fake_avni_server(monkeypatch)

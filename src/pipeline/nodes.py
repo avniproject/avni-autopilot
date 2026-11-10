@@ -39,7 +39,7 @@ from domain.generators import (
     make_subject_types,
 )
 from domain.llm import LLMHelper
-from domain.parser import _fuzzy_match, parse_scoping_docs
+from domain.parser import UnreadableSpreadsheetsError, _fuzzy_match, parse_scoping_docs
 from domain.rules.generator import RuleGenerator
 from domain.rules.orchestrator import (
     apply_results,
@@ -77,12 +77,14 @@ def discover_files(state: BundleState) -> dict:
     errors = list(state.get("errors", []))
 
     if not os.path.isdir(input_dir):
-        errors.append(f"Input directory not found: {input_dir}")
+        log.warning(f"[{state['org_name']}] Input directory not found: {input_dir}")
+        errors.append("No spreadsheet has been uploaded for this organisation.")
         return {"file_paths": [], "errors": errors}
 
     file_paths = find_spreadsheets(input_dir)
     if not file_paths:
-        errors.append(f"No .xlsx files found in: {input_dir}")
+        log.warning(f"[{state['org_name']}] No .xlsx files found in: {input_dir}")
+        errors.append("No .xlsx spreadsheet has been uploaded for this organisation.")
 
     log.info(
         "[%s] Found %d file(s): %s",
@@ -95,13 +97,23 @@ def discover_files(state: BundleState) -> dict:
 # ── Node 2: parse documents into an EntitySpec ────────────────────────────────
 
 
+_PARSE_FAILED_ERROR = (
+    "The spreadsheets could not be read. Check that each one follows the "
+    "spreadsheet format, then try again; if it keeps failing, ask the Avni team."
+)
+
+
 def parse_documents(state: BundleState) -> dict:
     errors = list(state.get("errors", []))
 
     try:
         entity_spec, misc_sheets = parse_scoping_docs(state["file_paths"])
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"Parsing failed: {exc}")
+    except UnreadableSpreadsheetsError as exc:
+        errors.append(str(exc))
+        return {"entity_spec": None, "parse_warnings": [], "errors": errors}
+    except Exception:  # noqa: BLE001
+        log.exception(f"[{state['org_name']}] Parsing the spreadsheets failed")
+        errors.append(_PARSE_FAILED_ERROR)
         return {"entity_spec": None, "parse_warnings": [], "errors": errors}
 
     warnings = list(entity_spec.validation_warnings)
@@ -123,7 +135,7 @@ def parse_documents(state: BundleState) -> dict:
 # ── Form ↔ entity linking ─────────────────────────────────────────────────────
 
 
-_LLM_SKIP_WARN = "form-link classification skipped: ANTHROPIC_API_KEY not set"
+_LLM_SKIP_WARN = "Forms were not linked because the AI service is not available."
 
 
 def link_forms_to_entities(state: BundleState) -> dict:
@@ -189,7 +201,10 @@ def enrich_with_llm(state: BundleState) -> dict:
         return {
             "pending_changes": [],
             "applied_changes": [],
-            "enrich_warnings": ["LLM enrichment skipped: ANTHROPIC_API_KEY not set."],
+            "enrich_warnings": [
+                "The AI review of the spreadsheet was skipped because the AI "
+                "service is not available."
+            ],
         }
 
     refined_forms, applied, pending, warnings = enrich_forms(
@@ -342,7 +357,8 @@ def generate_rules(state: BundleState) -> dict:
     generator = RuleGenerator()
     if not generator.is_available():
         warnings.append(
-            "rules: skipped — ANTHROPIC_API_KEY not set"
+            "Form and field rules were not written because the AI service is "
+            "not available."
         )
         log.info("[%s] Rule generation skipped — no ANTHROPIC_API_KEY",
                  state["org_name"])
@@ -502,9 +518,10 @@ def apply_diff_edits(state: BundleState) -> dict:
         )
 
     log.info(
-        "[%s] edit_from_spec applied: +%d added, %d voided, %d renamed, %d reinstated",
+        "[%s] edit_from_spec applied: +%d added, %d voided, %d renamed, %d reinstated, %d retyped",
         state["org_name"], result.form_elements_added, result.form_elements_voided,
         result.form_elements_renamed, result.form_elements_reinstated,
+        result.form_elements_retyped,
     )
     changed = bool(result.forms_modified or result.concepts_appended)
     return {"edit_result": result.model_dump(exclude={"bundle_path"}), "errors": errors,

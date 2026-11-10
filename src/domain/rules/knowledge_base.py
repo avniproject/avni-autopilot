@@ -577,6 +577,16 @@ def _top_k(
     k: int,
 ) -> list:
     """Cosine-similarity top-K. Entries missing from the cache are skipped."""
+    return [entry for _score, entry in _scored_top_k(query, entries, vectors, k)]
+
+
+def _scored_top_k(
+    query: np.ndarray,
+    entries: list,
+    vectors: dict[str, np.ndarray],
+    k: int,
+) -> list[tuple[float, object]]:
+    """(cosine score, entry) pairs, best first, at most K. Uncached entries are skipped."""
     if not entries:
         return []
     scored: list[tuple[float, object]] = []
@@ -589,7 +599,7 @@ def _top_k(
         score = float(np.dot(query, vec) / (q_norm * v_norm))
         scored.append((score, entry))
     scored.sort(key=lambda t: t[0], reverse=True)
-    return [entry for _score, entry in scored[:k]]
+    return scored[:k]
 
 
 def _content_hash(text: str) -> str:

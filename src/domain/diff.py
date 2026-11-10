@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import logging
 
+from domain.generators import form_element_type
+
 log = logging.getLogger(__name__)
 
 
@@ -28,6 +30,8 @@ def diff(desired_bundle: dict, current_bundle: dict) -> list[dict]:
     Only form-element-level changes are emitted today:
       - field.add               (UUID in desired, not in current; or voided in current)
       - field.remove            (UUID live in current, not in desired)
+      - field.set_selection_type (live field whose single/multi-select
+                                  setting differs from desired)
       - section.reorder_fields  (same UUIDs, different positions)
 
     Section/form mismatches are logged as warnings; no ops are emitted for them.
@@ -146,6 +150,23 @@ def _diff_section(desired_section: dict, current_section: dict, form_name: str,
             "payload": _add_payload_from_element(desired_e),
         })
 
+    # ── SELECTION TYPE: live in both, single/multi-select differs ────────
+    for uuid in desired_order:
+        desired_e = desired_by_uuid[uuid]
+        current_e = current_by_uuid.get(uuid)
+        if current_e is None or current_e.get("voided", False):
+            continue
+        desired_type = form_element_type(desired_e.get("type"))
+        if desired_type == form_element_type(current_e.get("type")):
+            continue
+        ops.append({
+            "op_id": next_id(),
+            "kind": "field.set_selection_type",
+            "target": {"form": form_name, "section": section_name,
+                       "field": current_e.get("name")},
+            "payload": {"selectionType": desired_type},
+        })
+
     # ── REORDER: every live element in desired must end up at its desired
     # position. We only emit a reorder if the relative order of fields that
     # exist in BOTH (and are/will-be live) differs from the desired order.
@@ -180,7 +201,9 @@ def _add_payload_from_element(elem: dict) -> dict:
         "dataType": concept.get("dataType", "Text"),
         "mandatory": bool(elem.get("mandatory", False)),
     }
-    # keyValues → unit/min/max/selectionType
+    if elem.get("type") == "MultiSelect":
+        payload["selectionType"] = "MultiSelect"
+    # keyValues → unit/min/max
     for kv in elem.get("keyValues", []):
         k, v = kv.get("key"), kv.get("value")
         if k == "unit":
@@ -189,8 +212,6 @@ def _add_payload_from_element(elem: dict) -> dict:
             payload["min"] = v
         elif k == "max":
             payload["max"] = v
-        elif k == "multiSelect" and v:
-            payload["selectionType"] = "MultiSelect"
     # Coded options come back from concept.answers
     answers = concept.get("answers") or []
     if concept.get("dataType") == "Coded" and answers:
