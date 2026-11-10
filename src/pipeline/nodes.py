@@ -17,7 +17,7 @@ from typing import Any
 
 from domain.bundle_editor import apply_field_edits, load_bundle_snapshot
 from domain.changes import apply_resolutions
-from domain.diff import diff, unmatched_desired_forms
+from domain.diff import current_forms_not_in_desired, diff, unmatched_desired_forms
 from domain.spreadsheets import find_spreadsheets
 from domain.enricher import enrich_forms
 from domain.form_links import (
@@ -39,7 +39,13 @@ from domain.generators import (
     make_subject_types,
 )
 from domain.llm import LLMHelper
-from domain.parser import UnreadableSpreadsheetsError, _fuzzy_match, parse_scoping_docs
+from domain.parser import (
+    SKIPPED_NO_ROWS,
+    SKIPPED_UNRECOGNISED,
+    UnreadableSpreadsheetsError,
+    _fuzzy_match,
+    parse_scoping_docs,
+)
 from domain.rules.generator import RuleGenerator
 from domain.rules.orchestrator import (
     apply_results,
@@ -102,12 +108,73 @@ _PARSE_FAILED_ERROR = (
     "spreadsheet format, then try again; if it keeps failing, ask the Avni team."
 )
 
+_NOTHING_TO_BUILD_ERROR = (
+    "No subject type and no form was found in the spreadsheets, so there is "
+    "nothing to build or update from."
+)
+_CHECK_HEADINGS_ADVICE = (
+    "Check that their sheet headings follow the spreadsheet format, then "
+    "upload them again."
+)
+_FILL_IN_ROWS_ADVICE = "Fill in the rows under the headings, then upload them again."
+
+_NO_FORM_TO_BUILD_ERROR = (
+    "The spreadsheets list subject types but no forms, so the app would have "
+    "no screen to register anyone or record a visit, and nothing was built. "
+    "Add the form sheets (headed 'Field Name' and 'Data Type'), then upload "
+    "them again."
+)
+
+
+def _nothing_to_build_error(skipped_sheets: list[dict]) -> str:
+    """The nothing-to-build error, with advice that fits why the sheets were skipped.
+
+    Headings are questioned only when some sheet's headings were not
+    recognised; when every skipped sheet has the right headings and no rows,
+    the advice is to fill the rows in.
+    """
+    reasons = {sheet["reason"] for sheet in skipped_sheets}
+    only_missing_rows = reasons == {SKIPPED_NO_ROWS}
+    advice = _FILL_IN_ROWS_ADVICE if only_missing_rows else _CHECK_HEADINGS_ADVICE
+    return f"{_NOTHING_TO_BUILD_ERROR} {advice}"
+
+_NO_SUBJECT_TYPE_ERROR = (
+    "The spreadsheets have forms but no subject type, so the forms cannot be "
+    "tied to anyone they are filled for and nothing was built or changed. "
+    "Upload the sheet that lists the subject types (headed 'Subject Type "
+    "Name') together with the forms, then try again."
+)
+
+
+def _skipped_sheets_messages(skipped_sheets: list[dict]) -> list[str]:
+    """One plain-words message per skip reason, naming each sheet and its file."""
+    def named(reason: str) -> str:
+        return ", ".join(
+            f"'{sheet['name']}' in {sheet['file']}"
+            for sheet in skipped_sheets if sheet["reason"] == reason
+        )
+
+    messages = []
+    unrecognised = named(SKIPPED_UNRECOGNISED)
+    if unrecognised:
+        messages.append(
+            "These sheets were skipped because their headings do not match any "
+            f"sheet the builder reads: {unrecognised}."
+        )
+    without_rows = named(SKIPPED_NO_ROWS)
+    if without_rows:
+        messages.append(
+            "These sheets have the right headings but no rows under them, so "
+            f"nothing was read from them: {without_rows}."
+        )
+    return messages
+
 
 def parse_documents(state: BundleState) -> dict:
     errors = list(state.get("errors", []))
 
     try:
-        entity_spec, misc_sheets = parse_scoping_docs(state["file_paths"])
+        entity_spec, skipped_sheets = parse_scoping_docs(state["file_paths"])
     except UnreadableSpreadsheetsError as exc:
         errors.append(str(exc))
         return {"entity_spec": None, "parse_warnings": [], "errors": errors}
@@ -116,10 +183,40 @@ def parse_documents(state: BundleState) -> dict:
         errors.append(_PARSE_FAILED_ERROR)
         return {"entity_spec": None, "parse_warnings": [], "errors": errors}
 
+    skipped_messages = _skipped_sheets_messages(skipped_sheets)
+    # Every form is filled for a subject type, so forms without one cannot be
+    # linked and are generated with the wrong form types.
+    if not entity_spec.subject_types:
+        log.warning(
+            f"[{state['org_name']}] Nothing to build: no subject type, "
+            f"{len(entity_spec.forms)} form(s), {len(skipped_sheets)} sheet(s) skipped"
+        )
+        errors.append(
+            _NO_SUBJECT_TYPE_ERROR if entity_spec.forms else _nothing_to_build_error(skipped_sheets)
+        )
+        return {
+            "entity_spec": None,
+            "parse_warnings": [],
+            "skipped_sheet_notes": skipped_messages,
+            "errors": errors,
+        }
+
+    # A build cannot gain forms by a later update, so a bundle without any
+    # is not offered. An update reports the app's forms the spreadsheets omit.
+    if not entity_spec.forms and state.get("mode", "generate") == "generate":
+        log.warning(
+            f"[{state['org_name']}] Nothing to build: {len(entity_spec.subject_types)} "
+            f"subject type(s), no form, {len(skipped_sheets)} sheet(s) skipped"
+        )
+        errors.append(_NO_FORM_TO_BUILD_ERROR)
+        return {
+            "entity_spec": None,
+            "parse_warnings": [],
+            "skipped_sheet_notes": skipped_messages,
+            "errors": errors,
+        }
+
     warnings = list(entity_spec.validation_warnings)
-    if misc_sheets:
-        names = [s["name"] for s in misc_sheets]
-        warnings.append(f"{len(misc_sheets)} unclassified sheet(s): {names}")
 
     log.info(
         "[%s] Parsed — subjects=%d programs=%d encounters=%d forms=%d",
@@ -129,7 +226,12 @@ def parse_documents(state: BundleState) -> dict:
         len(entity_spec.encounter_types),
         len(entity_spec.forms),
     )
-    return {"entity_spec": entity_spec, "parse_warnings": warnings, "errors": errors}
+    return {
+        "entity_spec": entity_spec,
+        "parse_warnings": warnings,
+        "skipped_sheet_notes": skipped_messages,
+        "errors": errors,
+    }
 
 
 # ── Form ↔ entity linking ─────────────────────────────────────────────────────
@@ -485,13 +587,19 @@ def diff_against_bundle(state: BundleState) -> dict:
 
     ops = diff(desired_bundle, current_bundle)
     unmatched_forms = unmatched_desired_forms(desired_bundle, current_bundle)
+    forms_not_in_spec = current_forms_not_in_desired(desired_bundle, current_bundle)
 
     log.info(
         "[%s] diff vs %s: %d op(s) (%s)",
         state["org_name"], os.path.basename(bundle_path), len(ops),
         ", ".join(f"{kind}={n}" for kind, n in _count_by_kind(ops).items()) or "none",
     )
-    return {"diff_ops": ops, "unmatched_forms": unmatched_forms, "errors": errors}
+    return {
+        "diff_ops": ops,
+        "unmatched_forms": unmatched_forms,
+        "forms_not_in_spec": forms_not_in_spec,
+        "errors": errors,
+    }
 
 
 def apply_diff_edits(state: BundleState) -> dict:

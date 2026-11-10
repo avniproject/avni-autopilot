@@ -346,3 +346,73 @@ async def test_rule_code_shown_after_a_rejection_is_marked_not_checked(tmp_path:
         _SUGGESTED_JS,
     )
     assert UNCHECKED_RULE_CODE_NOTE in content
+
+
+# ── Build / update notices ───────────────────────────────────────────────────
+
+_SKIPPED_NOTE = "These sheets were skipped because their headings do not match any sheet the builder reads: 'Notes' in A.xlsx."
+_LEFT_NOTE = "These forms are in the app but not in the spreadsheets, and an update does not remove forms, so they were left as they are: ANC."
+
+
+async def _run_tool_result(
+    session: ChatSession, result: dict, notices: list[str], reply: str = "",
+) -> list[tuple[str, dict]]:
+    """Run a turn whose tool left `notices` on the session, then the model's reply (none when empty)."""
+    class _ToolThenReply:
+        async def astream(self, _input, *, config, stream_mode):  # noqa: ARG002
+            session.pending_notices = list(notices)
+            yield {"tools": {"messages": [ToolMessage(content=json.dumps(result), tool_call_id="c1")]}}
+            yield {"agent": {"messages": [AIMessage(content=reply)]}}
+
+    svc = ChatService(session, agent_factory=lambda: _ToolThenReply())
+    await svc.send_message("build")
+    await asyncio.wait_for(svc._running_task, timeout=1.0)  # type: ignore[arg-type]
+    return [(t, e) for t, e in _collect_published(session) if t != "tool.result"]
+
+
+@pytest.mark.asyncio
+async def test_a_builds_notices_are_shown_before_its_card_even_when_the_model_says_nothing(
+    tmp_path: Path,
+) -> None:
+    session = _make_session(tmp_path)
+    session.bundle_path = tmp_path / "Srijan.zip"
+    result = {"status": "done", "bundle_updated": True, "main_forms": 3}
+
+    events = await _run_tool_result(session, result, [_SKIPPED_NOTE])
+
+    assert [t for t, _ in events] == ["agent.message", "bundle.ready"]
+    assert events[0][1] == {"role": "assistant", "content": _SKIPPED_NOTE}
+    assert session.pending_notices == []
+
+
+@pytest.mark.asyncio
+async def test_an_update_that_changed_nothing_shows_its_notices_without_a_card(tmp_path: Path) -> None:
+    session = _make_session(tmp_path)
+    result = {"status": "done", "no_changes": True, "message": "Nothing was changed."}
+
+    events = await _run_tool_result(session, result, [_SKIPPED_NOTE, _LEFT_NOTE], reply="Nothing was changed.")
+
+    assert events == [
+        ("agent.message", {"role": "assistant", "content": f"{_SKIPPED_NOTE}\n\n{_LEFT_NOTE}"}),
+        ("agent.message", {"role": "assistant", "content": "Nothing was changed."}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_builds_notices_are_shown_whatever_the_model_says(tmp_path: Path) -> None:
+    session = _make_session(tmp_path)
+    result = {"status": "error", "error": "Nothing could be built."}
+
+    events = await _run_tool_result(session, result, [_SKIPPED_NOTE])
+
+    assert events == [("agent.message", {"role": "assistant", "content": _SKIPPED_NOTE})]
+
+
+@pytest.mark.asyncio
+async def test_no_notice_message_when_the_tool_left_none(tmp_path: Path) -> None:
+    session = _make_session(tmp_path)
+    session.bundle_path = tmp_path / "Srijan.zip"
+
+    events = await _run_tool_result(session, {"status": "done", "bundle_updated": True}, [])
+
+    assert [t for t, _ in events] == ["bundle.ready"]

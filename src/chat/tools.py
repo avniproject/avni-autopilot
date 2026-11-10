@@ -133,15 +133,24 @@ def _unreadable_bundle(exc: FileNotFoundError) -> dict:
 
 
 def _report_bundle(result: dict, config: RunnableConfig | None) -> dict:
-    """Keep server paths out of what the agent reads in a webapp session.
+    """Keep server paths out of what the agent reads in a webapp session, and hand notes to the chat.
 
     The session takes the changed bundle's path and the result carries only
-    `bundle_updated`; the chat service shows the bundle card from it. In the
-    REPL the result keeps `zip_path` for the person at the terminal.
+    `bundle_updated`; the chat service shows the bundle card from it. The
+    session also takes the result's `notices`, which the chat service shows
+    as they are, whatever the model says. The model reads the same notes as
+    `already_shown_to_user`, to answer questions about them without
+    repeating them; the forms an update left as they are travel only in
+    those notes. In the REPL the result keeps `zip_path` and `notices` for
+    the person at the terminal.
     """
     session = _session_of(config)
     if session is None:
         return result
+    session.pending_notices = result.pop("notices", [])
+    result.pop("forms_not_in_spreadsheets", None)
+    if session.pending_notices:
+        result["already_shown_to_user"] = list(session.pending_notices)
     zip_path = result.pop("zip_path", "")
     if zip_path:
         session.bundle_path = Path(zip_path)
@@ -151,7 +160,12 @@ def _report_bundle(result: dict, config: RunnableConfig | None) -> dict:
 
 
 def _summarize(state: dict) -> dict:
-    """Build the success-summary dict the chat agent reports."""
+    """Build the success-summary dict the chat agent reports.
+
+    `notices` holds plain-words notes the user must see whatever the model
+    says, on success and on error: sheets nothing was read from, and an
+    update's forms left as they are. The web chat shows them itself.
+    """
     cancel_count = sum(
         1 for f in state.get("mapping_specs", [])
         if "Cancellation" in f["name"]
@@ -173,6 +187,7 @@ def _summarize(state: dict) -> dict:
         "enrich_warnings": state.get("enrich_warnings", []),
         "parse_warnings": state.get("parse_warnings", []),
         "errors": state.get("errors", []),
+        "notices": list(state.get("skipped_sheet_notes", [])),
     }
     if state.get("mode") == "edit_from_spec":
         _shape_edit_from_spec_summary(summary, state)
@@ -227,13 +242,16 @@ def _shape_edit_from_spec_summary(summary: dict, state: dict) -> None:
     """Report what an update applied, what it could not, and whether it changed anything.
 
     `zip_path` is set only when the bundle changed, so the bundle card is
-    shown only then.
+    shown only then. Forms of the bundle that the spreadsheets do not
+    mention are named, so "nothing changed" is never read as "matches".
     """
     for key in _SPEC_COUNT_KEYS:
         summary.pop(key, None)
     summary["edit_result"] = state.get("edit_result", {})
     unmatched = state.get("unmatched_forms") or []
     summary["unmatched_forms"] = unmatched
+    not_in_spreadsheets = state.get("forms_not_in_spec") or []
+    summary["forms_not_in_spreadsheets"] = not_in_spreadsheets
     errors = list(summary["errors"])
     if unmatched:
         errors.append(
@@ -242,11 +260,28 @@ def _shape_edit_from_spec_summary(summary: dict, state: dict) -> None:
             + ", ".join(unmatched) + "."
         )
     summary["errors"] = errors
+    left_as_they_are = (
+        "These forms are in the app but not in the spreadsheets, and an update "
+        "does not remove forms, so they were left as they are: "
+        + ", ".join(not_in_spreadsheets) + "."
+        if not_in_spreadsheets else ""
+    )
+    if left_as_they_are:
+        summary["notices"].append(left_as_they_are)
     if summary["zip_path"]:
         return
+    matched_forms = len(state.get("forms_json", [])) - len(unmatched)
+    if not errors and not_in_spreadsheets and matched_forms == 0:
+        errors.append("None of the app's forms are in the spreadsheets, so there was nothing to update.")
     if errors:
         summary["status"] = "error"
-        summary["error"] = "Nothing in the bundle was changed. " + " ".join(errors)
+        summary["error"] = " ".join(["Nothing in the bundle was changed.", *errors])
+    elif left_as_they_are:
+        summary["no_changes"] = True
+        summary["message"] = (
+            "Nothing was changed: the forms in the spreadsheets already match "
+            "the app, and the app's other forms were left as they are."
+        )
     else:
         summary["no_changes"] = True
         summary["message"] = "The bundle already matches the spreadsheets; nothing was changed."
@@ -264,7 +299,11 @@ async def _run_phase1_then_pause_or_finish(initial: dict, thread_id: str) -> dic
     if phase1_state.get("entity_spec") is None:
         errors = phase1_state.get("errors") or ["The spreadsheets could not be read."]
         log.info(f"phase1-aborted thread_id={thread_id} errors={len(errors)}")
-        return {"status": "error", "error": " ".join(errors)}
+        return {
+            "status": "error",
+            "error": " ".join(errors),
+            "notices": list(phase1_state.get("skipped_sheet_notes") or []),
+        }
     pending = phase1_state.get("pending_changes") or []
     log.info(
         "phase1-done thread_id=%s pending=%d errors=%d",

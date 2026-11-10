@@ -81,6 +81,19 @@ def unmatched_desired_forms(desired_bundle: dict, current_bundle: dict) -> list[
     })
 
 
+def current_forms_not_in_desired(desired_bundle: dict, current_bundle: dict) -> list[str]:
+    """Names of live forms in current_bundle with no form of the same UUID in desired_bundle.
+
+    `diff` does not remove whole forms, so an update leaves these as they are.
+    """
+    desired_uuids = {f["content"].get("uuid") for f in desired_bundle.get("forms", [])}
+    return sorted({
+        f["content"].get("name", "")
+        for f in current_bundle.get("forms", [])
+        if f["content"].get("uuid") not in desired_uuids and not f["content"].get("voided", False)
+    })
+
+
 # ── Per-form diff ─────────────────────────────────────────────────────────────
 
 

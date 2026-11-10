@@ -127,6 +127,9 @@ class ChatSession:
     # True once a tool in this chat has built or edited the bundle at
     # `bundle_path` (its card with Download is then in the chat).
     bundle_changed_in_chat: bool = False
+    # Notes from the last build or update tool call, shown by the chat
+    # service and kept out of what the model reads.
+    pending_notices: list[str] = field(default_factory=list)
 
     @property
     def org_slug(self) -> str:

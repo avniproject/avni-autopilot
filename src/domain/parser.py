@@ -309,6 +309,45 @@ def _find_col(df: pd.DataFrame, *candidates: str) -> str | None:
 # ── Sheet Classification ─────────────────────────────────────────────────────
 
 
+SKIPPED_UNRECOGNISED = "unrecognised"
+SKIPPED_NO_ROWS = "no_rows"
+
+
+def _has_content(df: pd.DataFrame) -> bool:
+    """True when any cell holds something other than blanks or whitespace."""
+    return any(
+        not pd.isna(value) and str(value).strip()
+        for value in df.to_numpy().ravel()
+    )
+
+
+def _classify_headings(headings: list[str]) -> str:
+    """Classify a sheet that has headings but no rows, by its headings alone.
+
+    The headings stand in as the only row so the column checks in
+    `_classify_sheet`, which treat an empty frame as unknown, still run.
+    """
+    return _classify_sheet(pd.DataFrame([headings], columns=headings))
+
+
+def _skipped_sheet(sheet_name: str, path: Path, df_with_header: pd.DataFrame, reason: str) -> dict:
+    """Record of a sheet nothing was read from, with a short preview of it."""
+    rows = (
+        df_with_header.head(3)
+        .dropna(how="all")
+        .fillna("")
+        .infer_objects(copy=False)
+        .to_dict(orient="records")
+    )
+    return {
+        "name": sheet_name,
+        "file": path.name,
+        "reason": reason,
+        "columns": [str(c) for c in df_with_header.columns.tolist()],
+        "rows": rows,
+    }
+
+
 def _classify_sheet(df: pd.DataFrame) -> str:
     """Classify a DataFrame by its column headers.
 
@@ -318,7 +357,7 @@ def _classify_sheet(df: pd.DataFrame) -> str:
     Content-driven only — the first column is the strongest signal
     (entity-name header like "Subject Type Name" / "Program Name" /
     "Encounter Name"). Sheets whose columns don't recognise as any
-    entity tab fall through to "unknown" and surface as `misc_sheets`
+    entity tab fall through to "unknown" and surface as skipped sheets
     for operator review. The form-link node (LLM) is the authoritative
     source for entity↔form binding, so a strict content-driven
     classification here is safer than name-based guessing.
@@ -1397,9 +1436,11 @@ def parse_scoping_docs(
     All results are merged with deduplication.
 
     Returns:
-        (EntitySpec, misc_sheets) where misc_sheets is a list of dicts for
-        sheets that could not be classified, each containing:
-        {name, file, columns, rows (first 20 non-empty rows as list-of-dicts)}
+        (EntitySpec, skipped_sheets) where skipped_sheets lists each sheet
+        nothing was read from: {name, file, reason, columns, rows (first 3
+        non-empty rows as list-of-dicts)}. `reason` is SKIPPED_UNRECOGNISED
+        (headings match no sheet type) or SKIPPED_NO_ROWS (recognised
+        headings, no rows under them).
     """
     all_address: list[AddressLevelSpec] = []
     all_subjects: list[SubjectTypeSpec] = []
@@ -1408,7 +1449,7 @@ def parse_scoping_docs(
     all_forms: list[FormSpec] = []
     w3h_dfs: list[pd.DataFrame] = []
     form_sheets: list[tuple[str, pd.DataFrame, int]] = []  # (name, df, header_offset)
-    misc_sheets: list[dict] = []
+    skipped_sheets: list[dict] = []
     # Per-form rule intents harvested from a dedicated "Rules" / "Form Rules"
     # tab. Each row in that tab corresponds to one form (cancellation and exit
     # forms get their own rows, distinct from the parent encounter type).
@@ -1428,7 +1469,9 @@ def parse_scoping_docs(
     for path, sheets in loaded_files.items():
 
         for sheet_name, df in sheets:
-            if df.empty or df.shape[1] < 2:
+            # A blank sheet carries nothing to report. A one-column sheet
+            # with content classifies as unknown and is reported as skipped.
+            if not _has_content(df):
                 continue
 
             # Try classifying with row 0 as headers
@@ -1439,11 +1482,16 @@ def parse_scoping_docs(
             ]
             df_with_header = df_with_header.iloc[1:].reset_index(drop=True)
             df_with_header = df_with_header.dropna(how="all")
+            first_data_row = 1
 
-            classification = _classify_sheet(df_with_header)
+            classification = (
+                _classify_sheet(df_with_header)
+                if _has_content(df_with_header)
+                else _classify_headings(list(df_with_header.columns))
+            )
 
             # If unknown, try with row 1 as headers (scoping doc pattern)
-            if classification == "unknown" and df.shape[0] >= 3:
+            if classification == "unknown" and df.shape[0] >= 2:
                 df_alt = df.copy()
                 df_alt.columns = [
                     str(df.iloc[1, c]).strip() if df.shape[0] > 1 else f"col{c}"
@@ -1452,8 +1500,10 @@ def parse_scoping_docs(
                 alt_class = _classify_sheet(df_alt)
                 if alt_class in ("form", "form_offset1"):
                     classification = "form_offset1"
+                    first_data_row = 2
                 elif alt_class != "unknown":
                     classification = alt_class
+                    first_data_row = 2
                     df_with_header = (
                         df_alt.iloc[2:].reset_index(drop=True).dropna(how="all")
                     )
@@ -1462,6 +1512,13 @@ def parse_scoping_docs(
                 classification = "form"
 
             logger.info("  Sheet '%s': classified as %s", sheet_name, classification)
+
+            if classification != "unknown" and not _has_content(df.iloc[first_data_row:]):
+                logger.info(f"  Sheet '{sheet_name}': headings recognised but no rows")
+                skipped_sheets.append(
+                    _skipped_sheet(sheet_name, path, df_with_header, SKIPPED_NO_ROWS)
+                )
+                continue
 
             subject_type_names = {st.name for st in all_subjects}
             program_names = {p.name for p in all_programs}
@@ -1547,22 +1604,8 @@ def parse_scoping_docs(
                 form_sheets.append((sheet_name, df, offset))
 
             else:
-                # Unknown — capture for agent inspection
-                cols = [str(c) for c in df_with_header.columns.tolist()]
-                rows = (
-                    df_with_header.head(3)
-                    .dropna(how="all")
-                    .fillna("")
-                    .infer_objects(copy=False)
-                    .to_dict(orient="records")
-                )
-                misc_sheets.append(
-                    {
-                        "name": sheet_name,
-                        "file": path.name,
-                        "columns": cols,
-                        "rows": rows,
-                    }
+                skipped_sheets.append(
+                    _skipped_sheet(sheet_name, path, df_with_header, SKIPPED_UNRECOGNISED)
                 )
 
     # Default address levels if none found
@@ -1672,7 +1715,7 @@ def parse_scoping_docs(
     )
     spec.unmatched_rule_intents = unmatched_rule_intents
     spec.validation_warnings.extend(_unrecognised_data_type_warnings(all_forms))
-    return spec, misc_sheets
+    return spec, skipped_sheets
 
 
 def _unrecognised_data_type_warnings(forms: list[FormSpec]) -> list[str]:

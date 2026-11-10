@@ -222,6 +222,12 @@ def _build_org_context(session: ChatSession) -> str:
         f"Whenever a tool takes an `org` argument (generate_bundle, "
         f"edit_bundle_from_spec), use `{session.org_slug}` — do NOT prompt "
         f"the user for the org name; it is implicit from the session.\n\n"
+        f"This chat itself shows the user which sheets a build or update "
+        f"skipped and which forms an update left as they are. A tool result "
+        f"carries those notes as `already_shown_to_user`: do not repeat or "
+        f"restate them in your reply, but when the user asks about skipped "
+        f"sheets or forms left as they are, answer from them and do not "
+        f"guess a reason.\n\n"
         f"Current state of this chat:\n"
         f"- {_spreadsheet_context(session)}\n"
         f"- {_bundle_context(session)}"
@@ -449,6 +455,9 @@ class ChatService:
                 summary=_summarize_tool_result(msg.content),
             ),
         )
+        # Shown ahead of any card: the webapp hides the model's first reply
+        # after a card, and the model never sees these notes.
+        self._publish_pending_notices()
         if result is None:
             return
 
@@ -459,6 +468,12 @@ class ChatService:
             self._publish_hitl_pending(result)
         elif status == "done" and result.get("bundle_updated"):
             self._publish_bundle_ready(result)
+
+    def _publish_pending_notices(self) -> None:
+        """Show the notes the last build or update left on the session as one message."""
+        notices, self._session.pending_notices = self._session.pending_notices, []
+        if notices:
+            self._session.bus.publish("agent.message", agent_message("assistant", "\n\n".join(notices)))
 
     def _publish_hitl_pending(self, result: dict[str, Any]) -> None:
         """Convert a `needs_confirmation` tool result into an `hitl.pending` event."""

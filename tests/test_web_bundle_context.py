@@ -694,3 +694,9 @@ async def test_download_of_a_non_bundle_reply_fails(
     assert session.org_setup_status is OrgSetupStatus.FAILED
     assert "reply was not a bundle" in session.org_setup_error
     assert session.bundle_path is None
+
+
+def test_the_web_chat_tells_the_model_notices_are_already_shown(tmp_path: Path) -> None:
+    context = _build_org_context(_session(tmp_path))
+    assert "carries those notes as `already_shown_to_user`: do not repeat or restate them" in context
+    assert "when the user asks about skipped sheets or forms left as they are, answer from them" in context
