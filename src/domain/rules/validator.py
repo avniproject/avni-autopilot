@@ -106,10 +106,11 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
 
     available_concepts = {name for name in spec.available_concepts if name}
     available_encounters = _lowered(spec.available_encounter_types)
+    miscased = _miscased_concept_names(tree, spec)
 
     bad_concepts = sorted(
         name for name in referenced_concepts
-        if name not in available_concepts
+        if name not in available_concepts and name not in miscased
     )
     bad_encounters = sorted(
         name for name in referenced_encounter_types
@@ -117,7 +118,11 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
     )
 
     # Hard warnings (grounding failures) — these block the write.
-    hard_warnings: list[str] = []
+    hard_warnings: list[str] = [
+        f"{OFF_BUNDLE_WARNING} concept name {name!r}: Avni matches names exactly, "
+        f"the bundle has {' or '.join(repr(actual) for actual in actuals)}"
+        for name, actuals in sorted(miscased.items())
+    ]
     if bad_concepts:
         hard_warnings.append(f"{OFF_BUNDLE_WARNING} concept names: {bad_concepts}")
     if bad_encounters:
@@ -134,6 +139,31 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
 
 def _lowered(names: list[str]) -> set[str]:
     return {n.casefold() for n in names if n}
+
+
+def _miscased_concept_names(tree: Any, spec: RuleSpec) -> dict[str, list[str]]:
+    """Concept names the rule reads that match a bundle concept only when case
+    is ignored, mapped to the bundle's spelling(s). Covers every accessor that
+    takes a concept name, including reads from other forms."""
+    known = {name for name in [*spec.available_concepts, *spec.concept_answers] if name}
+    by_casefold: dict[str, set[str]] = {}
+    for name in known:
+        by_casefold.setdefault(name.casefold(), set()).add(name)
+
+    miscased: dict[str, list[str]] = {}
+    for call in _iter_call_expressions(tree):
+        if _method_name(call) not in CONCEPT_ACCESSORS | _VALUE_IN_METHODS:
+            continue
+        args = getattr(call, "arguments", None) or []
+        name = getattr(args[0], "value", None) if args and getattr(args[0], "type", None) == "Literal" else None
+        if not isinstance(name, str):
+            continue
+        if name in known or _UUID_RE.match(name):
+            continue
+        actuals = by_casefold.get(name.casefold())
+        if actuals:
+            miscased[name] = sorted(actuals)
+    return miscased
 
 
 def _find_iife(tree: Any) -> Any | None:
@@ -276,9 +306,10 @@ def _check_answer_grounding(tree: Any, spec: RuleSpec) -> list[str]:
         for concept, options in spec.concept_answers.items()
     }
 
-    concepts_by_casefold = {concept.casefold(): concept for concept in spec.concept_answers}
+    concepts_by_casefold: dict[str, list[str]] = {}
+    for concept in spec.concept_answers:
+        concepts_by_casefold.setdefault(concept.casefold(), []).append(concept)
     off_list: dict[str, set[str]] = {}
-    miscased: dict[str, str] = {}
     for call in _iter_call_expressions(tree):
         if _method_name(call) not in _CONTAINS_ANSWER_METHODS:
             continue
@@ -287,8 +318,13 @@ def _check_answer_grounding(tree: Any, spec: RuleSpec) -> list[str]:
             continue
         valid = answers_by_concept.get(concept)
         if valid is None and concept.casefold() in concepts_by_casefold:
-            miscased[concept] = concepts_by_casefold[concept.casefold()]
-            continue
+            # The concept name's case is reported by `_miscased_concept_names`;
+            # still check the answers under the bundle's spelling.
+            spellings = concepts_by_casefold[concept.casefold()]
+            valid = set().union(*(answers_by_concept[spelling] for spelling in spellings))
+            valid_listing_by_concept.setdefault(
+                concept, [a for spelling in spellings for a in valid_listing_by_concept[spelling]],
+            )
         if valid is None:
             # Concept isn't in this rule's grounding scope — non-coded
             # concept, or out-of-scope form. Skip rather than reject.
@@ -299,10 +335,7 @@ def _check_answer_grounding(tree: Any, spec: RuleSpec) -> list[str]:
             if answer not in valid:
                 off_list.setdefault(concept, set()).add(answer)
 
-    warnings: list[str] = [
-        f"{OFF_BUNDLE_WARNING} concept name {concept!r}: Avni matches names exactly, the bundle has {actual!r}"
-        for concept, actual in miscased.items()
-    ]
+    warnings: list[str] = []
     for concept, bad in off_list.items():
         valid_listing = valid_listing_by_concept[concept]
         warnings.append(

@@ -162,10 +162,11 @@ def test_pasted_organisation_rule_asked_for_a_small_change_is_suggested(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     pasted_rule_with_change = _rule('valueInEncounter("Weight").is.lessThan(8)').js
+    monkeypatch.setattr(tools._rule_generator, "retrieve", lambda spec: object())
     monkeypatch.setattr(
         tools._rule_generator,
         "generate",
-        lambda spec: RuleResult(rule_kind=spec.rule_kind, js=pasted_rule_with_change, confidence="high"),
+        lambda spec, context=None: RuleResult(rule_kind=spec.rule_kind, js=pasted_rule_with_change, confidence="high"),
     )
     config = {"configurable": {"session": SimpleNamespace(bundle_path=_write_bundle(tmp_path))}}
 

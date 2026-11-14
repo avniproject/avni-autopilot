@@ -54,7 +54,9 @@ def test_field_on_the_form_is_accepted() -> None:
 def test_field_name_in_another_case_is_rejected_since_avni_matches_concept_names_exactly() -> None:
     ok, warnings = check(_rule('valueInEncounter("qa visit numeric").is.lessThan(7)'), _spec())
     assert ok is False
-    assert "off-bundle concept names: ['qa visit numeric']" in warnings
+    assert warnings == [
+        "off-bundle concept name 'qa visit numeric': Avni matches names exactly, the bundle has 'QA Visit Numeric'"
+    ]
 
 
 def test_answer_in_another_case_is_rejected() -> None:
@@ -74,7 +76,25 @@ def test_field_given_as_a_uuid_is_not_checked_against_names() -> None:
     assert ok is True
 
 
-def test_answer_check_flags_a_concept_from_another_form_written_in_another_case() -> None:
+def test_concept_from_another_form_written_in_another_case_is_flagged() -> None:
     ok, warnings = check(_rule('valueInRegistration("qa visit coded").containsAnswerConceptName("QA Yes")'), _spec())
     assert ok is False
-    assert "off-bundle concept name 'qa visit coded': Avni matches names exactly, the bundle has 'QA Visit Coded'" in warnings
+    assert warnings == [
+        "off-bundle concept name 'qa visit coded': Avni matches names exactly, the bundle has 'QA Visit Coded'"
+    ]
+
+
+def test_miscased_concept_and_wrong_answer_are_reported_together() -> None:
+    ok, warnings = check(_rule('valueInRegistration("qa visit coded").containsAnswerConceptName("qa yes")'), _spec())
+    assert ok is False
+    assert warnings[0] == "off-bundle concept name 'qa visit coded': Avni matches names exactly, the bundle has 'QA Visit Coded'"
+    assert any("off-bundle answer(s) ['qa yes']" in warning for warning in warnings[1:])
+
+
+def test_miscased_name_lists_every_bundle_spelling_it_could_mean() -> None:
+    spec = _spec().model_copy(update={"concept_answers": {"Pregnant": ["Yes"], "pregnant": ["Yes"]}})
+    ok, warnings = check(_rule('valueInRegistration("PREGNANT").containsAnswerConceptName("Yes")'), spec)
+    assert ok is False
+    assert warnings == [
+        "off-bundle concept name 'PREGNANT': Avni matches names exactly, the bundle has 'Pregnant' or 'pregnant'"
+    ]

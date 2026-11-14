@@ -143,11 +143,11 @@ def test_rule_built_for_another_form_type_is_regenerated_once_with_the_reason(
     assert "wrong form type" in retry.intent
     assert "`encounter`" in retry.intent
     assert retry.intent.startswith(first.intent)
-    assert first_context is None
+    assert first_context is _ORIGINAL_INTENT_EXAMPLES
     assert retry_context is _ORIGINAL_INTENT_EXAMPLES
 
 
-def test_retry_reuses_examples_retrieved_for_the_users_own_intent(
+def test_both_attempts_use_one_retrieval_for_the_users_own_intent(
     monkeypatch: pytest.MonkeyPatch, rule_config: dict, _stub_retrieval: list,
 ) -> None:
     _stub_generator_sequence(monkeypatch, _WRONG_FORM_TYPE_JS, _GENERAL_VISIT_JS)
@@ -157,7 +157,7 @@ def test_retry_reuses_examples_retrieved_for_the_users_own_intent(
     assert [spec.intent for spec in _stub_retrieval] == ["show only when 'Eggs needed' is Yes"]
 
 
-def test_rule_is_not_regenerated_when_examples_cannot_be_retrieved(
+def test_rule_is_generated_without_retry_when_examples_cannot_be_retrieved_up_front(
     monkeypatch: pytest.MonkeyPatch, rule_config: dict,
 ) -> None:
     specs = _stub_generator_sequence(monkeypatch, _WRONG_FORM_TYPE_JS)

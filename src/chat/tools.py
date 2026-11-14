@@ -919,21 +919,23 @@ def _generate_and_check(spec: RuleSpec) -> tuple[RuleResult, bool, list[str]]:
     the form's record under another form type's key.
 
     That rejection means the generator copied the key from an example built
-    for another form type, which a second attempt told the reason fixes. The
-    second attempt reuses the examples retrieved for the user's own intent,
-    so the reason does not steer retrieval. A rule that also reads a name not
-    in the bundle is not regenerated: a retry could swap in another field and
+    for another form type, which a second attempt told the reason fixes. Both
+    attempts use the examples retrieved once for the user's own intent, so
+    the reason does not steer retrieval. A rule that also reads a name not in
+    the bundle is not regenerated: a retry could swap in another field and
     suggest a rule the user did not ask for.
     """
-    result = _rule_generator.generate(spec)
-    ok, warnings = _validate_and_decide(result, spec)
-    if ok or not _is_wrong_form_type_only(warnings):
-        return result, ok, warnings
-
     try:
         context = _rule_generator.retrieve(spec)
     except Exception as exc:  # noqa: BLE001
-        log.warning(f"Not regenerating {spec.rule_kind.value} rule for {spec.form_name!r}: KB retrieve failed: {exc}")
+        log.warning(f"KB retrieve failed for {spec.rule_kind.value} rule on {spec.form_name!r}: {exc}")
+        result = _rule_generator.generate(spec)
+        ok, warnings = _validate_and_decide(result, spec)
+        return result, ok, warnings
+
+    result = _rule_generator.generate(spec, context=context)
+    ok, warnings = _validate_and_decide(result, spec)
+    if ok or not _is_wrong_form_type_only(warnings):
         return result, ok, warnings
 
     entity_param = entity_param_for_form_type(spec.form_type)
