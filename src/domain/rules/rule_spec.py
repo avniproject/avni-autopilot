@@ -58,6 +58,14 @@ class RuleSpec(BaseModel):
     # whose name differs from their concept's. Rules read values by concept
     # name; the user's intent usually quotes the question name.
     question_names_by_concept: dict[str, list[str]] = Field(default_factory=dict)
+    # Concept names of the questions inside each question group on the target
+    # form, keyed by the group's concept name. Avni reads them with the group
+    # as the second argument of findObservation / getObservationValue /
+    # getObservationReadableValue.
+    question_group_children: dict[str, list[str]] = Field(default_factory=dict)
+    # Group concept name when the field a form-element rule is set on sits
+    # inside a question group.
+    target_question_group: str | None = None
 
 
 class RuleResult(BaseModel):

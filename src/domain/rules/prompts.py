@@ -119,7 +119,8 @@ Hard constraints:
   2. The function MUST return {return_type_description}.
   3. Reference ONLY the helper methods listed under HELPERS in the user message.
      Do not invent helpers, methods, or namespaces.
-  4. Reference ONLY the concept names listed under AVAILABLE_CONCEPTS, copied
+  4. Reference ONLY the concept names listed under AVAILABLE_CONCEPTS, or under
+     QUESTION_GROUPS read with their group as the second argument, copied
      exactly, including case: Avni matches concept names exactly. Concept
      names appear as the first string argument to accessors like
      `getObservationReadableValue('<concept>')` or as observation lookups.
@@ -201,6 +202,7 @@ def build_user_prompt(
         available_encounter_types=_format_list(spec.available_encounter_types),
         available_programs=_format_list(spec.available_programs),
         concept_answers=_format_concept_answers(spec.concept_answers),
+        question_groups=_format_question_groups(spec),
         helpers_text=helpers_text or "(none retrieved)",
         examples_text=examples_text or "(none retrieved)",
     )
@@ -224,7 +226,7 @@ AVAILABLE_PROGRAMS
 
 CONCEPT_ANSWERS
 {concept_answers}
-
+{question_groups}
 HELPERS
 {helpers_text}
 
@@ -240,6 +242,26 @@ def _format_list(items: list[str]) -> str:
     if not items:
         return "(empty)"
     return "\n".join(f"- {item}" for item in items)
+
+
+def _format_question_groups(spec: RuleSpec) -> str:
+    """QUESTION_GROUPS block, or an empty string when the form has none."""
+    if not spec.question_group_children:
+        return ""
+    lines = [
+        "",
+        "QUESTION_GROUPS",
+        "Questions inside a question group. Read each one with its group's concept name as the",
+        "second argument, e.g. getObservationReadableValue('<question>', '<group>'); a read",
+        "without the group, valueInEncounter('<question>') or a loop over observations finds nothing.",
+    ]
+    lines += [f"- {group}: {', '.join(children)}" for group, children in spec.question_group_children.items()]
+    if spec.target_question_group:
+        lines.append(
+            f"The field this rule is set on is inside the question group {spec.target_question_group!r}: "
+            f"read its value with {spec.target_question_group!r} as the second argument."
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _format_available_concepts(spec: RuleSpec) -> str:

@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 # Leading words of hard warnings that callers branch on.
 OFF_BUNDLE_WARNING = "off-bundle"
 WRONG_FORM_TYPE_WARNING = "wrong form type"
+QUESTION_GROUP_WARNING = "question group read"
 
 
 # ── Property keys whose Literal value is an encounter-type name ───────────────
@@ -45,6 +46,13 @@ _VALUE_IN_METHODS: frozenset[str] = frozenset({
 # valueInRegistration / valueInEnrolment read other forms and are not checked.
 _CURRENT_FORM_VALUE_METHODS: frozenset[str] = frozenset({
     "valueInEncounter",
+})
+# Accessors that take a question group's concept name as the second argument
+# and then read the question inside that group (openchs-models AbstractEncounter).
+_GROUPED_READ_METHODS: frozenset[str] = frozenset({
+    "findObservation",
+    "getObservationValue",
+    "getObservationReadableValue",
 })
 _CONTAINS_ANSWER_METHODS: frozenset[str] = frozenset({
     "containsAnswerConceptName",
@@ -127,6 +135,7 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
         hard_warnings.append(f"{OFF_BUNDLE_WARNING} concept names: {bad_concepts}")
     if bad_encounters:
         hard_warnings.append(f"{OFF_BUNDLE_WARNING} encounter types: {bad_encounters}")
+    hard_warnings.extend(_check_grouped_reads(tree, spec))
     hard_warnings.extend(_check_answer_grounding(tree, spec))
     hard_warnings.extend(_check_builder_entity_key(arrow, spec))
 
@@ -139,6 +148,57 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
 
 def _lowered(names: list[str]) -> set[str]:
     return {n.casefold() for n in names if n}
+
+
+def _grouped_read_names(call: Any) -> tuple[str, str] | None:
+    """(question, group) for a grouped read with two literal names, else None."""
+    if _method_name(call) not in _GROUPED_READ_METHODS:
+        return None
+    args = getattr(call, "arguments", None) or []
+    if len(args) < 2 or not all(getattr(arg, "type", None) == "Literal" for arg in args[:2]):
+        return None
+    question, group = (getattr(arg, "value", None) for arg in args[:2])
+    if not isinstance(question, str) or not isinstance(group, str):
+        return None
+    return question, group
+
+
+def _check_grouped_reads(tree: Any, spec: RuleSpec) -> list[str]:
+    """Hard check on reads of questions inside a question group.
+
+    A `(question, group)` read must name a question group on the form and a
+    question inside it. When the rule is set on a field inside a question
+    group, a read whose concept name is worked out at runtime must pass the
+    group too, or Avni finds nothing.
+    """
+    warnings: list[str] = []
+    for call in _iter_call_expressions(tree):
+        names = _grouped_read_names(call)
+        if names is not None:
+            question, group = names
+            if _UUID_RE.match(question) or _UUID_RE.match(group):
+                continue
+            children = spec.question_group_children.get(group)
+            if children is None:
+                warnings.append(f"{OFF_BUNDLE_WARNING} question group {group!r}: no question group with that concept name on this form")
+            elif question not in children:
+                warnings.append(
+                    f"{OFF_BUNDLE_WARNING} concept name {question!r} in question group {group!r}: "
+                    f"the group holds {children}"
+                )
+            continue
+        if not spec.target_question_group:
+            continue
+        method = _method_name(call)
+        if method not in CONCEPT_ACCESSORS | _VALUE_IN_METHODS:
+            continue
+        args = getattr(call, "arguments", None) or []
+        if len(args) == 1 and getattr(args[0], "type", None) != "Literal":
+            warnings.append(
+                f"{QUESTION_GROUP_WARNING}: {method}(...) reads a name worked out when the rule runs, without the "
+                f"question group; this field is inside {spec.target_question_group!r}, so pass it as the second argument"
+            )
+    return warnings
 
 
 def _miscased_concept_names(tree: Any, spec: RuleSpec) -> dict[str, list[str]]:
@@ -247,6 +307,8 @@ def _collect_call_args(
         return
 
     if method in CONCEPT_ACCESSORS:
+        if _UUID_RE.match(value) or _grouped_read_names(call) is not None:
+            return
         concepts.add(value)
     elif method in _CURRENT_FORM_VALUE_METHODS and not _UUID_RE.match(value):
         concepts.add(value)

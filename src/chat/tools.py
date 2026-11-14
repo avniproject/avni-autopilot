@@ -701,6 +701,7 @@ def suggest_form_rule(
         available_programs=context["available_programs"],
         concept_answers=context.get("concept_answers", {}),
         question_names_by_concept=context.get("question_names_by_concept", {}),
+        question_group_children=context.get("question_group_children", {}),
     )
 
     result, ok, warnings = _generate_and_check(spec)
@@ -822,6 +823,8 @@ def suggest_form_element_rule(
         available_programs=context["available_programs"],
         concept_answers=context.get("concept_answers", {}),
         question_names_by_concept=context.get("question_names_by_concept", {}),
+        question_group_children=context.get("question_group_children", {}),
+        target_question_group=context.get("question_group_by_question", {}).get(field_name),
     )
 
     result, ok, warnings = _generate_and_check(spec)

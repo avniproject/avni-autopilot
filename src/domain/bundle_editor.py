@@ -852,6 +852,8 @@ def load_form_rule_context(
           "encounter_type": str | None,
           "available_concepts": list[str],
           "question_names_by_concept": dict[str, list[str]],
+          "question_group_children": dict[str, list[str]],
+          "question_group_by_question": dict[str, str],
           "available_encounter_types": list[str],
           "available_programs": list[str],
           "concept_answers": dict[str, list[str]],
@@ -860,8 +862,11 @@ def load_form_rule_context(
         which rules read values by; App Designer lets a question's name
         differ from its concept's. `question_names_by_concept` names the
         question for each concept whose name differs. Questions inside a
-        question group are left out: their values sit inside the group's
-        observation.
+        question group are left out of `available_concepts`: their values sit
+        inside the group's observation and are read with the group as the
+        second argument. `question_group_children` lists them by group
+        concept; `question_group_by_question` maps each such question's name
+        to its group concept.
         or None if no form with `form_name` exists in the bundle.
 
     Raises:
@@ -877,19 +882,31 @@ def load_form_rule_context(
             return None
         target_form = forms[selected]
 
+        elements = [
+            element
+            for group in (target_form.get("formElementGroups") or [])
+            for element in (group.get("formElements") or [])
+            if not element.get("voided") and _concept_name(element)
+        ]
+        group_concept_by_element_uuid = {element.get("uuid"): _concept_name(element) for element in elements}
+
         concepts: set[str] = set()
         question_names_by_concept: dict[str, list[str]] = {}
-        for group in (target_form.get("formElementGroups") or []):
-            for element in (group.get("formElements") or []):
-                if element.get("voided") or _is_in_question_group(element):
-                    continue
-                concept = _concept_name(element)
-                if not concept:
-                    continue
-                concepts.add(concept)
-                question = element.get("name")
-                if question and question != concept:
-                    question_names_by_concept.setdefault(concept, []).append(question)
+        question_group_children: dict[str, list[str]] = {}
+        question_group_by_question: dict[str, str] = {}
+        for element in elements:
+            concept = _concept_name(element)
+            question = element.get("name")
+            if question and question != concept:
+                question_names_by_concept.setdefault(concept, []).append(question)
+            if _is_in_question_group(element):
+                group_concept = group_concept_by_element_uuid.get(element["parentFormElementUuid"])
+                if group_concept:
+                    question_group_children.setdefault(group_concept, []).append(concept)
+                    if question:
+                        question_group_by_question[question] = group_concept
+                continue
+            concepts.add(concept)
 
         subject_names = indexes["subjectType"][0]
         program_names = indexes["program"][0]
@@ -909,6 +926,8 @@ def load_form_rule_context(
             "encounter_type": mapped.get("encounterType"),
             "available_concepts": sorted(concepts),
             "question_names_by_concept": question_names_by_concept,
+            "question_group_children": question_group_children,
+            "question_group_by_question": question_group_by_question,
             "available_encounter_types": sorted(encounter_names),
             "available_programs": sorted(program_names),
             "concept_answers": concept_answers,
