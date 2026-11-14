@@ -292,10 +292,15 @@ For EACH field listed in the user message, produce a self-contained JS IIFE:
 Return one item per field in `rules`, with `field_name` matching the field name exactly.
 
 Hard constraints:
-  1. `params.entity` MUST be read as `{entity_param}` in every IIFE.
+  1. `params.entity` MUST be read as `{entity_param}` in every IIFE and passed
+     to every `imports.rulesConfig` builder and `RuleCondition` under the key
+     `{entity_param}`, e.g.
+     `new imports.rulesConfig.FormElementStatusBuilder({{{entity_param}, formElement}})`.
+     EXAMPLES may come from other form types and use another key; never copy it.
   2. Each IIFE MUST return a `FormElementStatus` instance.
   3. Reference ONLY the helper methods listed under HELPERS.
-  4. Reference ONLY the concept names listed under AVAILABLE_CONCEPTS.
+  4. Reference ONLY the concept names listed under AVAILABLE_CONCEPTS, copied
+     exactly, including case: Avni matches concept names exactly.
   5. Reference ONLY the encounter-type names listed under AVAILABLE_ENCOUNTER_TYPES.
   6. When using `containsAnswerConceptName(...)` the string MUST match an exact
      entry under the relevant concept in CONCEPT_ANSWERS. Never use the user's

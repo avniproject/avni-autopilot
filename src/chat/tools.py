@@ -34,6 +34,7 @@ from domain.generators import unlinked_form_names
 from domain.rules.generator import RuleGenerator
 from domain.rules.prompts import entity_param_for_form_type
 from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
+from domain.rules.validator import OFF_BUNDLE_WARNING, WRONG_FORM_TYPE_WARNING
 from domain.rules.validator import validate_and_decide as _validate_and_decide
 from domain.spreadsheets import find_spreadsheets
 from pipeline import initial_state
@@ -913,26 +914,30 @@ TOOLS = [
 ]
 
 
-_WRONG_FORM_TYPE_WARNING = "wrong form type"
-_OFF_BUNDLE_WARNING = "off-bundle"
-
-
 def _generate_and_check(spec: RuleSpec) -> tuple[RuleResult, bool, list[str]]:
     """Generate a rule and validate it, regenerating once when the rule passes
     the form's record under another form type's key.
 
     That rejection means the generator copied the key from an example built
-    for another form type, which a second attempt told the reason fixes. A
-    rule that also reads a name not in the bundle is not regenerated: a retry
-    could swap in another field and suggest a rule the user did not ask for.
+    for another form type, which a second attempt told the reason fixes. The
+    second attempt reuses the examples retrieved for the user's own intent,
+    so the reason does not steer retrieval. A rule that also reads a name not
+    in the bundle is not regenerated: a retry could swap in another field and
+    suggest a rule the user did not ask for.
     """
     result = _rule_generator.generate(spec)
     ok, warnings = _validate_and_decide(result, spec)
     if ok or not _is_wrong_form_type_only(warnings):
         return result, ok, warnings
 
+    try:
+        context = _rule_generator.retrieve(spec)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"Not regenerating {spec.rule_kind.value} rule for {spec.form_name!r}: KB retrieve failed: {exc}")
+        return result, ok, warnings
+
     entity_param = entity_param_for_form_type(spec.form_type)
-    reasons = "; ".join(w for w in warnings if w.startswith(_WRONG_FORM_TYPE_WARNING))
+    reasons = "; ".join(w for w in warnings if w.startswith(WRONG_FORM_TYPE_WARNING))
     log.info(f"Regenerating {spec.rule_kind.value} rule for {spec.form_name!r}: {reasons}")
     retry_spec = spec.model_copy(update={
         "intent": (
@@ -940,13 +945,13 @@ def _generate_and_check(spec: RuleSpec) -> tuple[RuleResult, bool, list[str]]:
             f"Pass the form's record as `{entity_param}` to every rulesConfig builder and RuleCondition."
         ),
     })
-    result = _rule_generator.generate(retry_spec)
-    ok, warnings = _validate_and_decide(result, spec)
-    return result, ok, warnings
+    retry_result = _rule_generator.generate(retry_spec, context=context)
+    retry_ok, retry_warnings = _validate_and_decide(retry_result, spec)
+    return retry_result, retry_ok, retry_warnings
 
 
 def _is_wrong_form_type_only(warnings: list[str]) -> bool:
     return (
-        any(w.startswith(_WRONG_FORM_TYPE_WARNING) for w in warnings)
-        and not any(w.startswith(_OFF_BUNDLE_WARNING) for w in warnings)
+        any(w.startswith(WRONG_FORM_TYPE_WARNING) for w in warnings)
+        and not any(w.startswith(OFF_BUNDLE_WARNING) for w in warnings)
     )

@@ -22,6 +22,10 @@ from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
 
 log = logging.getLogger(__name__)
 
+# Leading words of hard warnings that callers branch on.
+OFF_BUNDLE_WARNING = "off-bundle"
+WRONG_FORM_TYPE_WARNING = "wrong form type"
+
 
 # ── Property keys whose Literal value is an encounter-type name ───────────────
 _ENCOUNTER_TYPE_PROPERTY_KEYS: frozenset[str] = frozenset({
@@ -115,9 +119,9 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
     # Hard warnings (grounding failures) — these block the write.
     hard_warnings: list[str] = []
     if bad_concepts:
-        hard_warnings.append(f"off-bundle concept names: {bad_concepts}")
+        hard_warnings.append(f"{OFF_BUNDLE_WARNING} concept names: {bad_concepts}")
     if bad_encounters:
-        hard_warnings.append(f"off-bundle encounter types: {bad_encounters}")
+        hard_warnings.append(f"{OFF_BUNDLE_WARNING} encounter types: {bad_encounters}")
     hard_warnings.extend(_check_answer_grounding(tree, spec))
     hard_warnings.extend(_check_builder_entity_key(arrow, spec))
 
@@ -272,7 +276,9 @@ def _check_answer_grounding(tree: Any, spec: RuleSpec) -> list[str]:
         for concept, options in spec.concept_answers.items()
     }
 
+    concepts_by_casefold = {concept.casefold(): concept for concept in spec.concept_answers}
     off_list: dict[str, set[str]] = {}
+    miscased: dict[str, str] = {}
     for call in _iter_call_expressions(tree):
         if _method_name(call) not in _CONTAINS_ANSWER_METHODS:
             continue
@@ -280,6 +286,9 @@ def _check_answer_grounding(tree: Any, spec: RuleSpec) -> list[str]:
         if concept is None or _UUID_RE.match(concept):
             continue
         valid = answers_by_concept.get(concept)
+        if valid is None and concept.casefold() in concepts_by_casefold:
+            miscased[concept] = concepts_by_casefold[concept.casefold()]
+            continue
         if valid is None:
             # Concept isn't in this rule's grounding scope — non-coded
             # concept, or out-of-scope form. Skip rather than reject.
@@ -290,11 +299,14 @@ def _check_answer_grounding(tree: Any, spec: RuleSpec) -> list[str]:
             if answer not in valid:
                 off_list.setdefault(concept, set()).add(answer)
 
-    warnings: list[str] = []
+    warnings: list[str] = [
+        f"{OFF_BUNDLE_WARNING} concept name {concept!r}: Avni matches names exactly, the bundle has {actual!r}"
+        for concept, actual in miscased.items()
+    ]
     for concept, bad in off_list.items():
         valid_listing = valid_listing_by_concept[concept]
         warnings.append(
-            f"off-bundle answer(s) {sorted(bad)} for concept {concept!r} — "
+            f"{OFF_BUNDLE_WARNING} answer(s) {sorted(bad)} for concept {concept!r} — "
             f"expected one of: {valid_listing}"
         )
     return warnings
@@ -646,7 +658,7 @@ def _check_builder_entity_key(arrow: Any, spec: RuleSpec) -> list[str]:
                     and _is_form_record(getattr(prop, "value", None), entity_variables)
                 ):
                     warnings.append(
-                        f"wrong form type in {class_name}: the form's record is "
+                        f"{WRONG_FORM_TYPE_WARNING} in {class_name}: the form's record is "
                         f"passed as {key!r}, but a {spec.form_type or 'subject'} "
                         f"form needs {expected_key!r}"
                     )

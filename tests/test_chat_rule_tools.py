@@ -51,11 +51,26 @@ def rule_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     return {"configurable": {"session": session}}
 
 
+_ORIGINAL_INTENT_EXAMPLES = object()
+
+
+@pytest.fixture(autouse=True)
+def _stub_retrieval(monkeypatch: pytest.MonkeyPatch) -> list:
+    retrieved_for = []
+
+    def retrieve(spec):
+        retrieved_for.append(spec)
+        return _ORIGINAL_INTENT_EXAMPLES
+
+    monkeypatch.setattr(tools._rule_generator, "retrieve", retrieve)
+    return retrieved_for
+
+
 def _stub_generator(monkeypatch: pytest.MonkeyPatch, js: str) -> None:
     monkeypatch.setattr(
         tools._rule_generator,
         "generate",
-        lambda spec: RuleResult(rule_kind=spec.rule_kind, js=js, confidence="high"),
+        lambda spec, context=None: RuleResult(rule_kind=spec.rule_kind, js=js, confidence="high"),
     )
 
 
@@ -106,8 +121,8 @@ def _stub_generator_sequence(monkeypatch: pytest.MonkeyPatch, *scripts: str) -> 
     specs = []
     remaining = list(scripts)
 
-    def generate(spec):
-        specs.append(spec)
+    def generate(spec, context=None):
+        specs.append((spec, context))
         return RuleResult(rule_kind=spec.rule_kind, js=remaining.pop(0), confidence="high")
 
     monkeypatch.setattr(tools._rule_generator, "generate", generate)
@@ -124,9 +139,38 @@ def test_rule_built_for_another_form_type_is_regenerated_once_with_the_reason(
     assert result["status"] == "suggested"
     assert result["js"] == _GENERAL_VISIT_JS
     assert len(specs) == 2
-    assert "wrong form type" in specs[1].intent
-    assert "`encounter`" in specs[1].intent
-    assert specs[1].intent.startswith(specs[0].intent)
+    (first, first_context), (retry, retry_context) = specs
+    assert "wrong form type" in retry.intent
+    assert "`encounter`" in retry.intent
+    assert retry.intent.startswith(first.intent)
+    assert first_context is None
+    assert retry_context is _ORIGINAL_INTENT_EXAMPLES
+
+
+def test_retry_reuses_examples_retrieved_for_the_users_own_intent(
+    monkeypatch: pytest.MonkeyPatch, rule_config: dict, _stub_retrieval: list,
+) -> None:
+    _stub_generator_sequence(monkeypatch, _WRONG_FORM_TYPE_JS, _GENERAL_VISIT_JS)
+
+    _field_rule(rule_config)
+
+    assert [spec.intent for spec in _stub_retrieval] == ["show only when 'Eggs needed' is Yes"]
+
+
+def test_rule_is_not_regenerated_when_examples_cannot_be_retrieved(
+    monkeypatch: pytest.MonkeyPatch, rule_config: dict,
+) -> None:
+    specs = _stub_generator_sequence(monkeypatch, _WRONG_FORM_TYPE_JS)
+
+    def failing_retrieve(spec):
+        raise RuntimeError("KB retrieval failed")
+
+    monkeypatch.setattr(tools._rule_generator, "retrieve", failing_retrieve)
+
+    result = _field_rule(rule_config)
+
+    assert result["status"] == "rejected"
+    assert len(specs) == 1
 
 
 def test_regenerated_rule_still_built_for_another_form_type_is_rejected(

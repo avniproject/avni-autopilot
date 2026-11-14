@@ -72,3 +72,9 @@ def test_registration_field_is_not_checked_against_the_current_form() -> None:
 def test_field_given_as_a_uuid_is_not_checked_against_names() -> None:
     ok, _ = check(_rule('valueInEncounter("514bcb8b-efc1-4eb3-96bd-4366d4d29874").defined.matches()'), _spec())
     assert ok is True
+
+
+def test_answer_check_flags_a_concept_from_another_form_written_in_another_case() -> None:
+    ok, warnings = check(_rule('valueInRegistration("qa visit coded").containsAnswerConceptName("QA Yes")'), _spec())
+    assert ok is False
+    assert "off-bundle concept name 'qa visit coded': Avni matches names exactly, the bundle has 'QA Visit Coded'" in warnings

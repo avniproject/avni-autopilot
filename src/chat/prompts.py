@@ -461,8 +461,8 @@ Behavior:
     checked rule with the change described in words.
   - Rules read a field's value by its concept name (`conceptName` in
     `list_bundle_fields`), which can differ from the question's name. Use
-    the concept name in the intent, and never offer to keep a name the
-    tool rejected — it would not work in Avni either.
+    the concept name in the intent, and never offer to send a name the
+    tool rejected again as if it would now be accepted.
   - The tool checks field names against the fields of the form the rule is
     for, and rejects a rule that reads a field it cannot find there. Never
     say the tool can use a field that is not on that form, or one that has

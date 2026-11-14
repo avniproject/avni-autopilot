@@ -110,6 +110,10 @@ class RuleGenerator:
         """
         return self._kb
 
+    def retrieve(self, spec: RuleSpec) -> RetrievedContext:
+        """Retrieve the helpers and examples a `generate` call for `spec` uses."""
+        return self._kb.retrieve(spec)
+
     def generate(
         self, spec: RuleSpec, context: RetrievedContext | None = None,
     ) -> RuleResult:
