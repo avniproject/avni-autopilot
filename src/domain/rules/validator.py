@@ -47,13 +47,17 @@ _VALUE_IN_METHODS: frozenset[str] = frozenset({
 _CURRENT_FORM_VALUE_METHODS: frozenset[str] = frozenset({
     "valueInEncounter",
 })
-# Accessors that take a question group's concept name as the second argument
-# and then read the question inside that group (openchs-models AbstractEncounter).
-_GROUPED_READ_METHODS: frozenset[str] = frozenset({
-    "findObservation",
-    "getObservationValue",
-    "getObservationReadableValue",
-})
+# Accessors that read a question inside a question group when given the
+# group's concept name, mapped to that argument's position (openchs-models
+# AbstractEncounter, Individual, ProgramEnrolment). The question is argument 0.
+_GROUPED_READ_PARENT_ARGUMENT: dict[str, int] = {
+    "findObservation": 1,
+    "getObservationValue": 1,
+    "getObservationReadableValue": 1,
+    "findLatestObservationFromPreviousEncounters": 2,
+    "findObservationInLastEncounter": 2,
+    "findObservationInEntireEnrolment": 3,
+}
 _CONTAINS_ANSWER_METHODS: frozenset[str] = frozenset({
     "containsAnswerConceptName",
     "containsAnyAnswerConceptName",
@@ -151,16 +155,31 @@ def _lowered(names: list[str]) -> set[str]:
 
 
 def _grouped_read_names(call: Any) -> tuple[str, str] | None:
-    """(question, group) for a grouped read with two literal names, else None."""
-    if _method_name(call) not in _GROUPED_READ_METHODS:
+    """(question, group) for a grouped read naming both as literals, else None."""
+    parent_position = _GROUPED_READ_PARENT_ARGUMENT.get(_method_name(call))
+    if parent_position is None:
         return None
     args = getattr(call, "arguments", None) or []
-    if len(args) < 2 or not all(getattr(arg, "type", None) == "Literal" for arg in args[:2]):
+    if len(args) <= parent_position:
         return None
-    question, group = (getattr(arg, "value", None) for arg in args[:2])
+    question, group = (
+        getattr(arg, "value", None) if getattr(arg, "type", None) == "Literal" else None
+        for arg in (args[0], args[parent_position])
+    )
     if not isinstance(question, str) or not isinstance(group, str):
         return None
     return question, group
+
+
+def _has_group_argument(call: Any) -> bool:
+    parent_position = _GROUPED_READ_PARENT_ARGUMENT.get(_method_name(call))
+    args = getattr(call, "arguments", None) or []
+    return parent_position is not None and len(args) > parent_position
+
+
+def _case_hint(name: str, candidates: list[str]) -> str:
+    matches = [candidate for candidate in candidates if candidate.casefold() == name.casefold()]
+    return f"; Avni matches names exactly, the bundle has {' or '.join(repr(m) for m in matches)}" if matches else ""
 
 
 def _check_grouped_reads(tree: Any, spec: RuleSpec) -> list[str]:
@@ -180,11 +199,14 @@ def _check_grouped_reads(tree: Any, spec: RuleSpec) -> list[str]:
                 continue
             children = spec.question_group_children.get(group)
             if children is None:
-                warnings.append(f"{OFF_BUNDLE_WARNING} question group {group!r}: no question group with that concept name on this form")
+                warnings.append(
+                    f"{OFF_BUNDLE_WARNING} question group {group!r}: no question group with that concept name "
+                    f"on this form{_case_hint(group, list(spec.question_group_children))}"
+                )
             elif question not in children:
                 warnings.append(
                     f"{OFF_BUNDLE_WARNING} concept name {question!r} in question group {group!r}: "
-                    f"the group holds {children}"
+                    f"the group holds {children}{_case_hint(question, children)}"
                 )
             continue
         if not spec.target_question_group:
@@ -193,11 +215,13 @@ def _check_grouped_reads(tree: Any, spec: RuleSpec) -> list[str]:
         if method not in CONCEPT_ACCESSORS | _VALUE_IN_METHODS:
             continue
         args = getattr(call, "arguments", None) or []
-        if len(args) == 1 and getattr(args[0], "type", None) != "Literal":
-            warnings.append(
-                f"{QUESTION_GROUP_WARNING}: {method}(...) reads a name worked out when the rule runs, without the "
-                f"question group; this field is inside {spec.target_question_group!r}, so pass it as the second argument"
-            )
+        if not args or getattr(args[0], "type", None) == "Literal" or _has_group_argument(call):
+            continue
+        warnings.append(
+            f"{QUESTION_GROUP_WARNING}: {method}(...) reads a name worked out when the rule runs without the "
+            f"question group; this field is inside {spec.target_question_group!r}, so read it with "
+            f"getObservationReadableValue(<name>, {spec.target_question_group!r}) on the form's record"
+        )
     return warnings
 
 

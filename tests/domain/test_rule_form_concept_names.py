@@ -229,7 +229,11 @@ def _bundle_with_question_group(root: Path) -> Path:
 
 
 def _group_spec(root: Path, *, kind: RuleKind = RuleKind.VALIDATION, target_field: str | None = None) -> RuleSpec:
-    context = load_form_rule_context(str(_bundle_with_question_group(root)), _FORM_NAME)
+    return _spec_for_bundle(_bundle_with_question_group(root), kind=kind, target_field=target_field)
+
+
+def _spec_for_bundle(bundle: Path, *, kind: RuleKind = RuleKind.VALIDATION, target_field: str | None = None) -> RuleSpec:
+    context = load_form_rule_context(str(bundle), _FORM_NAME)
     return RuleSpec(
         rule_kind=kind,
         intent="x",
@@ -238,7 +242,9 @@ def _group_spec(root: Path, *, kind: RuleKind = RuleKind.VALIDATION, target_fiel
         available_concepts=context["available_concepts"],
         concept_answers=context["concept_answers"],
         question_group_children=context["question_group_children"],
-        target_question_group=context["question_group_by_question"].get(target_field),
+        question_group_answers=context["question_group_answers"],
+        question_names_by_concept=context["question_names_by_concept"],
+        target_question_group=context["question_group_by_question"].get("Details", {}).get(target_field),
     )
 
 
@@ -260,7 +266,7 @@ def test_context_lists_question_group_children_by_group(tmp_path: Path) -> None:
     context = load_form_rule_context(str(_bundle_with_question_group(tmp_path)), _FORM_NAME)
 
     assert context["question_group_children"] == {"QA15CN Vitals": ["QA15CN Pulse", "QA15CN Temp"]}
-    assert context["question_group_by_question"] == {"Pulse rate": "QA15CN Vitals", "Temperature": "QA15CN Vitals"}
+    assert context["question_group_by_question"] == {"Details": {"Pulse rate": "QA15CN Vitals", "Temperature": "QA15CN Vitals"}}
     assert "QA15CN Pulse" not in context["available_concepts"]
 
 
@@ -310,7 +316,8 @@ def test_generator_is_told_how_to_read_question_group_children(tmp_path: Path) -
     prompt = build_user_prompt(_group_spec(tmp_path, kind=RuleKind.FORM_ELEMENT, target_field="Pulse rate"), helpers_text="", examples_text="")
 
     assert "QUESTION_GROUPS" in prompt
-    assert "- QA15CN Vitals: QA15CN Pulse, QA15CN Temp" in prompt
+    assert "encounter.getObservationReadableValue('<question concept>', '<group concept>')" in prompt
+    assert "- QA15CN Vitals:\n    - QA15CN Pulse  (question on the form: \"Pulse rate\")\n" in prompt
     assert "The field this rule is set on is inside the question group 'QA15CN Vitals'" in prompt
 
 
@@ -338,3 +345,74 @@ def test_pasted_working_rule_reading_a_group_question_with_its_group_is_suggeste
     )
 
     assert result["status"] == "suggested", result.get("warnings")
+
+
+
+def _add_group(bundle: Path, group: dict, children: list[dict]) -> Path:
+    form_path = bundle / "forms" / "child-visit.json"
+    form = json.loads(form_path.read_text(encoding="utf-8"))
+    form["formElementGroups"][0]["formElements"] += [group, *children]
+    form_path.write_text(json.dumps(form), encoding="utf-8")
+    return bundle
+
+
+def test_questions_of_a_repeatable_group_are_not_offered_since_the_grouped_read_cannot_take_a_list(tmp_path: Path) -> None:
+    bundle = _add_group(
+        _write_bundle(tmp_path),
+        {**_element("Medicines", {"uuid": "c-meds", "name": "QA15CN Medicines", "dataType": "QuestionGroup"}),
+         "keyValues": [{"key": "repeatable", "value": True}]},
+        [{**_element("Medicine", {"uuid": "c-med", "name": "QA15CN Medicine", "dataType": "Text"}), "parentFormElementUuid": "fe-Medicines"}],
+    )
+    spec = _spec_for_bundle(bundle)
+
+    assert spec.question_group_children == {}
+    ok, warnings = check(_validation_rule('encounter.getObservationReadableValue("QA15CN Medicine", "QA15CN Medicines")'), spec)
+    assert ok is False
+    assert any("question group 'QA15CN Medicines'" in w for w in warnings)
+
+
+def test_coded_group_question_answers_are_given_to_the_generator(tmp_path: Path) -> None:
+    bundle = _add_group(
+        _bundle_with_question_group(tmp_path),
+        _element("Symptoms", {"uuid": "c-symptoms", "name": "QA15CN Symptoms", "dataType": "QuestionGroup"}),
+        [{**_element("Fever?", {"uuid": "c-fever", "name": "QA15CN Fever", "dataType": "Coded", "answers": [{"name": "Yes"}, {"name": "No"}]}),
+          "parentFormElementUuid": "fe-Symptoms"}],
+    )
+
+    prompt = build_user_prompt(_spec_for_bundle(bundle), helpers_text="", examples_text="")
+
+    assert '    - QA15CN Fever  (question on the form: "Fever?"; answers: Yes, No)' in prompt
+
+
+def test_grouped_read_with_a_miscased_group_or_question_names_the_bundle_spelling(tmp_path: Path) -> None:
+    spec = _group_spec(tmp_path)
+    _, group_warnings = check(_validation_rule('encounter.getObservationReadableValue("QA15CN Pulse", "qa15cn vitals")'), spec)
+    _, question_warnings = check(_validation_rule('encounter.getObservationReadableValue("qa15cn pulse", "QA15CN Vitals")'), spec)
+
+    assert any(w.endswith("Avni matches names exactly, the bundle has 'QA15CN Vitals'") for w in group_warnings)
+    assert any(w.endswith("Avni matches names exactly, the bundle has 'QA15CN Pulse'") for w in question_warnings)
+
+
+def test_enrolment_wide_read_with_the_group_as_a_later_argument_is_accepted(tmp_path: Path) -> None:
+    ok, warnings = check(
+        _validation_rule('params.entity.programEnrolment.findLatestObservationFromPreviousEncounters("QA15CN Pulse", encounter, "QA15CN Vitals")'),
+        _group_spec(tmp_path),
+    )
+    assert ok is True, warnings
+
+
+def test_rule_on_a_group_field_reading_with_value_in_encounter_is_told_to_use_the_grouped_read(tmp_path: Path) -> None:
+    spec = _group_spec(tmp_path, kind=RuleKind.FORM_ELEMENT, target_field="Pulse rate")
+    js = _rule('valueInEncounter(formElement.concept.name, "QA15CN Vitals").is.lessThan(7)').js
+
+    ok, warnings = check(RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js=js, confidence="high"), spec)
+
+    assert ok is False
+    assert any("read it with getObservationReadableValue(<name>, 'QA15CN Vitals')" in w for w in warnings)
+
+
+def test_group_of_the_rules_field_is_found_by_page_and_question(tmp_path: Path) -> None:
+    context = load_form_rule_context(str(_bundle_with_question_group(tmp_path)), _FORM_NAME)
+
+    assert context["question_group_by_question"].get("Details", {}).get("Pulse rate") == "QA15CN Vitals"
+    assert context["question_group_by_question"].get("Other page", {}).get("Pulse rate") is None

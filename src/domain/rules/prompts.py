@@ -248,14 +248,22 @@ def _format_question_groups(spec: RuleSpec) -> str:
     """QUESTION_GROUPS block, or an empty string when the form has none."""
     if not spec.question_group_children:
         return ""
+    entity_param = entity_param_for_form_type(spec.form_type)
     lines = [
         "",
         "QUESTION_GROUPS",
-        "Questions inside a question group. Read each one with its group's concept name as the",
-        "second argument, e.g. getObservationReadableValue('<question>', '<group>'); a read",
+        "Questions inside a question group, by group concept name. Read each one on the form's",
+        f"record with its group's concept name as the second argument, e.g.",
+        f"{entity_param}.getObservationReadableValue('<question concept>', '<group concept>'); a read",
         "without the group, valueInEncounter('<question>') or a loop over observations finds nothing.",
     ]
-    lines += [f"- {group}: {', '.join(children)}" for group, children in spec.question_group_children.items()]
+    for group, children in spec.question_group_children.items():
+        lines.append(f"- {group}:")
+        for child in children:
+            details = [f'question on the form: "{q}"' for q in spec.question_names_by_concept.get(child, [])]
+            if spec.question_group_answers.get(child):
+                details.append(f"answers: {', '.join(spec.question_group_answers[child])}")
+            lines.append(f"    - {child}" + (f"  ({'; '.join(details)})" if details else ""))
     if spec.target_question_group:
         lines.append(
             f"The field this rule is set on is inside the question group {spec.target_question_group!r}: "
