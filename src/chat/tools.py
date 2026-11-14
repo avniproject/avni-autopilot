@@ -510,7 +510,9 @@ def list_bundle_fields(
     Each form has its `uuid` and `usedIn`: one entry per form mapping with
     the `subjectType`, `program` and `encounterType` the form is used for
     (keys absent when they do not apply). Each field has its form element
-    `uuid` and its `conceptUuid`. Use these to answer which subject type,
+    `uuid`, its `conceptName` and its `conceptUuid`. Rules read a field's
+    value by `conceptName`, which can differ from the question `name`. Use
+    these to answer which subject type,
     program or visit type a form belongs to, to match an ID the user pastes
     to its field, and to fill in IDs yourself — never ask the user for an
     ID or a mapping that is in this output.
@@ -696,6 +698,7 @@ def suggest_form_rule(
         available_encounter_types=context["available_encounter_types"],
         available_programs=context["available_programs"],
         concept_answers=context.get("concept_answers", {}),
+        question_names_by_concept=context.get("question_names_by_concept", {}),
     )
 
     result = _rule_generator.generate(spec)
@@ -814,6 +817,7 @@ def suggest_form_element_rule(
         available_encounter_types=context["available_encounter_types"],
         available_programs=context["available_programs"],
         concept_answers=context.get("concept_answers", {}),
+        question_names_by_concept=context.get("question_names_by_concept", {}),
     )
 
     result = _rule_generator.generate(spec)

@@ -737,6 +737,7 @@ def list_bundle_fields(bundle_path: str) -> dict:
                     field: dict = {
                         "name": e.get("name"),
                         "uuid": e.get("uuid"),
+                        "conceptName": concept.get("name"),
                         "conceptUuid": concept.get("uuid"),
                         "dataType": concept.get("dataType"),
                         "voided": bool(e.get("voided", False)),
@@ -850,9 +851,15 @@ def load_form_rule_context(
           "program": str | None,
           "encounter_type": str | None,
           "available_concepts": list[str],
+          "question_names_by_concept": dict[str, list[str]],
           "available_encounter_types": list[str],
           "available_programs": list[str],
+          "concept_answers": dict[str, list[str]],
         }
+        `available_concepts` and the `concept_answers` keys are concept names,
+        which rules read values by; App Designer lets a question's name
+        differ from its concept's. `question_names_by_concept` names the
+        question for each concept whose name differs.
         or None if no form with `form_name` exists in the bundle.
 
     Raises:
@@ -868,12 +875,19 @@ def load_form_rule_context(
             return None
         target_form = forms[selected]
 
-        concepts = sorted({
-            _concept_name(element)
-            for group in (target_form.get("formElementGroups") or [])
-            for element in (group.get("formElements") or [])
-            if _concept_name(element) and not element.get("voided")
-        })
+        concepts: set[str] = set()
+        question_names_by_concept: dict[str, list[str]] = {}
+        for group in (target_form.get("formElementGroups") or []):
+            for element in (group.get("formElements") or []):
+                if element.get("voided"):
+                    continue
+                concept = _concept_name(element)
+                if not concept:
+                    continue
+                concepts.add(concept)
+                question = element.get("name")
+                if question and question != concept:
+                    question_names_by_concept.setdefault(concept, []).append(question)
 
         subject_names = indexes["subjectType"][0]
         program_names = indexes["program"][0]
@@ -891,7 +905,8 @@ def load_form_rule_context(
             "subject_type": mapped.get("subjectType"),
             "program": mapped.get("program"),
             "encounter_type": mapped.get("encounterType"),
-            "available_concepts": concepts,
+            "available_concepts": sorted(concepts),
+            "question_names_by_concept": question_names_by_concept,
             "available_encounter_types": sorted(encounter_names),
             "available_programs": sorted(program_names),
             "concept_answers": concept_answers,
@@ -908,13 +923,9 @@ _PROGRAM_FORM_TYPES_FOR_GROUNDING: frozenset[str] = frozenset({
 
 
 def _concept_name(element: dict) -> str | None:
-    """Name rules use to read the element's value.
-
-    Avni looks observations up by concept name, which App Designer lets
-    differ from the question name. The question name is the fallback for
-    elements exported without a concept name.
-    """
-    return (element.get("concept") or {}).get("name") or element.get("name")
+    """Concept name of a form element: the name Avni reads its value by,
+    which App Designer lets differ from the question name."""
+    return (element.get("concept") or {}).get("name")
 
 
 def _collect_concept_answers_for(

@@ -190,7 +190,7 @@ def build_user_prompt(
     return _USER_PROMPT_TEMPLATE.format(
         intent=spec.intent,
         rule_kind=spec.rule_kind.value,
-        available_concepts=_format_list(spec.available_concepts),
+        available_concepts=_format_available_concepts(spec),
         available_encounter_types=_format_list(spec.available_encounter_types),
         available_programs=_format_list(spec.available_programs),
         concept_answers=_format_concept_answers(spec.concept_answers),
@@ -233,6 +233,23 @@ def _format_list(items: list[str]) -> str:
     if not items:
         return "(empty)"
     return "\n".join(f"- {item}" for item in items)
+
+
+def _format_available_concepts(spec: RuleSpec) -> str:
+    """List the concept names a rule may read, naming the question on the
+    form wherever it differs, so an intent that quotes the question maps to
+    the concept name the rule must use."""
+    if not spec.available_concepts:
+        return "(empty)"
+    lines = []
+    for concept in spec.available_concepts:
+        questions = spec.question_names_by_concept.get(concept)
+        if questions:
+            asked_as = ", ".join(f'"{question}"' for question in questions)
+            lines.append(f'- {concept}  (question on the form: {asked_as}; the rule must use "{concept}")')
+        else:
+            lines.append(f"- {concept}")
+    return "\n".join(lines)
 
 
 def _format_concept_answers(answers: dict[str, list[str]]) -> str:
@@ -342,7 +359,7 @@ def build_field_batch_user_prompt(
 
     return _FIELD_BATCH_USER_PROMPT_TEMPLATE.format(
         fields_block=fields_block,
-        available_concepts=_format_list(shared_spec.available_concepts),
+        available_concepts=_format_available_concepts(shared_spec),
         available_encounter_types=_format_list(shared_spec.available_encounter_types),
         available_programs=_format_list(shared_spec.available_programs),
         concept_answers=_format_concept_answers(shared_spec.concept_answers),

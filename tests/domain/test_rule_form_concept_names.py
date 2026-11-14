@@ -17,7 +17,8 @@ from types import SimpleNamespace
 import pytest
 
 import chat.tools as tools
-from domain.bundle_editor import load_form_rule_context
+from domain.bundle_editor import list_bundle_fields, load_form_rule_context
+from domain.rules.prompts import build_user_prompt
 from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
 from domain.rules.validator import check
 
@@ -48,7 +49,7 @@ def _write_bundle(root: Path) -> Path:
                     "dataType": "Coded",
                     "answers": [{"name": "Yes"}, {"name": "No"}],
                 }),
-                _element("Remarks", {"uuid": "c-remarks", "dataType": "Text"}),
+                _element("Remarks", {"uuid": "c-remarks", "name": "Remarks", "dataType": "Text"}),
             ],
         }],
     }
@@ -80,6 +81,7 @@ def _spec_from_bundle(root: Path) -> RuleSpec:
         form_type=context["form_type"],
         available_concepts=context["available_concepts"],
         concept_answers=context["concept_answers"],
+        question_names_by_concept=context["question_names_by_concept"],
     )
 
 
@@ -102,6 +104,33 @@ def test_context_lists_concept_names_not_question_names(tmp_path: Path) -> None:
 
     assert context["available_concepts"] == ["Child sick", "Remarks", "Weight"]
     assert context["concept_answers"] == {"Child sick": ["Yes", "No"]}
+    assert context["question_names_by_concept"] == {
+        "Weight": ["Weight of the child (kg)"],
+        "Child sick": ["Is the child sick today?"],
+    }
+
+
+def test_generator_is_told_which_question_each_concept_is_asked_as(tmp_path: Path) -> None:
+    prompt = build_user_prompt(_spec_from_bundle(tmp_path), helpers_text="", examples_text="")
+
+    assert '- Weight  (question on the form: "Weight of the child (kg)"; the rule must use "Weight")' in prompt
+    assert '- Child sick  (question on the form: "Is the child sick today?"; the rule must use "Child sick")' in prompt
+    assert "\n- Remarks\n" in prompt
+
+
+def test_bundle_fields_show_each_question_with_its_concept_name(tmp_path: Path) -> None:
+    fields = [
+        (field["name"], field["conceptName"])
+        for form in list_bundle_fields(str(_write_bundle(tmp_path)))["forms"]
+        for section in form["sections"]
+        for field in section["fields"]
+    ]
+
+    assert fields == [
+        ("Weight of the child (kg)", "Weight"),
+        ("Is the child sick today?", "Child sick"),
+        ("Remarks", "Remarks"),
+    ]
 
 
 def test_rule_reading_the_concept_name_is_accepted(tmp_path: Path) -> None:

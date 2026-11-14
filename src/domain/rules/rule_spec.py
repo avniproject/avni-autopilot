@@ -54,6 +54,10 @@ class RuleSpec(BaseModel):
     # registration + enrolment when applicable). Empty when no coded fields
     # are in scope. See CONCEPT_ANSWER_GROUNDING_SDD.md §5.
     concept_answers: dict[str, list[str]] = Field(default_factory=dict)
+    # Question names on the target form, keyed by concept name, for questions
+    # whose name differs from their concept's. Rules read values by concept
+    # name; the user's intent usually quotes the question name.
+    question_names_by_concept: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class RuleResult(BaseModel):
