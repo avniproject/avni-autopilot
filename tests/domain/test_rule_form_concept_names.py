@@ -550,16 +550,18 @@ def test_value_in_entire_enrolment_with_a_group_name_in_its_encounter_argument_i
     ok, warnings = check(RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js=js, confidence="high"), _group_spec(tmp_path, kind=RuleKind.FORM_ELEMENT))
 
     assert ok is False
-    assert any("the second argument of valueInEntireEnrolment is the current encounter, not a question group" in w for w in warnings)
+    assert any("argument 2 of valueInEntireEnrolment is the current encounter, not a name" in w for w in warnings)
 
 
-def test_suggested_grouped_read_puts_the_group_where_the_method_takes_it(tmp_path: Path) -> None:
-    _, warnings = check(
-        _validation_rule('params.entity.programEnrolment.findObservationInLastEncounter("QA15CN Pulse", encounter)'),
-        _group_spec(tmp_path),
+def test_group_hints_name_a_working_read_and_are_given_only_for_the_current_form(tmp_path: Path) -> None:
+    spec = _group_spec(tmp_path)
+    _, current_form = check(_rule('valueInEncounter("QA15CN Pulse").greaterThan(3)').model_copy(update={"rule_kind": RuleKind.VALIDATION}), spec)
+    _, previous_visit = check(
+        _validation_rule('params.entity.programEnrolment.findObservationInLastEncounter("QA15CN Pulse", encounter)'), spec,
     )
 
-    assert any("e.g. getObservationReadableValue('QA15CN Pulse', 'QA15CN Vitals')" in w for w in warnings), warnings
+    assert any("e.g. valueInEncounter('QA15CN Pulse', 'QA15CN Vitals')" in w for w in current_form), current_form
+    assert not any("getObservationReadableValue('QA15CN Pulse', 'QA15CN Vitals')" in w for w in previous_visit), previous_visit
 
 
 def test_concept_name_at_a_later_argument_is_read_from_its_own_position(tmp_path: Path) -> None:
@@ -651,3 +653,109 @@ def test_comparing_a_repeatable_group_question_by_concept_name_gives_the_repeata
     _, warnings = check(_comparison_rule('encounter.observations.some(obs => obs.concept.name === "QA15CN Kid")'), _spec_for_bundle(bundle))
 
     assert any(w.startswith("question group read: 'QA15CN Kids' is a repeatable question group") for w in warnings)
+
+
+def _repeatable_bundle(root: Path) -> Path:
+    return _add_group(
+        _coded_group_bundle(root),
+        {**_element("Children", {"uuid": "c-children", "name": "QA15CN Children", "dataType": "QuestionGroup"}),
+         "keyValues": [{"key": "repeatable", "value": True}]},
+        [{**_element("Child age", {"uuid": "c-child-age", "name": "QA15CN Child age", "dataType": "Numeric"}),
+          "parentFormElementUuid": "fe-Children"}],
+    )
+
+
+def test_iterating_repeatable_group_entries_by_concept_name_is_accepted(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_repeatable_bundle(tmp_path))
+    rule = (
+        '(encounter.getObservationValue("QA15CN Children") || [])'
+        '.some(entry => entry.groupObservations.some(o => o.concept.name === "QA15CN Child age" && o.getValue() > 5))'
+    )
+
+    ok, warnings = check(_comparison_rule(rule), spec)
+
+    assert ok is True, warnings
+
+
+def test_scanning_top_level_observations_for_a_group_question_is_rejected_even_if_the_group_is_named_elsewhere(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path))
+    setup = 'const group = "QA15CN Vitals";'
+
+    ok, warnings = check(_comparison_rule('encounter.observations.some(o => o.concept.name === "QA15CN Pulse")', setup=setup), spec)
+
+    assert ok is False
+    assert any("'QA15CN Pulse', a question inside the question group 'QA15CN Vitals'" in w for w in warnings)
+
+
+def test_encounter_arguments_given_a_name_are_rejected(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path))
+
+    for read in (
+        'params.entity.programEnrolment.getObservationReadableValueInEntireEnrolment("Child sick", "QA15CN Vitals")',
+        'params.entity.programEnrolment.findLatestObservationInEntireEnrolment("Weight", "QA15CN Vitals")',
+    ):
+        ok, warnings = check(_comparison_rule(f'{read} === "Yes"'), spec)
+        assert ok is False
+        assert any("argument 2 of" in w and "is the current encounter, not a name" in w for w in warnings), (read, warnings)
+
+
+def test_group_argument_ignored_by_an_individual_found_through_params_entity_or_an_alias(tmp_path: Path) -> None:
+    registration = _spec_for_bundle(_coded_group_bundle(tmp_path)).model_copy(update={"form_type": "IndividualProfile"})
+    visit = registration.model_copy(update={"form_type": "Encounter"})
+
+    _, via_entity = check(_comparison_rule('params.entity.findLatestObservationFromPreviousEncounters("Weight", params.entity, "QA15CN Vitals")'), registration)
+    _, via_alias = check(
+        _comparison_rule('subject.findObservationInLastEncounter("Weight", encounter, "QA15CN Vitals")', setup="const subject = encounter.programEnrolment.individual;"),
+        visit,
+    )
+
+    assert any("ignores a question group argument" in w for w in via_entity), via_entity
+    assert any("ignores a question group argument" in w for w in via_alias), via_alias
+
+
+def test_value_in_enrolment_names_and_answers_are_checked_for_case(tmp_path: Path) -> None:
+    js = _rule('valueInEnrolment("child sick").containsAnswerConceptName("yes")').js
+
+    ok, warnings = check(RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js=js, confidence="high"), _spec_for_bundle(_coded_group_bundle(tmp_path), kind=RuleKind.FORM_ELEMENT))
+
+    assert ok is False
+    assert any("Avni matches names exactly, the bundle has 'Child sick'" in w for w in warnings)
+
+
+def test_answer_argument_of_previous_encounter_value_search_is_checked(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path))
+
+    ok, warnings = check(_comparison_rule('params.entity.programEnrolment.findLatestPreviousEncounterWithValueForConcept(encounter, "Child sick", "yes")'), spec)
+
+    assert ok is False
+    assert any("off-bundle answer(s) ['yes'] for concept 'Child sick'" in w for w in warnings)
+
+
+def test_find_observation_names_and_its_readable_value_are_checked(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path))
+
+    _, miscased = check(_comparison_rule('encounter.findObservation("weight")'), spec)
+    _, wrong_answer = check(_comparison_rule('encounter.findObservation("Child sick").getReadableValue() === "yes"'), spec)
+
+    assert any("Avni matches names exactly, the bundle has 'Weight'" in w for w in miscased), miscased
+    assert any("off-bundle answer(s) ['yes'] for concept 'Child sick'" in w for w in wrong_answer), wrong_answer
+
+
+def test_reads_of_other_forms_are_not_held_to_this_forms_question_groups(tmp_path: Path) -> None:
+    js = _rule('valueInEnrolment("QA15CN Pulse").greaterThan(5)').js
+
+    ok, warnings = check(RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js=js, confidence="high"), _group_spec(tmp_path, kind=RuleKind.FORM_ELEMENT))
+
+    assert ok is True, warnings
+
+
+def test_enrolment_only_method_called_on_an_individual_is_rejected(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path))
+
+    ok, warnings = check(
+        _comparison_rule('encounter.programEnrolment.individual.findLatestPreviousEncounterWithObservationForConcept(encounter, "Weight")'),
+        spec,
+    )
+
+    assert ok is False
+    assert any("findLatestPreviousEncounterWithObservationForConcept exists only on the programme enrolment" in w for w in warnings)
