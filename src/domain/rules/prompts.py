@@ -200,6 +200,7 @@ def build_user_prompt(
     """
     return _USER_PROMPT_TEMPLATE.format(
         intent=spec.intent,
+        target_field=_format_target_field(spec),
         rule_kind=spec.rule_kind.value,
         available_concepts=_format_available_concepts(spec),
         available_encounter_types=_format_list(spec.available_encounter_types),
@@ -214,7 +215,7 @@ def build_user_prompt(
 _USER_PROMPT_TEMPLATE = """\
 INTENT
 {intent}
-
+{target_field}
 RULE_KIND
 {rule_kind}
 
@@ -272,10 +273,32 @@ def _format_question_groups(spec: RuleSpec) -> str:
             "Repeatable groups (their questions cannot be read by name; if the intent needs one, return an "
             "empty `js` and say why): " + ", ".join(spec.repeatable_question_groups)
         )
+    return "\n".join(lines) + "\n"
+
+
+def _format_target_field(spec: RuleSpec) -> str:
+    """TARGET_FIELD block naming the field a form-element rule is set on, or
+    an empty string when it is not known."""
+    if not spec.target_field_concept:
+        return ""
+    entity_param = entity_param_for_form_type(spec.form_type)
+    concept = spec.target_field_concept
+    question = spec.target_field_question or concept
+    lines = [
+        "",
+        "TARGET_FIELD",
+        f'The rule is set on the question "{question}" (concept {concept!r}). "This field" in the intent means',
+        "this question; use no other question for it.",
+    ]
     if spec.target_question_group:
+        group = spec.target_question_group
         lines.append(
-            f"The field this rule is set on is inside the question group {spec.target_question_group!r}: "
-            f"read its value with {spec.target_question_group!r} as the second argument."
+            f"It is inside the question group {group!r}: read its value as "
+            f"{entity_param}.getObservationReadableValue({concept!r}, {group!r}) or valueInEncounter({concept!r}, {group!r})."
+        )
+    else:
+        lines.append(
+            f"Read its value as {entity_param}.getObservationReadableValue({concept!r}) or valueInEncounter({concept!r})."
         )
     return "\n".join(lines) + "\n"
 

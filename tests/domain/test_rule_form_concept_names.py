@@ -246,6 +246,8 @@ def _spec_for_bundle(bundle: Path, *, kind: RuleKind = RuleKind.VALIDATION, targ
         repeatable_question_groups=context["repeatable_question_groups"],
         question_names_by_concept=context["question_names_by_concept"],
         target_question_group=context["question_group_by_question"].get("Details", {}).get(target_field),
+        target_field_question=target_field,
+        target_field_concept=context["concept_by_question"].get("Details", {}).get(target_field),
     )
 
 
@@ -322,7 +324,12 @@ def test_generator_is_told_how_to_read_question_group_children(tmp_path: Path) -
     assert "QUESTION_GROUPS" in prompt
     assert "encounter.getObservationReadableValue('<question concept>', '<group concept>')" in prompt
     assert "- QA15CN Vitals:\n    - QA15CN Pulse  (question on the form: \"Pulse rate\")\n" in prompt
-    assert "The field this rule is set on is inside the question group 'QA15CN Vitals'" in prompt
+    assert (
+        'TARGET_FIELD\nThe rule is set on the question "Pulse rate" (concept \'QA15CN Pulse\'). "This field" in the intent means\n'
+        "this question; use no other question for it.\n"
+        "It is inside the question group 'QA15CN Vitals': read its value as "
+        "encounter.getObservationReadableValue('QA15CN Pulse', 'QA15CN Vitals') or valueInEncounter('QA15CN Pulse', 'QA15CN Vitals')."
+    ) in prompt
 
 
 def test_prompt_has_no_question_group_block_for_a_form_without_groups(tmp_path: Path) -> None:
@@ -759,3 +766,42 @@ def test_enrolment_only_method_called_on_an_individual_is_rejected(tmp_path: Pat
 
     assert ok is False
     assert any("findLatestPreviousEncounterWithObservationForConcept exists only on the programme enrolment" in w for w in warnings)
+
+
+
+def test_field_rule_on_a_group_question_tells_the_generator_which_question_this_field_is(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    bundle = _bundle_with_question_group(tmp_path)
+    form_path = bundle / "forms" / "child-visit.json"
+    form = json.loads(form_path.read_text(encoding="utf-8"))
+    form["formElementGroups"][0]["formElements"].append(
+        {**_element("Blood pressure", {"uuid": "c-bp", "name": "QA15CN BP", "dataType": "Numeric"}), "parentFormElementUuid": "fe-Vitals"}
+    )
+    form_path.write_text(json.dumps(form), encoding="utf-8")
+    prompts = []
+
+    def generate(spec, context=None):
+        prompts.append(build_user_prompt(spec, helpers_text="", examples_text=""))
+        js = _rule('valueInEncounter("Weight").is.lessThan(7)').js
+        return RuleResult(rule_kind=spec.rule_kind, js=js, confidence="high")
+
+    monkeypatch.setattr(tools._rule_generator, "retrieve", lambda spec: object())
+    monkeypatch.setattr(tools._rule_generator, "generate", generate)
+    config = {"configurable": {"session": SimpleNamespace(bundle_path=bundle)}}
+
+    tools.suggest_form_element_rule.func(
+        form_name=_FORM_NAME, page_name="Details", field_name="Pulse rate",
+        intent="show this field only when 'Weight' is below 7", config=config,
+    )
+
+    assert 'The rule is set on the question "Pulse rate" (concept \'QA15CN Pulse\')' in prompts[0]
+    assert "getObservationReadableValue('QA15CN Pulse', 'QA15CN Vitals')" in prompts[0]
+    assert "TARGET_FIELD" in prompts[0] and "'QA15CN BP')" not in prompts[0].split("TARGET_FIELD")[1].split("RULE_KIND")[0]
+
+
+def test_prompt_has_no_target_field_block_without_a_target_field(tmp_path: Path) -> None:
+    prompt = build_user_prompt(_spec_from_bundle(tmp_path), helpers_text="", examples_text="")
+
+    assert "TARGET_FIELD" not in prompt
+    assert "INTENT\nshow only when the condition holds\n\nRULE_KIND" in prompt

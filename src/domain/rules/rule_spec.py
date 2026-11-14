@@ -72,6 +72,10 @@ class RuleSpec(BaseModel):
     # Group concept name when the field a form-element rule is set on sits
     # inside a question group.
     target_question_group: str | None = None
+    # Question name and concept name of the field a form-element rule is set
+    # on, so "this field" in the intent resolves to it.
+    target_field_question: str | None = None
+    target_field_concept: str | None = None
 
 
 class RuleResult(BaseModel):

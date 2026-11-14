@@ -829,6 +829,8 @@ def suggest_form_element_rule(
         question_group_answers=context.get("question_group_answers", {}),
         repeatable_question_groups=context.get("repeatable_question_groups", {}),
         target_question_group=context.get("question_group_by_question", {}).get(page_name, {}).get(field_name),
+        target_field_question=field_name,
+        target_field_concept=context.get("concept_by_question", {}).get(page_name, {}).get(field_name),
     )
 
 

@@ -856,6 +856,7 @@ def load_form_rule_context(
           "question_group_answers": dict[str, list[str]],
           "repeatable_question_groups": dict[str, list[str]],
           "question_group_by_question": dict[str, dict[str, str]],
+          "concept_by_question": dict[str, dict[str, str]],
           "available_encounter_types": list[str],
           "available_programs": list[str],
           "concept_answers": dict[str, list[str]],
@@ -871,7 +872,8 @@ def load_form_rule_context(
         holds a list, which that read cannot take), `question_group_answers`
         holds coded answers of those questions, `repeatable_question_groups`
         lists repeatable groups with their questions, and `question_group_by_question`
-        maps page name -> question name -> group concept.
+        maps page name -> question name -> group concept; `concept_by_question`
+        maps page name -> question name -> concept name.
         or None if no form with `form_name` exists in the bundle.
 
     Raises:
@@ -912,9 +914,12 @@ def load_form_rule_context(
         question_group_children: dict[str, list[str]] = {}
         question_group_answers: dict[str, list[str]] = {}
         question_group_by_question: dict[str, dict[str, str]] = {}
+        concept_by_question: dict[str, dict[str, str]] = {}
         for page, element in elements:
             concept = _concept_name(element)
             question = element.get("name")
+            if question:
+                concept_by_question.setdefault(page, {})[question] = concept
             if question and question != concept:
                 question_names_by_concept.setdefault(concept, []).append(question)
             if _is_in_question_group(element):
@@ -954,6 +959,7 @@ def load_form_rule_context(
             "question_group_answers": question_group_answers,
             "repeatable_question_groups": repeatable_question_groups,
             "question_group_by_question": question_group_by_question,
+            "concept_by_question": concept_by_question,
             "available_encounter_types": sorted(encounter_names),
             "available_programs": sorted(program_names),
             "concept_answers": concept_answers,
