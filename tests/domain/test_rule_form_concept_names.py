@@ -1,0 +1,152 @@
+"""Unit tests for the field names a rule on an organisation's own form may use.
+
+App Designer lets a question's name differ from its concept's name, and Avni
+reads observations by concept name. `load_form_rule_context` must therefore
+offer, and `validator.check` must accept, concept names.
+
+Usage:
+    uv run --extra dev pytest tests/domain/test_rule_form_concept_names.py
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+import chat.tools as tools
+from domain.bundle_editor import load_form_rule_context
+from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
+from domain.rules.validator import check
+
+_FORM_NAME = "Child Visit"
+_SUBJECT_UUID = "subject-child"
+_ENCOUNTER_TYPE_UUID = "encounter-child-visit"
+
+
+def _element(question: str, concept: dict | None) -> dict:
+    element = {"uuid": f"fe-{question}", "name": question}
+    if concept is not None:
+        element["concept"] = concept
+    return element
+
+
+def _write_bundle(root: Path) -> Path:
+    form = {
+        "uuid": "form-child-visit",
+        "name": _FORM_NAME,
+        "formType": "Encounter",
+        "formElementGroups": [{
+            "name": "Details",
+            "formElements": [
+                _element("Weight of the child (kg)", {"uuid": "c-weight", "name": "Weight", "dataType": "Numeric"}),
+                _element("Is the child sick today?", {
+                    "uuid": "c-sick",
+                    "name": "Child sick",
+                    "dataType": "Coded",
+                    "answers": [{"name": "Yes"}, {"name": "No"}],
+                }),
+                _element("Remarks", {"uuid": "c-remarks", "dataType": "Text"}),
+            ],
+        }],
+    }
+    files = {
+        "subjectTypes.json": [{"uuid": _SUBJECT_UUID, "name": "Child"}],
+        "programs.json": [],
+        "encounterTypes.json": [{"uuid": _ENCOUNTER_TYPE_UUID, "name": "Child Visit"}],
+        "formMappings.json": [{
+            "uuid": "mapping-child-visit",
+            "formUUID": form["uuid"],
+            "subjectTypeUUID": _SUBJECT_UUID,
+            "encounterTypeUUID": _ENCOUNTER_TYPE_UUID,
+        }],
+    }
+    for name, content in files.items():
+        (root / name).write_text(json.dumps(content), encoding="utf-8")
+    forms_dir = root / "forms"
+    forms_dir.mkdir()
+    (forms_dir / "child-visit.json").write_text(json.dumps(form), encoding="utf-8")
+    return root
+
+
+def _spec_from_bundle(root: Path) -> RuleSpec:
+    context = load_form_rule_context(str(_write_bundle(root)), _FORM_NAME)
+    return RuleSpec(
+        rule_kind=RuleKind.FORM_ELEMENT,
+        intent="show only when the condition holds",
+        form_name=_FORM_NAME,
+        form_type=context["form_type"],
+        available_concepts=context["available_concepts"],
+        concept_answers=context["concept_answers"],
+    )
+
+
+def _rule(condition: str) -> RuleResult:
+    js = f"""\
+"use strict";
+({{params, imports}}) => {{
+  const encounter = params.entity;
+  const formElement = params.formElement;
+  const statusBuilder = new imports.rulesConfig.FormElementStatusBuilder({{encounter, formElement}});
+  statusBuilder.show().when.{condition};
+  return statusBuilder.build();
+}};
+"""
+    return RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js=js, confidence="high")
+
+
+def test_context_lists_concept_names_not_question_names(tmp_path: Path) -> None:
+    context = load_form_rule_context(str(_write_bundle(tmp_path)), _FORM_NAME)
+
+    assert context["available_concepts"] == ["Child sick", "Remarks", "Weight"]
+    assert context["concept_answers"] == {"Child sick": ["Yes", "No"]}
+
+
+def test_rule_reading_the_concept_name_is_accepted(tmp_path: Path) -> None:
+    ok, warnings = check(_rule('valueInEncounter("Weight").is.lessThan(7)'), _spec_from_bundle(tmp_path))
+
+    assert ok is True
+    assert warnings == []
+
+
+def test_rule_reading_the_question_name_is_rejected_since_avni_finds_no_value_under_it(tmp_path: Path) -> None:
+    ok, warnings = check(_rule('valueInEncounter("Weight of the child (kg)").is.lessThan(7)'), _spec_from_bundle(tmp_path))
+
+    assert ok is False
+    assert "off-bundle concept names: ['Weight of the child (kg)']" in warnings
+
+
+def test_answers_of_a_coded_question_are_checked_under_its_concept_name(tmp_path: Path) -> None:
+    spec = _spec_from_bundle(tmp_path)
+
+    ok, _ = check(_rule('valueInEncounter("Child sick").containsAnswerConceptName("Yes")'), spec)
+    off_list_ok, off_list_warnings = check(_rule('valueInEncounter("Child sick").containsAnswerConceptName("Maybe")'), spec)
+
+    assert ok is True
+    assert off_list_ok is False
+    assert any("off-bundle answer(s) ['Maybe'] for concept 'Child sick'" in warning for warning in off_list_warnings)
+
+
+def test_pasted_organisation_rule_asked_for_a_small_change_is_suggested(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    pasted_rule_with_change = _rule('valueInEncounter("Weight").is.lessThan(8)').js
+    monkeypatch.setattr(
+        tools._rule_generator,
+        "generate",
+        lambda spec: RuleResult(rule_kind=spec.rule_kind, js=pasted_rule_with_change, confidence="high"),
+    )
+    config = {"configurable": {"session": SimpleNamespace(bundle_path=_write_bundle(tmp_path))}}
+
+    result = tools.suggest_form_element_rule.func(
+        form_name=_FORM_NAME,
+        page_name="Details",
+        field_name="Remarks",
+        intent="same rule, but show Remarks when Weight is below 8 instead of 7",
+        config=config,
+    )
+
+    assert result["status"] == "suggested", result.get("warnings")
+    assert result["js"] == pasted_rule_with_change

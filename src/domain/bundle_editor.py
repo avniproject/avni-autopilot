@@ -869,10 +869,10 @@ def load_form_rule_context(
         target_form = forms[selected]
 
         concepts = sorted({
-            element.get("name")
+            _concept_name(element)
             for group in (target_form.get("formElementGroups") or [])
             for element in (group.get("formElements") or [])
-            if element.get("name") and not element.get("voided")
+            if _concept_name(element) and not element.get("voided")
         })
 
         subject_names = indexes["subjectType"][0]
@@ -905,6 +905,16 @@ _PROGRAM_FORM_TYPES_FOR_GROUNDING: frozenset[str] = frozenset({
     "ProgramEnrolment", "ProgramExit",
     "ProgramEncounter", "ProgramEncounterCancellation",
 })
+
+
+def _concept_name(element: dict) -> str | None:
+    """Name rules use to read the element's value.
+
+    Avni looks observations up by concept name, which App Designer lets
+    differ from the question name. The question name is the fallback for
+    elements exported without a concept name.
+    """
+    return (element.get("concept") or {}).get("name") or element.get("name")
 
 
 def _collect_concept_answers_for(
@@ -966,7 +976,7 @@ def _collect_concept_answers_for(
                 concept = element.get("concept") or {}
                 if concept.get("dataType") != "Coded":
                     continue
-                name = element.get("name") or concept.get("name")
+                name = _concept_name(element)
                 if not name or name in scope:
                     continue
                 options = [
