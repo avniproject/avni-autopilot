@@ -65,6 +65,10 @@ class RuleSpec(BaseModel):
     question_group_children: dict[str, list[str]] = Field(default_factory=dict)
     # Coded answers of those questions, keyed by the question's concept name.
     question_group_answers: dict[str, list[str]] = Field(default_factory=dict)
+    # Repeatable question groups on the target form (group concept -> question
+    # concepts). Their observation holds a list of groups; the rule tools do
+    # not read their questions.
+    repeatable_question_groups: dict[str, list[str]] = Field(default_factory=dict)
     # Group concept name when the field a form-element rule is set on sits
     # inside a question group.
     target_question_group: str | None = None

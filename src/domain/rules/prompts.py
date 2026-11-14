@@ -134,6 +134,9 @@ Hard constraints:
      the user's informal phrasing verbatim — look up the right answer
      string. Example: if the user says "supporting family" and the concept's
      answers include "can support my family", use "can support my family".
+     When comparing a coded answer as text (`=== '<answer>'`), read it with
+     `getObservationReadableValue(...)` (`getObservationValue` returns the
+     answer's UUID) and use the exact answer name.
   7. A RuleCondition or StatusBuilder chain is evaluated from the right:
      each `.and` / `.or` / `.not` applies to the whole rest of the chain, so
      `A.and.B.or.C.and.D` means A && (B || (C && D)). Never mix `.and` and
@@ -246,16 +249,16 @@ def _format_list(items: list[str]) -> str:
 
 def _format_question_groups(spec: RuleSpec) -> str:
     """QUESTION_GROUPS block, or an empty string when the form has none."""
-    if not spec.question_group_children:
+    if not spec.question_group_children and not spec.repeatable_question_groups:
         return ""
     entity_param = entity_param_for_form_type(spec.form_type)
     lines = [
         "",
         "QUESTION_GROUPS",
-        "Questions inside a question group, by group concept name. Read each one on the form's",
-        f"record with its group's concept name as the second argument, e.g.",
-        f"{entity_param}.getObservationReadableValue('<question concept>', '<group concept>'); a read",
-        "without the group, valueInEncounter('<question>') or a loop over observations finds nothing.",
+        "Questions inside a question group, by group concept name. Read each one with its group's",
+        f"concept name as well: {entity_param}.getObservationReadableValue('<question concept>', '<group concept>'),",
+        "or in a RuleCondition valueInEncounter('<question concept>', '<group concept>'). A read without",
+        "the group, or a loop over observations comparing concept names, finds nothing.",
     ]
     for group, children in spec.question_group_children.items():
         lines.append(f"- {group}:")
@@ -264,6 +267,11 @@ def _format_question_groups(spec: RuleSpec) -> str:
             if spec.question_group_answers.get(child):
                 details.append(f"answers: {', '.join(spec.question_group_answers[child])}")
             lines.append(f"    - {child}" + (f"  ({'; '.join(details)})" if details else ""))
+    if spec.repeatable_question_groups:
+        lines.append(
+            "Repeatable groups (their questions cannot be read by name; if the intent needs one, return an "
+            "empty `js` and say why): " + ", ".join(spec.repeatable_question_groups)
+        )
     if spec.target_question_group:
         lines.append(
             f"The field this rule is set on is inside the question group {spec.target_question_group!r}: "

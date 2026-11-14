@@ -57,7 +57,26 @@ _GROUPED_READ_PARENT_ARGUMENT: dict[str, int] = {
     "findLatestObservationFromPreviousEncounters": 2,
     "findObservationInLastEncounter": 2,
     "findObservationInEntireEnrolment": 3,
+    # rules-config RuleCondition passes the group on to findObservation.
+    "valueInEncounter": 1,
+    "valueInRegistration": 1,
+    "valueInEnrolment": 1,
+    "valueInEntireEnrolment": 1,
+    "valueInLastEncounter": 2,
 }
+# Accessors returning a coded answer's name, and ones returning the stored
+# value (a coded answer's UUID) — openchs-models Observation.getReadableValue
+# vs getValue.
+_READABLE_VALUE_METHODS: frozenset[str] = frozenset({
+    "getObservationReadableValue",
+    "getObservationReadableValueInEntireEnrolment",
+    "findCancelEncounterObservationReadableValue",
+})
+_RAW_VALUE_METHODS: frozenset[str] = frozenset({
+    "getObservationValue",
+    "findObservationValueInEntireEnrolment",
+})
+_EQUALITY_OPERATORS: frozenset[str] = frozenset({"===", "==", "!==", "!="})
 _CONTAINS_ANSWER_METHODS: frozenset[str] = frozenset({
     "containsAnswerConceptName",
     "containsAnyAnswerConceptName",
@@ -118,11 +137,15 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
 
     available_concepts = {name for name in spec.available_concepts if name}
     available_encounters = _lowered(spec.available_encounter_types)
-    miscased = _miscased_concept_names(tree, spec)
+    group_warnings, group_names = _check_grouped_reads(tree, spec)
+    miscased = {
+        name: spellings for name, spellings in _miscased_concept_names(tree, spec).items()
+        if name not in group_names
+    }
 
     bad_concepts = sorted(
         name for name in referenced_concepts
-        if name not in available_concepts and name not in miscased
+        if name not in available_concepts and name not in miscased and name not in group_names
     )
     bad_encounters = sorted(
         name for name in referenced_encounter_types
@@ -139,7 +162,8 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
         hard_warnings.append(f"{OFF_BUNDLE_WARNING} concept names: {bad_concepts}")
     if bad_encounters:
         hard_warnings.append(f"{OFF_BUNDLE_WARNING} encounter types: {bad_encounters}")
-    hard_warnings.extend(_check_grouped_reads(tree, spec))
+    hard_warnings.extend(group_warnings)
+    hard_warnings.extend(_check_text_comparisons(tree, spec))
     hard_warnings.extend(_check_answer_grounding(tree, spec))
     hard_warnings.extend(_check_builder_entity_key(arrow, spec))
 
@@ -171,58 +195,253 @@ def _grouped_read_names(call: Any) -> tuple[str, str] | None:
     return question, group
 
 
-def _has_group_argument(call: Any) -> bool:
-    parent_position = _GROUPED_READ_PARENT_ARGUMENT.get(_method_name(call))
-    args = getattr(call, "arguments", None) or []
-    return parent_position is not None and len(args) > parent_position
-
-
 def _case_hint(name: str, candidates: list[str]) -> str:
     matches = [candidate for candidate in candidates if candidate.casefold() == name.casefold()]
     return f"; Avni matches names exactly, the bundle has {' or '.join(repr(m) for m in matches)}" if matches else ""
 
 
-def _check_grouped_reads(tree: Any, spec: RuleSpec) -> list[str]:
-    """Hard check on reads of questions inside a question group.
+def _literal_string(node: Any) -> str | None:
+    value = getattr(node, "value", None) if getattr(node, "type", None) == "Literal" else None
+    return value if isinstance(value, str) else None
 
-    A `(question, group)` read must name a question group on the form and a
-    question inside it. When the rule is set on a field inside a question
-    group, a read whose concept name is worked out at runtime must pass the
-    group too, or Avni finds nothing.
+
+def _group_of(question: str, groups: dict[str, list[str]]) -> tuple[str, str] | None:
+    """(group, bundle spelling of the question) when `question` is a question
+    of one of `groups`, matching case-insensitively."""
+    for group, children in groups.items():
+        for child in children:
+            if child.casefold() == question.casefold():
+                return group, child
+    return None
+
+
+def _check_grouped_reads(tree: Any, spec: RuleSpec) -> tuple[list[str], set[str]]:
+    """Hard checks on reads of questions inside question groups.
+
+    - A read naming a group must name a non-repeatable group on the form, and
+      a literal question must be one of that group's questions.
+    - A question of a group read without its group finds nothing in Avni.
+    - Questions of a repeatable group cannot be read by name.
+    - When the rule is set on a field inside a group, a read of a name worked
+      out at runtime must pass that same group.
+
+    Returns the warnings and the concept names they cover, so the plain
+    off-bundle check does not report them again.
     """
     warnings: list[str] = []
+    handled: set[str] = set()
+    target = spec.target_question_group
     for call in _iter_call_expressions(tree):
-        names = _grouped_read_names(call)
-        if names is not None:
-            question, group = names
-            if _UUID_RE.match(question) or _UUID_RE.match(group):
+        method = _method_name(call)
+        if method not in CONCEPT_ACCESSORS | _VALUE_IN_METHODS | set(_GROUPED_READ_PARENT_ARGUMENT):
+            continue
+        args = getattr(call, "arguments", None) or []
+        if not args:
+            continue
+        question = _literal_string(args[0])
+        if question is not None and _UUID_RE.match(question):
+            continue
+        parent_position = _GROUPED_READ_PARENT_ARGUMENT.get(method)
+        has_group = parent_position is not None and len(args) > parent_position
+        group = _literal_string(args[parent_position]) if has_group else None
+
+        if has_group and group is not None and not _UUID_RE.match(group):
+            if question is not None:
+                handled.add(question)
+            if group in spec.repeatable_question_groups:
+                warnings.append(repeatable_group_warning(group))
                 continue
             children = spec.question_group_children.get(group)
             if children is None:
                 warnings.append(
                     f"{OFF_BUNDLE_WARNING} question group {group!r}: no question group with that concept name "
-                    f"on this form{_case_hint(group, list(spec.question_group_children))}"
+                    f"on this form{_case_hint(group, [*spec.question_group_children, *spec.repeatable_question_groups])}"
                 )
-            elif question not in children:
+            elif question is not None and question not in children:
                 warnings.append(
                     f"{OFF_BUNDLE_WARNING} concept name {question!r} in question group {group!r}: "
                     f"the group holds {children}{_case_hint(question, children)}"
                 )
+            elif question is None and target and group != target:
+                warnings.append(
+                    f"{QUESTION_GROUP_WARNING}: {method}(...) reads this field with the group {group!r}, "
+                    f"but the field is inside {target!r}"
+                )
             continue
-        if not spec.target_question_group:
+
+        if question is not None and not has_group:
+            repeatable = _group_of(question, spec.repeatable_question_groups)
+            grouped = _group_of(question, spec.question_group_children)
+            if repeatable is not None:
+                handled.add(question)
+                warnings.append(repeatable_group_warning(repeatable[0]))
+            elif grouped is not None and question not in spec.available_concepts:
+                handled.add(question)
+                group_name, spelling = grouped
+                reason = (
+                    f"{QUESTION_GROUP_WARNING}: {question!r} is a question inside the question group {group_name!r}; "
+                    f"read it with the group, e.g. {method}({spelling!r}, {group_name!r})"
+                )
+                if parent_position is None:
+                    reason = (
+                        f"{QUESTION_GROUP_WARNING}: {question!r} is a question inside the question group "
+                        f"{group_name!r}; {method} cannot take the group, read it with "
+                        f"getObservationReadableValue({spelling!r}, {group_name!r})"
+                    )
+                warnings.append(reason)
             continue
-        method = _method_name(call)
-        if method not in CONCEPT_ACCESSORS | _VALUE_IN_METHODS:
+
+        if question is None and target and not has_group:
+            warnings.append(
+                f"{QUESTION_GROUP_WARNING}: {method}(...) reads a name worked out when the rule runs without the "
+                f"question group; this field is inside {target!r}, so read it with "
+                f"getObservationReadableValue(<name>, {target!r}) on the form's record"
+            )
+    return warnings, handled
+
+
+def _check_text_comparisons(tree: Any, spec: RuleSpec) -> list[str]:
+    """Hard checks on names compared as text with `===`, `==`, `!==`, `!=`.
+
+    - `<x>.concept.name === '<name>'`: the name must be a question on the
+      form, spelled exactly; a question inside a question group is not a
+      top-level observation, so comparing it is only accepted when the rule
+      names its group.
+    - A read of a coded question (directly, or through a variable holding it)
+      compared to text must use the answer's exact name, and must read the
+      readable value: the stored value of a coded answer is its UUID.
+    """
+    answers = _answers_by_concept(spec)
+    answers_casefold = {concept.casefold(): concept for concept in answers}
+    group_children = {child: group for group, children in spec.question_group_children.items() for child in children}
+    top_level = set(spec.available_concepts) | set(spec.concept_answers)
+    known = top_level | set(group_children)
+    literals_in_rule = {
+        value for node in _iter_nodes(tree)
+        if (value := _literal_string(node)) is not None
+    }
+    bindings = _value_read_bindings(tree)
+
+    warnings: list[str] = []
+    for node in _iter_nodes(tree):
+        if getattr(node, "type", None) != "BinaryExpression" or getattr(node, "operator", None) not in _EQUALITY_OPERATORS:
             continue
-        args = getattr(call, "arguments", None) or []
-        if not args or getattr(args[0], "type", None) == "Literal" or _has_group_argument(call):
-            continue
-        warnings.append(
-            f"{QUESTION_GROUP_WARNING}: {method}(...) reads a name worked out when the rule runs without the "
-            f"question group; this field is inside {spec.target_question_group!r}, so read it with "
-            f"getObservationReadableValue(<name>, {spec.target_question_group!r}) on the form's record"
-        )
+        for read_side, text_side in ((node.left, node.right), (node.right, node.left)):
+            text = _literal_string(text_side)
+            if text is None or _UUID_RE.match(text):
+                continue
+            if _is_concept_name(read_side):
+                warnings.extend(_concept_name_comparison_warnings(text, top_level, known, group_children, literals_in_rule))
+                continue
+            read = _value_read(read_side, bindings)
+            if read is None:
+                continue
+            method, question = read
+            concept = question if question in answers else answers_casefold.get(question.casefold())
+            if concept is None:
+                continue
+            if method in _RAW_VALUE_METHODS:
+                warnings.append(
+                    f"{OFF_BUNDLE_WARNING} answer comparison: {method}({question!r}) returns the coded answer's "
+                    f"UUID, so comparing it with {text!r} is never true; compare "
+                    f"getObservationReadableValue({question!r}) with an answer name"
+                )
+            elif text not in answers[concept]:
+                warnings.append(
+                    f"{OFF_BUNDLE_WARNING} answer(s) [{text!r}] for concept {concept!r} — expected one of: "
+                    f"{answers[concept]}{_case_hint(text, answers[concept])}"
+                )
     return warnings
+
+
+def _concept_name_comparison_warnings(
+    text: str, top_level: set[str], known: set[str], group_children: dict[str, str], literals_in_rule: set[str],
+) -> list[str]:
+    if text in top_level:
+        return []
+    if text in group_children:
+        group = group_children[text]
+        if group in literals_in_rule:
+            return []
+        return [
+            f"{QUESTION_GROUP_WARNING}: compares a concept name with {text!r}, a question inside the question "
+            f"group {group!r}; it is not a top-level observation, read it with "
+            f"getObservationReadableValue({text!r}, {group!r})"
+        ]
+    hint = _case_hint(text, sorted(known))
+    if hint:
+        return [f"{OFF_BUNDLE_WARNING} concept name {text!r} in a comparison{hint}"]
+    return [f"{OFF_BUNDLE_WARNING} concept names: [{text!r}] (compared with a concept name)"]
+
+
+def _is_concept_name(node: Any) -> bool:
+    """`<x>.concept.name`."""
+    if getattr(node, "type", None) != "MemberExpression" or getattr(node, "computed", False):
+        return False
+    prop = getattr(node, "property", None)
+    owner = getattr(node, "object", None)
+    return (
+        getattr(prop, "name", None) == "name"
+        and getattr(owner, "type", None) == "MemberExpression"
+        and not getattr(owner, "computed", False)
+        and getattr(getattr(owner, "property", None), "name", None) == "concept"
+    )
+
+
+def _value_read(node: Any, bindings: dict[str, tuple[str, str]]) -> tuple[str, str] | None:
+    """(method, question) when `node` reads a question's value by a literal
+    name, directly or through a variable bound to such a read."""
+    if getattr(node, "type", None) == "Identifier":
+        return bindings.get(getattr(node, "name", None))
+    if getattr(node, "type", None) != "CallExpression":
+        return None
+    method = _method_name(node)
+    if method not in _READABLE_VALUE_METHODS | _RAW_VALUE_METHODS:
+        return None
+    args = getattr(node, "arguments", None) or []
+    question = _literal_string(args[0]) if args else None
+    return (method, question) if question is not None else None
+
+
+def _value_read_bindings(tree: Any) -> dict[str, tuple[str, str]]:
+    bindings: dict[str, tuple[str, str]] = {}
+    for node in _iter_nodes(tree):
+        if getattr(node, "type", None) != "VariableDeclarator":
+            continue
+        name = getattr(getattr(node, "id", None), "name", None)
+        read = _value_read(getattr(node, "init", None), {})
+        if name and read is not None:
+            bindings[name] = read
+    return bindings
+
+
+def _iter_nodes(node: Any):
+    """Yield every node of the AST."""
+    if isinstance(node, list):
+        for child in node:
+            yield from _iter_nodes(child)
+        return
+    if getattr(node, "type", None) is None:
+        return
+    yield node
+    for key, child in vars(node).items():
+        if key == "type":
+            continue
+        if isinstance(child, list) or hasattr(child, "type"):
+            yield from _iter_nodes(child)
+
+
+def _answers_by_concept(spec: RuleSpec) -> dict[str, list[str]]:
+    """Coded answers of every question a rule can read: the form, its sibling
+    forms and the questions inside question groups."""
+    return {**spec.question_group_answers, **spec.concept_answers}
+
+
+def repeatable_group_warning(group: str) -> str:
+    return (
+        f"{QUESTION_GROUP_WARNING}: {group!r} is a repeatable question group; it holds a list of entries, "
+        f"so its questions cannot be read by name and the rule tools do not support rules on them"
+    )
 
 
 def _miscased_concept_names(tree: Any, spec: RuleSpec) -> dict[str, list[str]]:
@@ -335,7 +554,8 @@ def _collect_call_args(
             return
         concepts.add(value)
     elif method in _CURRENT_FORM_VALUE_METHODS and not _UUID_RE.match(value):
-        concepts.add(value)
+        if _grouped_read_names(call) is None:
+            concepts.add(value)
     elif method in ENCOUNTER_TYPE_ACCESSORS:
         encounter_types.add(value)
 
@@ -378,22 +598,23 @@ def _check_answer_grounding(tree: Any, spec: RuleSpec) -> list[str]:
     `spec.concept_answers[concept]`, matching case exactly as Avni does.
     Skips UUID-shaped args (the rule API accepts both names and UUIDs; we
     only validate names).
-    No-op when `spec.concept_answers` is empty.
+    No-op when no coded question is in scope.
     """
-    if not spec.concept_answers:
+    all_answers = _answers_by_concept(spec)
+    if not all_answers:
         return []
 
     answers_by_concept: dict[str, set[str]] = {
         concept: set(options)
-        for concept, options in spec.concept_answers.items()
+        for concept, options in all_answers.items()
     }
     valid_listing_by_concept: dict[str, list[str]] = {
         concept: list(options)
-        for concept, options in spec.concept_answers.items()
+        for concept, options in all_answers.items()
     }
 
     concepts_by_casefold: dict[str, list[str]] = {}
-    for concept in spec.concept_answers:
+    for concept in all_answers:
         concepts_by_casefold.setdefault(concept.casefold(), []).append(concept)
     off_list: dict[str, set[str]] = {}
     for call in _iter_call_expressions(tree):

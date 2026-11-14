@@ -243,6 +243,7 @@ def _spec_for_bundle(bundle: Path, *, kind: RuleKind = RuleKind.VALIDATION, targ
         concept_answers=context["concept_answers"],
         question_group_children=context["question_group_children"],
         question_group_answers=context["question_group_answers"],
+        repeatable_question_groups=context["repeatable_question_groups"],
         question_names_by_concept=context["question_names_by_concept"],
         target_question_group=context["question_group_by_question"].get("Details", {}).get(target_field),
     )
@@ -278,7 +279,10 @@ def test_question_read_with_its_group_is_accepted(tmp_path: Path) -> None:
 def test_question_read_without_its_group_is_rejected(tmp_path: Path) -> None:
     ok, warnings = check(_validation_rule('encounter.getObservationReadableValue("QA15CN Pulse")'), _group_spec(tmp_path))
     assert ok is False
-    assert "off-bundle concept names: ['QA15CN Pulse']" in warnings
+    assert warnings == [
+        "question group read: 'QA15CN Pulse' is a question inside the question group 'QA15CN Vitals'; "
+        "read it with the group, e.g. getObservationReadableValue('QA15CN Pulse', 'QA15CN Vitals')"
+    ]
 
 
 def test_question_read_with_another_group_or_a_question_not_in_it_is_rejected(tmp_path: Path) -> None:
@@ -366,9 +370,16 @@ def test_questions_of_a_repeatable_group_are_not_offered_since_the_grouped_read_
     spec = _spec_for_bundle(bundle)
 
     assert spec.question_group_children == {}
-    ok, warnings = check(_validation_rule('encounter.getObservationReadableValue("QA15CN Medicine", "QA15CN Medicines")'), spec)
-    assert ok is False
-    assert any("question group 'QA15CN Medicines'" in w for w in warnings)
+    assert spec.repeatable_question_groups == {"QA15CN Medicines": ["QA15CN Medicine"]}
+    repeatable = "question group read: 'QA15CN Medicines' is a repeatable question group"
+    for read in (
+        'encounter.getObservationReadableValue("QA15CN Medicine", "QA15CN Medicines")',
+        'encounter.getObservationReadableValue("QA15CN Medicine")',
+    ):
+        ok, warnings = check(_validation_rule(read), spec)
+        assert ok is False
+        assert any(w.startswith(repeatable) for w in warnings), warnings
+        assert not any("no question group" in w or "off-bundle concept names" in w for w in warnings), warnings
 
 
 def test_coded_group_question_answers_are_given_to_the_generator(tmp_path: Path) -> None:
@@ -401,9 +412,33 @@ def test_enrolment_wide_read_with_the_group_as_a_later_argument_is_accepted(tmp_
     assert ok is True, warnings
 
 
-def test_rule_on_a_group_field_reading_with_value_in_encounter_is_told_to_use_the_grouped_read(tmp_path: Path) -> None:
+def test_rule_on_a_group_field_reading_with_value_in_encounter_and_its_group_is_accepted(tmp_path: Path) -> None:
     spec = _group_spec(tmp_path, kind=RuleKind.FORM_ELEMENT, target_field="Pulse rate")
     js = _rule('valueInEncounter(formElement.concept.name, "QA15CN Vitals").is.lessThan(7)').js
+
+    ok, warnings = check(RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js=js, confidence="high"), spec)
+
+    assert ok is True, warnings
+
+
+def test_rule_on_a_group_field_naming_another_group_is_rejected(tmp_path: Path) -> None:
+    bundle = _add_group(
+        _bundle_with_question_group(tmp_path),
+        _element("Symptoms", {"uuid": "c-symptoms", "name": "QA15CN Symptoms", "dataType": "QuestionGroup"}),
+        [{**_element("Fever?", {"uuid": "c-fever", "name": "QA15CN Fever", "dataType": "Text"}), "parentFormElementUuid": "fe-Symptoms"}],
+    )
+    spec = _spec_for_bundle(bundle, kind=RuleKind.FORM_ELEMENT, target_field="Pulse rate")
+    js = _rule('valueInEncounter(formElement.concept.name, "QA15CN Symptoms").is.lessThan(7)').js
+
+    ok, warnings = check(RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js=js, confidence="high"), spec)
+
+    assert ok is False
+    assert any("reads this field with the group 'QA15CN Symptoms', but the field is inside 'QA15CN Vitals'" in w for w in warnings)
+
+
+def test_rule_on_a_group_field_reading_with_value_in_encounter_without_its_group_is_rejected(tmp_path: Path) -> None:
+    spec = _group_spec(tmp_path, kind=RuleKind.FORM_ELEMENT, target_field="Pulse rate")
+    js = _rule('valueInEncounter(formElement.concept.name).is.lessThan(7)').js
 
     ok, warnings = check(RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js=js, confidence="high"), spec)
 
@@ -416,3 +451,95 @@ def test_group_of_the_rules_field_is_found_by_page_and_question(tmp_path: Path) 
 
     assert context["question_group_by_question"].get("Details", {}).get("Pulse rate") == "QA15CN Vitals"
     assert context["question_group_by_question"].get("Other page", {}).get("Pulse rate") is None
+
+
+
+def _coded_group_bundle(root: Path) -> Path:
+    return _add_group(
+        _bundle_with_question_group(root),
+        _element("Pulse check", {"uuid": "c-pulse-check", "name": "QA15CN PulseCheck", "dataType": "QuestionGroup"}),
+        [{**_element("Is pulse regular?", {"uuid": "c-pulse-reg", "name": "QA15CN PulseReg", "dataType": "Coded",
+                                          "answers": [{"name": "Yes"}, {"name": "No"}]}),
+          "parentFormElementUuid": "fe-Pulse check"}],
+    )
+
+
+def test_show_hide_rule_reading_a_coded_group_question_with_value_in_encounter_and_its_group_is_accepted(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path), kind=RuleKind.FORM_ELEMENT)
+
+    ok, warnings = check(_rule('valueInEncounter("QA15CN PulseReg", "QA15CN PulseCheck").containsAnswerConceptName("No")'), spec)
+    off_list_ok, off_list_warnings = check(_rule('valueInEncounter("QA15CN PulseReg", "QA15CN PulseCheck").containsAnswerConceptName("no")'), spec)
+
+    assert ok is True, warnings
+    assert off_list_ok is False
+    assert any("off-bundle answer(s) ['no'] for concept 'QA15CN PulseReg'" in w for w in off_list_warnings)
+
+
+def test_repeatable_group_field_rule_is_rejected_by_the_tool_with_the_reason_before_generating(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    bundle = _add_group(
+        _write_bundle(tmp_path),
+        {**_element("Kids", {"uuid": "c-kids", "name": "QA15CN Kids", "dataType": "QuestionGroup"}),
+         "keyValues": [{"key": "repeatable", "value": "true"}]},
+        [{**_element("Kid name", {"uuid": "c-kid", "name": "QA15CN Kid", "dataType": "Text"}), "parentFormElementUuid": "fe-Kids"}],
+    )
+    calls = []
+    monkeypatch.setattr(tools._rule_generator, "retrieve", lambda spec: calls.append(spec))
+    monkeypatch.setattr(tools._rule_generator, "generate", lambda spec, context=None: calls.append(spec))
+    config = {"configurable": {"session": SimpleNamespace(bundle_path=bundle)}}
+
+    result = tools.suggest_form_element_rule.func(
+        form_name=_FORM_NAME, page_name="Details", field_name="Kid name", intent="hide when empty", config=config,
+    )
+
+    assert result["status"] == "rejected"
+    assert result["warnings"] == [
+        "question group read: 'QA15CN Kids' is a repeatable question group; it holds a list of entries, so its "
+        "questions cannot be read by name and the rule tools do not support rules on them"
+    ]
+    assert calls == []
+
+
+def _comparison_rule(expression: str, setup: str = "") -> RuleResult:
+    js = f"""\
+"use strict";
+({{params, imports}}) => {{
+  const encounter = params.entity;
+  const validationResults = [];
+  {setup}
+  if ({expression}) validationResults.push(imports.common.createValidationError("x"));
+  return validationResults;
+}};
+"""
+    return RuleResult(rule_kind=RuleKind.VALIDATION, js=js, confidence="high")
+
+
+def test_concept_name_comparisons_are_checked_against_the_form(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path))
+    loop = "encounter.observations.some(obs => obs.concept.name === {name})"
+
+    assert check(_comparison_rule(loop.format(name='"Weight"')), spec)[0] is True
+    _, miscased = check(_comparison_rule(loop.format(name='"weight"')), spec)
+    _, child = check(_comparison_rule(loop.format(name='"QA15CN PulseReg"')), spec)
+    _, unknown = check(_comparison_rule(loop.format(name='"Haemoglobin"')), spec)
+
+    assert miscased == ["off-bundle concept name 'weight' in a comparison; Avni matches names exactly, the bundle has 'Weight'"]
+    assert any("'QA15CN PulseReg', a question inside the question group 'QA15CN PulseCheck'" in w for w in child)
+    assert unknown == ["off-bundle concept names: ['Haemoglobin'] (compared with a concept name)"]
+
+
+def test_coded_answers_compared_as_text_are_checked(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path))
+
+    readable = 'encounter.getObservationReadableValue("Child sick") === {answer}'
+    assert check(_comparison_rule(readable.format(answer='"Yes"')), spec)[0] is True
+    _, wrong_case = check(_comparison_rule(readable.format(answer='"yes"')), spec)
+    _, through_variable = check(_comparison_rule('sick === "Maybe"', setup='const sick = encounter.getObservationReadableValue("Child sick");'), spec)
+    _, raw_value = check(_comparison_rule('encounter.getObservationValue("Child sick") === "Yes"'), spec)
+    grouped_ok, _ = check(_comparison_rule('encounter.getObservationReadableValue("QA15CN PulseReg", "QA15CN PulseCheck") === "No"'), spec)
+
+    assert any("off-bundle answer(s) ['yes'] for concept 'Child sick'" in w and "the bundle has 'Yes'" in w for w in wrong_case)
+    assert any("off-bundle answer(s) ['Maybe'] for concept 'Child sick'" in w for w in through_variable)
+    assert any("returns the coded answer's UUID" in w for w in raw_value)
+    assert grouped_ok is True
