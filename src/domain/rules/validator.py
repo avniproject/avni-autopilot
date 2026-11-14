@@ -49,7 +49,8 @@ _CURRENT_FORM_VALUE_METHODS: frozenset[str] = frozenset({
 })
 # Accessors that read a question inside a question group when given the
 # group's concept name, mapped to that argument's position (openchs-models
-# AbstractEncounter, Individual, ProgramEnrolment). The question is argument 0.
+# AbstractEncounter, Individual, ProgramEnrolment; rules-config RuleCondition
+# passes it on to findObservation).
 _GROUPED_READ_PARENT_ARGUMENT: dict[str, int] = {
     "findObservation": 1,
     "getObservationValue": 1,
@@ -57,16 +58,32 @@ _GROUPED_READ_PARENT_ARGUMENT: dict[str, int] = {
     "findLatestObservationFromPreviousEncounters": 2,
     "findObservationInLastEncounter": 2,
     "findObservationInEntireEnrolment": 3,
-    # rules-config RuleCondition passes the group on to findObservation.
+    "findLatestPreviousEncounterWithObservationForConcept": 2,
     "valueInEncounter": 1,
     "valueInRegistration": 1,
     "valueInEnrolment": 1,
-    "valueInEntireEnrolment": 1,
     "valueInLastEncounter": 2,
 }
-# Accessors returning a coded answer's name, and ones returning the stored
-# value (a coded answer's UUID) — openchs-models Observation.getReadableValue
-# vs getValue.
+# Of those, the ones only ProgramEnrolment's version takes the group for;
+# Individual's version ignores it.
+_ENROLMENT_ONLY_GROUP_METHODS: frozenset[str] = frozenset({
+    "findLatestObservationFromPreviousEncounters",
+    "findObservationInLastEncounter",
+})
+# Accessors whose concept name is not argument 0.
+_CONCEPT_ARGUMENT_POSITION: dict[str, int] = {
+    "findLatestPreviousEncounterWithValueForConcept": 1,
+    "findLatestPreviousEncounterWithObservationForConcept": 1,
+}
+# Accessors whose second argument looks like a group's place but is not:
+# RuleCondition.valueInEntireEnrolment(concept, x) passes x on as the current
+# encounter of findObservationInEntireEnrolment.
+_SECOND_ARGUMENT_NOT_A_GROUP: dict[str, str] = {
+    "valueInEntireEnrolment": "the current encounter",
+}
+# Accessors returning a coded answer's name, ones returning the stored value
+# (a coded answer's UUID) — openchs-models Observation.getReadableValue vs
+# getValue — and ones returning `{value, date}` with the readable value.
 _READABLE_VALUE_METHODS: frozenset[str] = frozenset({
     "getObservationReadableValue",
     "getObservationReadableValueInEntireEnrolment",
@@ -74,6 +91,8 @@ _READABLE_VALUE_METHODS: frozenset[str] = frozenset({
 })
 _RAW_VALUE_METHODS: frozenset[str] = frozenset({
     "getObservationValue",
+})
+_VALUE_AND_DATE_METHODS: frozenset[str] = frozenset({
     "findObservationValueInEntireEnrolment",
 })
 _EQUALITY_OPERATORS: frozenset[str] = frozenset({"===", "==", "!==", "!="})
@@ -178,19 +197,40 @@ def _lowered(names: list[str]) -> set[str]:
     return {n.casefold() for n in names if n}
 
 
+def _concept_argument(call: Any) -> Any | None:
+    """The argument holding the concept name read by an accessor call."""
+    args = getattr(call, "arguments", None) or []
+    position = _CONCEPT_ARGUMENT_POSITION.get(_method_name(call), 0)
+    return args[position] if len(args) > position else None
+
+
+def _group_argument_position(call: Any) -> int | None:
+    """Position of the group argument this call honours, if any."""
+    method = _method_name(call)
+    if method in _ENROLMENT_ONLY_GROUP_METHODS and _is_called_on_individual(call):
+        return None
+    return _GROUPED_READ_PARENT_ARGUMENT.get(method)
+
+
+def _is_called_on_individual(call: Any) -> bool:
+    """`individual.<method>(...)` or `<x>.individual.<method>(...)`."""
+    receiver = getattr(getattr(call, "callee", None), "object", None)
+    if getattr(receiver, "type", None) == "Identifier":
+        return getattr(receiver, "name", None) == "individual"
+    return getattr(getattr(receiver, "property", None), "name", None) == "individual"
+
+
 def _grouped_read_names(call: Any) -> tuple[str, str] | None:
     """(question, group) for a grouped read naming both as literals, else None."""
-    parent_position = _GROUPED_READ_PARENT_ARGUMENT.get(_method_name(call))
+    parent_position = _group_argument_position(call)
     if parent_position is None:
         return None
     args = getattr(call, "arguments", None) or []
     if len(args) <= parent_position:
         return None
-    question, group = (
-        getattr(arg, "value", None) if getattr(arg, "type", None) == "Literal" else None
-        for arg in (args[0], args[parent_position])
-    )
-    if not isinstance(question, str) or not isinstance(group, str):
+    question = _literal_string(_concept_argument(call))
+    group = _literal_string(args[parent_position])
+    if question is None or group is None:
         return None
     return question, group
 
@@ -224,6 +264,8 @@ def _check_grouped_reads(tree: Any, spec: RuleSpec) -> tuple[list[str], set[str]
     - Questions of a repeatable group cannot be read by name.
     - When the rule is set on a field inside a group, a read of a name worked
       out at runtime must pass that same group.
+    - A second argument that is not a group (valueInEntireEnrolment) must not
+      be given a group name.
 
     Returns the warnings and the concept names they cover, so the plain
     off-bundle check does not report them again.
@@ -236,16 +278,43 @@ def _check_grouped_reads(tree: Any, spec: RuleSpec) -> tuple[list[str], set[str]
         if method not in CONCEPT_ACCESSORS | _VALUE_IN_METHODS | set(_GROUPED_READ_PARENT_ARGUMENT):
             continue
         args = getattr(call, "arguments", None) or []
-        if not args:
+        concept_node = _concept_argument(call)
+        if concept_node is None:
             continue
-        question = _literal_string(args[0])
+        question = _literal_string(concept_node)
         if question is not None and _UUID_RE.match(question):
             continue
-        parent_position = _GROUPED_READ_PARENT_ARGUMENT.get(method)
+
+        not_a_group = _SECOND_ARGUMENT_NOT_A_GROUP.get(method)
+        if not_a_group and len(args) > 1 and _literal_string(args[1]) is not None:
+            warnings.append(
+                f"{QUESTION_GROUP_WARNING}: the second argument of {method} is {not_a_group}, not a question "
+                f"group, so {_literal_string(args[1])!r} there makes the read fail"
+            )
+            if question is not None:
+                handled.add(question)
+            continue
+
+        parent_position = _group_argument_position(call)
+        if parent_position is None and method in _ENROLMENT_ONLY_GROUP_METHODS and len(args) > 2:
+            warnings.append(
+                f"{QUESTION_GROUP_WARNING}: individual.{method} ignores a question group argument; read the "
+                f"question on the programme enrolment, or with getObservationReadableValue(<question>, <group>)"
+            )
+            if question is not None:
+                handled.add(question)
+            continue
         has_group = parent_position is not None and len(args) > parent_position
         group = _literal_string(args[parent_position]) if has_group else None
 
-        if has_group and group is not None and not _UUID_RE.match(group):
+        if has_group and group is None:
+            if question is not None and (
+                _group_of(question, spec.question_group_children) or _group_of(question, spec.repeatable_question_groups)
+            ):
+                handled.add(question)
+            continue
+
+        if has_group and not _UUID_RE.match(group):
             if question is not None:
                 handled.add(question)
             if group in spec.repeatable_question_groups:
@@ -268,8 +337,10 @@ def _check_grouped_reads(tree: Any, spec: RuleSpec) -> tuple[list[str], set[str]
                     f"but the field is inside {target!r}"
                 )
             continue
+        if has_group:
+            continue
 
-        if question is not None and not has_group:
+        if question is not None:
             repeatable = _group_of(question, spec.repeatable_question_groups)
             grouped = _group_of(question, spec.question_group_children)
             if repeatable is not None:
@@ -278,26 +349,27 @@ def _check_grouped_reads(tree: Any, spec: RuleSpec) -> tuple[list[str], set[str]
             elif grouped is not None and question not in spec.available_concepts:
                 handled.add(question)
                 group_name, spelling = grouped
-                reason = (
-                    f"{QUESTION_GROUP_WARNING}: {question!r} is a question inside the question group {group_name!r}; "
-                    f"read it with the group, e.g. {method}({spelling!r}, {group_name!r})"
+                warnings.append(
+                    f"{QUESTION_GROUP_WARNING}: {question!r} is a question inside the question group "
+                    f"{group_name!r}; read it with the group, e.g. {_grouped_read_example(method, spelling, group_name)}"
                 )
-                if parent_position is None:
-                    reason = (
-                        f"{QUESTION_GROUP_WARNING}: {question!r} is a question inside the question group "
-                        f"{group_name!r}; {method} cannot take the group, read it with "
-                        f"getObservationReadableValue({spelling!r}, {group_name!r})"
-                    )
-                warnings.append(reason)
             continue
 
-        if question is None and target and not has_group:
+        if target:
             warnings.append(
                 f"{QUESTION_GROUP_WARNING}: {method}(...) reads a name worked out when the rule runs without the "
                 f"question group; this field is inside {target!r}, so read it with "
                 f"getObservationReadableValue(<name>, {target!r}) on the form's record"
             )
     return warnings, handled
+
+
+def _grouped_read_example(method: str, question: str, group: str) -> str:
+    """A working grouped read: the same method when its group is the second
+    argument, else getObservationReadableValue."""
+    if _GROUPED_READ_PARENT_ARGUMENT.get(method) == 1:
+        return f"{method}({question!r}, {group!r})"
+    return f"getObservationReadableValue({question!r}, {group!r})"
 
 
 def _check_text_comparisons(tree: Any, spec: RuleSpec) -> list[str]:
@@ -314,8 +386,10 @@ def _check_text_comparisons(tree: Any, spec: RuleSpec) -> list[str]:
     answers = _answers_by_concept(spec)
     answers_casefold = {concept.casefold(): concept for concept in answers}
     group_children = {child: group for group, children in spec.question_group_children.items() for child in children}
-    top_level = set(spec.available_concepts) | set(spec.concept_answers)
-    known = top_level | set(group_children)
+    repeatable_children = {child: group for group, children in spec.repeatable_question_groups.items() for child in children}
+    answer_names = {answer for options in answers.values() for answer in options}
+    top_level = set(spec.available_concepts) | set(spec.concept_answers) | answer_names
+    known = top_level | set(group_children) | set(repeatable_children)
     literals_in_rule = {
         value for node in _iter_nodes(tree)
         if (value := _literal_string(node)) is not None
@@ -328,10 +402,20 @@ def _check_text_comparisons(tree: Any, spec: RuleSpec) -> list[str]:
             continue
         for read_side, text_side in ((node.left, node.right), (node.right, node.left)):
             text = _literal_string(text_side)
-            if text is None or _UUID_RE.match(text):
+            if not text or _UUID_RE.match(text):
                 continue
             if _is_concept_name(read_side):
+                if text in repeatable_children:
+                    warnings.append(repeatable_group_warning(repeatable_children[text]))
+                    continue
                 warnings.extend(_concept_name_comparison_warnings(text, top_level, known, group_children, literals_in_rule))
+                continue
+            if _is_direct_call_of(read_side, _VALUE_AND_DATE_METHODS):
+                method = _method_name(read_side)
+                warnings.append(
+                    f"{OFF_BUNDLE_WARNING} answer comparison: {method}(...) returns an object with `value` and "
+                    f"`date`, so comparing it with {text!r} is never true; compare its `.value`"
+                )
                 continue
             read = _value_read(read_side, bindings)
             if read is None:
@@ -388,31 +472,46 @@ def _is_concept_name(node: Any) -> bool:
     )
 
 
+def _is_direct_call_of(node: Any, methods: frozenset[str]) -> bool:
+    return getattr(node, "type", None) == "CallExpression" and _method_name(node) in methods
+
+
 def _value_read(node: Any, bindings: dict[str, tuple[str, str]]) -> tuple[str, str] | None:
-    """(method, question) when `node` reads a question's value by a literal
-    name, directly or through a variable bound to such a read."""
+    """(method, question) when `node` reads a question's readable or stored
+    value by a literal name — directly, as `<valueAndDateRead>.value`, or
+    through a variable bound to such a read."""
     if getattr(node, "type", None) == "Identifier":
         return bindings.get(getattr(node, "name", None))
-    if getattr(node, "type", None) != "CallExpression":
+    if (
+        getattr(node, "type", None) == "MemberExpression"
+        and not getattr(node, "computed", False)
+        and getattr(getattr(node, "property", None), "name", None) == "value"
+        and _is_direct_call_of(getattr(node, "object", None), _VALUE_AND_DATE_METHODS)
+    ):
+        question = _literal_string(_concept_argument(node.object))
+        return (_method_name(node.object), question) if question is not None else None
+    if not _is_direct_call_of(node, _READABLE_VALUE_METHODS | _RAW_VALUE_METHODS):
         return None
-    method = _method_name(node)
-    if method not in _READABLE_VALUE_METHODS | _RAW_VALUE_METHODS:
-        return None
-    args = getattr(node, "arguments", None) or []
-    question = _literal_string(args[0]) if args else None
-    return (method, question) if question is not None else None
+    question = _literal_string(_concept_argument(node))
+    return (_method_name(node), question) if question is not None else None
 
 
 def _value_read_bindings(tree: Any) -> dict[str, tuple[str, str]]:
-    bindings: dict[str, tuple[str, str]] = {}
+    """Variables bound to a value read. A name bound to different reads in
+    different places (separate functions) is left out, since which binding
+    a comparison sees depends on scope."""
+    reads_by_name: dict[str, set[tuple[str, str] | None]] = {}
     for node in _iter_nodes(tree):
         if getattr(node, "type", None) != "VariableDeclarator":
             continue
         name = getattr(getattr(node, "id", None), "name", None)
-        read = _value_read(getattr(node, "init", None), {})
-        if name and read is not None:
-            bindings[name] = read
-    return bindings
+        if name:
+            reads_by_name.setdefault(name, set()).add(_value_read(getattr(node, "init", None), {}))
+    return {
+        name: next(iter(reads))
+        for name, reads in reads_by_name.items()
+        if len(reads) == 1 and None not in reads
+    }
 
 
 def _iter_nodes(node: Any):
@@ -457,9 +556,10 @@ def _miscased_concept_names(tree: Any, spec: RuleSpec) -> dict[str, list[str]]:
     for call in _iter_call_expressions(tree):
         if _method_name(call) not in CONCEPT_ACCESSORS | _VALUE_IN_METHODS:
             continue
-        args = getattr(call, "arguments", None) or []
-        name = getattr(args[0], "value", None) if args and getattr(args[0], "type", None) == "Literal" else None
-        if not isinstance(name, str):
+        if _grouped_read_names(call) is not None:
+            continue
+        name = _literal_string(_concept_argument(call))
+        if name is None:
             continue
         if name in known or _UUID_RE.match(name):
             continue
@@ -542,11 +642,9 @@ def _collect_call_args(
     args = getattr(call, "arguments", None) or []
     if not args:
         return
-    first = args[0]
-    if getattr(first, "type", None) != "Literal":
-        return
-    value = getattr(first, "value", None)
-    if not isinstance(value, str):
+    first = _concept_argument(call) if method in CONCEPT_ACCESSORS else args[0]
+    value = _literal_string(first)
+    if value is None:
         return
 
     if method in CONCEPT_ACCESSORS:

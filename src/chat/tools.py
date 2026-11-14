@@ -34,7 +34,7 @@ from domain.generators import unlinked_form_names
 from domain.rules.generator import RuleGenerator
 from domain.rules.prompts import entity_param_for_form_type
 from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
-from domain.rules.validator import OFF_BUNDLE_WARNING, WRONG_FORM_TYPE_WARNING, repeatable_group_warning
+from domain.rules.validator import OFF_BUNDLE_WARNING, WRONG_FORM_TYPE_WARNING
 from domain.rules.validator import validate_and_decide as _validate_and_decide
 from domain.spreadsheets import find_spreadsheets
 from pipeline import initial_state
@@ -830,17 +830,7 @@ def suggest_form_element_rule(
         repeatable_question_groups=context.get("repeatable_question_groups", {}),
         target_question_group=context.get("question_group_by_question", {}).get(page_name, {}).get(field_name),
     )
-    repeatable_group = context.get("repeatable_group_by_question", {}).get(page_name, {}).get(field_name)
-    if repeatable_group:
-        return {
-            "status": "rejected",
-            "form_name": form_name,
-            "page_name": page_name,
-            "field_name": field_name,
-            "rule_kind": RuleKind.FORM_ELEMENT.value,
-            "confidence": "low",
-            "warnings": [repeatable_group_warning(repeatable_group)],
-        }
+
 
     result, ok, warnings = _generate_and_check(spec)
 

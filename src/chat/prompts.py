@@ -472,7 +472,7 @@ Behavior:
     the reason instead. Questions inside a repeatable question group hold a
     list of entries: say the rule tools cannot write rules that read them,
     and that a hand-written rule reading them by name would not work
-    either.
+    either. A rule set on such a question that reads other fields is fine.
   - Questions inside a question group are read together with the group.
     The rule tools support this, so do not refuse such a rule; send the
     intent naming the question and its group.

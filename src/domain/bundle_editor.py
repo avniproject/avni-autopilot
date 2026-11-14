@@ -856,7 +856,6 @@ def load_form_rule_context(
           "question_group_answers": dict[str, list[str]],
           "repeatable_question_groups": dict[str, list[str]],
           "question_group_by_question": dict[str, dict[str, str]],
-          "repeatable_group_by_question": dict[str, dict[str, str]],
           "available_encounter_types": list[str],
           "available_programs": list[str],
           "concept_answers": dict[str, list[str]],
@@ -872,8 +871,7 @@ def load_form_rule_context(
         holds a list, which that read cannot take), `question_group_answers`
         holds coded answers of those questions, `repeatable_question_groups`
         lists repeatable groups with their questions, and `question_group_by_question`
-        and `repeatable_group_by_question` map page name -> question name ->
-        group concept.
+        maps page name -> question name -> group concept.
         or None if no form with `form_name` exists in the bundle.
 
     Raises:
@@ -914,7 +912,6 @@ def load_form_rule_context(
         question_group_children: dict[str, list[str]] = {}
         question_group_answers: dict[str, list[str]] = {}
         question_group_by_question: dict[str, dict[str, str]] = {}
-        repeatable_group_by_question: dict[str, dict[str, str]] = {}
         for page, element in elements:
             concept = _concept_name(element)
             question = element.get("name")
@@ -924,8 +921,6 @@ def load_form_rule_context(
                 repeatable_group = repeatable_group_concept_by_uuid.get(element["parentFormElementUuid"])
                 if repeatable_group:
                     repeatable_question_groups[repeatable_group].append(concept)
-                    if question:
-                        repeatable_group_by_question.setdefault(page, {})[question] = repeatable_group
                 group_concept = readable_group_concept_by_uuid.get(element["parentFormElementUuid"])
                 if group_concept:
                     question_group_children.setdefault(group_concept, []).append(concept)
@@ -959,7 +954,6 @@ def load_form_rule_context(
             "question_group_answers": question_group_answers,
             "repeatable_question_groups": repeatable_question_groups,
             "question_group_by_question": question_group_by_question,
-            "repeatable_group_by_question": repeatable_group_by_question,
             "available_encounter_types": sorted(encounter_names),
             "available_programs": sorted(program_names),
             "concept_answers": concept_answers,

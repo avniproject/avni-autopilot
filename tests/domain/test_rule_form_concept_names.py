@@ -475,7 +475,7 @@ def test_show_hide_rule_reading_a_coded_group_question_with_value_in_encounter_a
     assert any("off-bundle answer(s) ['no'] for concept 'QA15CN PulseReg'" in w for w in off_list_warnings)
 
 
-def test_repeatable_group_field_rule_is_rejected_by_the_tool_with_the_reason_before_generating(
+def test_rule_set_on_a_repeatable_group_question_that_reads_other_fields_is_suggested(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     bundle = _add_group(
@@ -484,21 +484,20 @@ def test_repeatable_group_field_rule_is_rejected_by_the_tool_with_the_reason_bef
          "keyValues": [{"key": "repeatable", "value": "true"}]},
         [{**_element("Kid name", {"uuid": "c-kid", "name": "QA15CN Kid", "dataType": "Text"}), "parentFormElementUuid": "fe-Kids"}],
     )
-    calls = []
-    monkeypatch.setattr(tools._rule_generator, "retrieve", lambda spec: calls.append(spec))
-    monkeypatch.setattr(tools._rule_generator, "generate", lambda spec, context=None: calls.append(spec))
+    reads_other_field = _rule('valueInEncounter("Child sick").containsAnswerConceptName("Yes")').js
+    monkeypatch.setattr(tools._rule_generator, "retrieve", lambda spec: object())
+    monkeypatch.setattr(
+        tools._rule_generator, "generate",
+        lambda spec, context=None: RuleResult(rule_kind=spec.rule_kind, js=reads_other_field, confidence="high"),
+    )
     config = {"configurable": {"session": SimpleNamespace(bundle_path=bundle)}}
 
     result = tools.suggest_form_element_rule.func(
-        form_name=_FORM_NAME, page_name="Details", field_name="Kid name", intent="hide when empty", config=config,
+        form_name=_FORM_NAME, page_name="Details", field_name="Kid name",
+        intent="show only when 'Child sick' is Yes", config=config,
     )
 
-    assert result["status"] == "rejected"
-    assert result["warnings"] == [
-        "question group read: 'QA15CN Kids' is a repeatable question group; it holds a list of entries, so its "
-        "questions cannot be read by name and the rule tools do not support rules on them"
-    ]
-    assert calls == []
+    assert result["status"] == "suggested", result.get("warnings")
 
 
 def _comparison_rule(expression: str, setup: str = "") -> RuleResult:
@@ -543,3 +542,112 @@ def test_coded_answers_compared_as_text_are_checked(tmp_path: Path) -> None:
     assert any("off-bundle answer(s) ['Maybe'] for concept 'Child sick'" in w for w in through_variable)
     assert any("returns the coded answer's UUID" in w for w in raw_value)
     assert grouped_ok is True
+
+
+def test_value_in_entire_enrolment_with_a_group_name_in_its_encounter_argument_is_rejected(tmp_path: Path) -> None:
+    js = _rule('valueInEntireEnrolment("QA15CN Pulse", "QA15CN Vitals").greaterThan(3)').js
+
+    ok, warnings = check(RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js=js, confidence="high"), _group_spec(tmp_path, kind=RuleKind.FORM_ELEMENT))
+
+    assert ok is False
+    assert any("the second argument of valueInEntireEnrolment is the current encounter, not a question group" in w for w in warnings)
+
+
+def test_suggested_grouped_read_puts_the_group_where_the_method_takes_it(tmp_path: Path) -> None:
+    _, warnings = check(
+        _validation_rule('params.entity.programEnrolment.findObservationInLastEncounter("QA15CN Pulse", encounter)'),
+        _group_spec(tmp_path),
+    )
+
+    assert any("e.g. getObservationReadableValue('QA15CN Pulse', 'QA15CN Vitals')" in w for w in warnings), warnings
+
+
+def test_concept_name_at_a_later_argument_is_read_from_its_own_position(tmp_path: Path) -> None:
+    spec = _group_spec(tmp_path, kind=RuleKind.FORM_ELEMENT, target_field="Pulse rate")
+    reads_top_level = _rule('valueInEncounter("Weight").is.lessThan(7)').js.replace(
+        "return statusBuilder.build();",
+        'params.entity.programEnrolment.findLatestPreviousEncounterWithValueForConcept(encounter, "Weight", "7");\n  return statusBuilder.build();',
+    )
+    reads_unknown = reads_top_level.replace('encounter, "Weight", "7"', 'encounter, "Haemoglobin", "7"')
+
+    ok, warnings = check(RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js=reads_top_level, confidence="high"), spec)
+    unknown_ok, unknown_warnings = check(RuleResult(rule_kind=RuleKind.FORM_ELEMENT, js=reads_unknown, confidence="high"), spec)
+
+    assert ok is True, warnings
+    assert unknown_ok is False
+    assert "off-bundle concept names: ['Haemoglobin']" in unknown_warnings
+
+
+def test_grouped_read_with_the_group_in_a_variable_is_not_reported_as_off_bundle(tmp_path: Path) -> None:
+    js = _validation_rule('encounter.getObservationReadableValue("QA15CN Pulse", GROUP)').js.replace(
+        "const validationResults = [];", 'const validationResults = [];\n  const GROUP = "QA15CN Vitals";',
+    )
+
+    ok, warnings = check(RuleResult(rule_kind=RuleKind.VALIDATION, js=js, confidence="high"), _group_spec(tmp_path))
+
+    assert ok is True, warnings
+
+
+def test_same_variable_name_in_two_functions_is_not_checked_against_the_wrong_question(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path))
+    setup = (
+        'function a() { const value = encounter.getObservationReadableValue("Weight"); return value === "kg"; }\n'
+        '  function b() { const value = encounter.getObservationReadableValue("Child sick"); return value === "Yes"; }'
+    )
+
+    ok, warnings = check(_comparison_rule("a() || b()", setup=setup), spec)
+
+    assert ok is True, warnings
+
+
+def test_empty_text_presence_checks_are_not_answer_comparisons(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path))
+
+    for expression in ('encounter.getObservationReadableValue("Child sick") !== ""', 'encounter.getObservationValue("Child sick") != ""'):
+        ok, warnings = check(_comparison_rule(expression), spec)
+        assert ok is True, (expression, warnings)
+
+
+def test_comparing_an_answer_concepts_name_is_not_treated_as_a_question_name(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path))
+    setup = 'const yes = params.formElement.concept.getAnswers().find(answer => answer.concept.name === "Yes");'
+
+    ok, warnings = check(_comparison_rule("yes", setup=setup), spec)
+
+    assert ok is True, warnings
+
+
+def test_individuals_last_encounter_read_ignores_a_group_argument(tmp_path: Path) -> None:
+    ok, warnings = check(
+        _validation_rule('params.entity.individual.findObservationInLastEncounter("QA15CN Pulse", encounter, "QA15CN Vitals")'),
+        _group_spec(tmp_path),
+    )
+
+    assert ok is False
+    assert any("individual.findObservationInLastEncounter ignores a question group argument" in w for w in warnings)
+
+
+def test_value_and_date_read_is_compared_through_its_value(tmp_path: Path) -> None:
+    spec = _spec_for_bundle(_coded_group_bundle(tmp_path))
+    read = 'params.entity.programEnrolment.findObservationValueInEntireEnrolment("Child sick")'
+
+    _, direct = check(_comparison_rule(f'{read} === "Yes"'), spec)
+    value_ok, _ = check(_comparison_rule(f'{read}.value === "Yes"'), spec)
+    _, wrong_answer = check(_comparison_rule(f'{read}.value === "Maybe"'), spec)
+
+    assert any("returns an object with `value` and `date`" in w for w in direct)
+    assert value_ok is True
+    assert any("off-bundle answer(s) ['Maybe'] for concept 'Child sick'" in w for w in wrong_answer)
+
+
+def test_comparing_a_repeatable_group_question_by_concept_name_gives_the_repeatable_reason(tmp_path: Path) -> None:
+    bundle = _add_group(
+        _write_bundle(tmp_path),
+        {**_element("Kids", {"uuid": "c-kids", "name": "QA15CN Kids", "dataType": "QuestionGroup"}),
+         "keyValues": [{"key": "repeatable", "value": True}]},
+        [{**_element("Kid name", {"uuid": "c-kid", "name": "QA15CN Kid", "dataType": "Text"}), "parentFormElementUuid": "fe-Kids"}],
+    )
+
+    _, warnings = check(_comparison_rule('encounter.observations.some(obs => obs.concept.name === "QA15CN Kid")'), _spec_for_bundle(bundle))
+
+    assert any(w.startswith("question group read: 'QA15CN Kids' is a repeatable question group") for w in warnings)
