@@ -179,3 +179,36 @@ def test_pasted_organisation_rule_asked_for_a_small_change_is_suggested(
 
     assert result["status"] == "suggested", result.get("warnings")
     assert result["js"] == pasted_rule_with_change
+
+
+def test_questions_inside_a_question_group_are_not_offered_on_their_own(tmp_path: Path) -> None:
+    bundle = _write_bundle(tmp_path)
+    form_path = bundle / "forms" / "child-visit.json"
+    form = json.loads(form_path.read_text(encoding="utf-8"))
+    form["formElementGroups"][0]["formElements"] += [
+        _element("Medicines given", {"uuid": "c-medicines", "name": "Medicines", "dataType": "QuestionGroup"}),
+        {
+            **_element("Medicine name", {
+                "uuid": "c-medicine-name", "name": "Medicine name", "dataType": "Coded",
+                "answers": [{"name": "ORS"}, {"name": "Zinc"}],
+            }),
+            "parentFormElementUuid": "fe-Medicines given",
+        },
+    ]
+    form_path.write_text(json.dumps(form), encoding="utf-8")
+
+    context = load_form_rule_context(str(bundle), _FORM_NAME)
+
+    assert "Medicines" in context["available_concepts"]
+    assert "Medicine name" not in context["available_concepts"]
+    assert "Medicine name" not in context["concept_answers"]
+
+
+def test_generator_is_told_to_pass_the_record_under_the_form_types_key() -> None:
+    from domain.rules.prompts import build_system_prompt
+
+    prompt = build_system_prompt(RuleKind.FORM_ELEMENT, "encounter")
+
+    assert "new imports.rulesConfig.FormElementStatusBuilder({encounter, formElement})" in prompt
+    assert "never copy that key" in prompt
+    assert "copied\n     exactly, including case" in prompt

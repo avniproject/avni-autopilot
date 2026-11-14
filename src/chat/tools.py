@@ -32,7 +32,8 @@ from domain.bundle_editor import (
 from domain.docs.knowledge_base import DocsKnowledgeBase
 from domain.generators import unlinked_form_names
 from domain.rules.generator import RuleGenerator
-from domain.rules.rule_spec import RuleKind, RuleSpec
+from domain.rules.prompts import entity_param_for_form_type
+from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
 from domain.rules.validator import validate_and_decide as _validate_and_decide
 from domain.spreadsheets import find_spreadsheets
 from pipeline import initial_state
@@ -701,8 +702,7 @@ def suggest_form_rule(
         question_names_by_concept=context.get("question_names_by_concept", {}),
     )
 
-    result = _rule_generator.generate(spec)
-    ok, warnings = _validate_and_decide(result, spec)
+    result, ok, warnings = _generate_and_check(spec)
 
     if not ok:
         return {
@@ -777,6 +777,9 @@ def suggest_form_element_rule(
             in the intent must match the bundle EXACTLY — quote them as
             they appear in `list_bundle_fields` output (e.g. use 'Yes'
             not 'yes', 'Place of delivery' not 'where delivery happened').
+            Name the fields the rule reads by their `conceptName` (rules read
+            values by concept name), and say "this field" only for the field
+            the rule is set on.
             Mixing behaviours is fine: a single intent can ask for
             visibility AND a default value AND validation — they all land
             in the same `FormElementStatus` return.
@@ -820,8 +823,7 @@ def suggest_form_element_rule(
         question_names_by_concept=context.get("question_names_by_concept", {}),
     )
 
-    result = _rule_generator.generate(spec)
-    ok, warnings = _validate_and_decide(result, spec)
+    result, ok, warnings = _generate_and_check(spec)
 
     if not ok:
         return {
@@ -909,3 +911,42 @@ TOOLS = [
     suggest_form_element_rule,
     answer_avni_question,
 ]
+
+
+_WRONG_FORM_TYPE_WARNING = "wrong form type"
+_OFF_BUNDLE_WARNING = "off-bundle"
+
+
+def _generate_and_check(spec: RuleSpec) -> tuple[RuleResult, bool, list[str]]:
+    """Generate a rule and validate it, regenerating once when the rule passes
+    the form's record under another form type's key.
+
+    That rejection means the generator copied the key from an example built
+    for another form type, which a second attempt told the reason fixes. A
+    rule that also reads a name not in the bundle is not regenerated: a retry
+    could swap in another field and suggest a rule the user did not ask for.
+    """
+    result = _rule_generator.generate(spec)
+    ok, warnings = _validate_and_decide(result, spec)
+    if ok or not _is_wrong_form_type_only(warnings):
+        return result, ok, warnings
+
+    entity_param = entity_param_for_form_type(spec.form_type)
+    reasons = "; ".join(w for w in warnings if w.startswith(_WRONG_FORM_TYPE_WARNING))
+    log.info(f"Regenerating {spec.rule_kind.value} rule for {spec.form_name!r}: {reasons}")
+    retry_spec = spec.model_copy(update={
+        "intent": (
+            f"{spec.intent}\n\nThe previous attempt was rejected: {reasons}. "
+            f"Pass the form's record as `{entity_param}` to every rulesConfig builder and RuleCondition."
+        ),
+    })
+    result = _rule_generator.generate(retry_spec)
+    ok, warnings = _validate_and_decide(result, spec)
+    return result, ok, warnings
+
+
+def _is_wrong_form_type_only(warnings: list[str]) -> bool:
+    return (
+        any(w.startswith(_WRONG_FORM_TYPE_WARNING) for w in warnings)
+        and not any(w.startswith(_OFF_BUNDLE_WARNING) for w in warnings)
+    )

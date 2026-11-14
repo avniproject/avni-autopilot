@@ -109,11 +109,18 @@ Output EXACTLY one JS IIFE matching this shape (the "use strict" directive is re
 }};
 
 Hard constraints:
-  1. The function MUST read `params.entity` as `{entity_param}` for this rule kind.
+  1. The function MUST read `params.entity` as `{entity_param}` for this rule kind,
+     and MUST pass it to every `imports.rulesConfig` builder and `RuleCondition`
+     under the key `{entity_param}`, e.g.
+     `new imports.rulesConfig.FormElementStatusBuilder({{{entity_param}, formElement}})`
+     or `new imports.rulesConfig.RuleCondition({{{entity_param}}})`. EXAMPLES may
+     come from other form types and use another key (`programEncounter`,
+     `encounter`, `programEnrolment`, `individual`); never copy that key.
   2. The function MUST return {return_type_description}.
   3. Reference ONLY the helper methods listed under HELPERS in the user message.
      Do not invent helpers, methods, or namespaces.
-  4. Reference ONLY the concept names listed under AVAILABLE_CONCEPTS. Concept
+  4. Reference ONLY the concept names listed under AVAILABLE_CONCEPTS, copied
+     exactly, including case: Avni matches concept names exactly. Concept
      names appear as the first string argument to accessors like
      `getObservationReadableValue('<concept>')` or as observation lookups.
   5. Reference ONLY the encounter type names listed under AVAILABLE_ENCOUNTER_TYPES.

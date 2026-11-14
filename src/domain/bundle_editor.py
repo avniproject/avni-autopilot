@@ -859,7 +859,9 @@ def load_form_rule_context(
         `available_concepts` and the `concept_answers` keys are concept names,
         which rules read values by; App Designer lets a question's name
         differ from its concept's. `question_names_by_concept` names the
-        question for each concept whose name differs.
+        question for each concept whose name differs. Questions inside a
+        question group are left out: their values sit inside the group's
+        observation.
         or None if no form with `form_name` exists in the bundle.
 
     Raises:
@@ -879,7 +881,7 @@ def load_form_rule_context(
         question_names_by_concept: dict[str, list[str]] = {}
         for group in (target_form.get("formElementGroups") or []):
             for element in (group.get("formElements") or []):
-                if element.get("voided"):
+                if element.get("voided") or _is_in_question_group(element):
                     continue
                 concept = _concept_name(element)
                 if not concept:
@@ -920,6 +922,13 @@ _PROGRAM_FORM_TYPES_FOR_GROUNDING: frozenset[str] = frozenset({
     "ProgramEnrolment", "ProgramExit",
     "ProgramEncounter", "ProgramEncounterCancellation",
 })
+
+
+def _is_in_question_group(element: dict) -> bool:
+    """A question inside a question group: Avni stores its value inside the
+    group's observation, so `valueInEncounter` cannot read it by its own
+    concept name."""
+    return bool(element.get("parentFormElementUuid"))
 
 
 def _concept_name(element: dict) -> str | None:
@@ -982,7 +991,7 @@ def _collect_concept_answers_for(
         scope: dict[str, list[str]] = {}
         for group in (form.get("formElementGroups") or []):
             for element in (group.get("formElements") or []):
-                if element.get("voided"):
+                if element.get("voided") or _is_in_question_group(element):
                     continue
                 concept = element.get("concept") or {}
                 if concept.get("dataType") != "Coded":

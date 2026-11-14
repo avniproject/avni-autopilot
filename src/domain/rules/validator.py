@@ -100,12 +100,12 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
     referenced_encounter_types: set[str] = set()
     _walk(tree, referenced_concepts, referenced_encounter_types)
 
-    available_concepts = _lowered(spec.available_concepts)
+    available_concepts = {name for name in spec.available_concepts if name}
     available_encounters = _lowered(spec.available_encounter_types)
 
     bad_concepts = sorted(
         name for name in referenced_concepts
-        if name.casefold() not in available_concepts
+        if name not in available_concepts
     )
     bad_encounters = sorted(
         name for name in referenced_encounter_types
@@ -255,19 +255,20 @@ def _check_answer_grounding(tree: Any, spec: RuleSpec) -> list[str]:
     Walks RuleCondition chains: every `containsAnswer*(...)` call is paired
     with its anchoring `valueIn*(concept)` call by traversing the callee
     chain. The answer literals are checked against
-    `spec.concept_answers[concept]` (case-insensitive). Skips UUID-shaped
-    args (the rule API accepts both names and UUIDs; we only validate names).
+    `spec.concept_answers[concept]`, matching case exactly as Avni does.
+    Skips UUID-shaped args (the rule API accepts both names and UUIDs; we
+    only validate names).
     No-op when `spec.concept_answers` is empty.
     """
     if not spec.concept_answers:
         return []
 
     answers_by_concept: dict[str, set[str]] = {
-        concept.casefold(): {a.casefold() for a in options}
+        concept: set(options)
         for concept, options in spec.concept_answers.items()
     }
     valid_listing_by_concept: dict[str, list[str]] = {
-        concept.casefold(): list(options)
+        concept: list(options)
         for concept, options in spec.concept_answers.items()
     }
 
@@ -278,7 +279,7 @@ def _check_answer_grounding(tree: Any, spec: RuleSpec) -> list[str]:
         concept = _find_anchoring_concept(call)
         if concept is None or _UUID_RE.match(concept):
             continue
-        valid = answers_by_concept.get(concept.casefold())
+        valid = answers_by_concept.get(concept)
         if valid is None:
             # Concept isn't in this rule's grounding scope — non-coded
             # concept, or out-of-scope form. Skip rather than reject.
@@ -286,12 +287,12 @@ def _check_answer_grounding(tree: Any, spec: RuleSpec) -> list[str]:
         for answer in _string_args(call):
             if _UUID_RE.match(answer):
                 continue
-            if answer.casefold() not in valid:
+            if answer not in valid:
                 off_list.setdefault(concept, set()).add(answer)
 
     warnings: list[str] = []
     for concept, bad in off_list.items():
-        valid_listing = valid_listing_by_concept[concept.casefold()]
+        valid_listing = valid_listing_by_concept[concept]
         warnings.append(
             f"off-bundle answer(s) {sorted(bad)} for concept {concept!r} — "
             f"expected one of: {valid_listing}"

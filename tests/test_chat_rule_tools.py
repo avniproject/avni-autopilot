@@ -100,3 +100,55 @@ def test_general_visit_rule_built_for_a_general_visit_is_suggested(
     result = _field_rule(rule_config)
     assert result["status"] == "suggested"
     assert result["js"] == _GENERAL_VISIT_JS
+
+
+def _stub_generator_sequence(monkeypatch: pytest.MonkeyPatch, *scripts: str) -> list:
+    specs = []
+    remaining = list(scripts)
+
+    def generate(spec):
+        specs.append(spec)
+        return RuleResult(rule_kind=spec.rule_kind, js=remaining.pop(0), confidence="high")
+
+    monkeypatch.setattr(tools._rule_generator, "generate", generate)
+    return specs
+
+
+def test_rule_built_for_another_form_type_is_regenerated_once_with_the_reason(
+    monkeypatch: pytest.MonkeyPatch, rule_config: dict,
+) -> None:
+    specs = _stub_generator_sequence(monkeypatch, _WRONG_FORM_TYPE_JS, _GENERAL_VISIT_JS)
+
+    result = _field_rule(rule_config)
+
+    assert result["status"] == "suggested"
+    assert result["js"] == _GENERAL_VISIT_JS
+    assert len(specs) == 2
+    assert "wrong form type" in specs[1].intent
+    assert "`encounter`" in specs[1].intent
+    assert specs[1].intent.startswith(specs[0].intent)
+
+
+def test_regenerated_rule_still_built_for_another_form_type_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, rule_config: dict,
+) -> None:
+    specs = _stub_generator_sequence(monkeypatch, _WRONG_FORM_TYPE_JS, _WRONG_FORM_TYPE_JS)
+
+    result = _field_rule(rule_config)
+
+    assert result["status"] == "rejected"
+    assert "js" not in result
+    assert len(specs) == 2
+
+
+def test_rule_that_also_reads_a_field_not_on_the_form_is_not_regenerated(
+    monkeypatch: pytest.MonkeyPatch, rule_config: dict,
+) -> None:
+    wrong_type_and_field = _WRONG_FORM_TYPE_JS.replace('"Eggs needed"', '"Hens owned"')
+    specs = _stub_generator_sequence(monkeypatch, wrong_type_and_field)
+
+    result = _field_rule(rule_config)
+
+    assert result["status"] == "rejected"
+    assert len(specs) == 1
+    assert any(w.startswith("off-bundle concept names") for w in result["warnings"])

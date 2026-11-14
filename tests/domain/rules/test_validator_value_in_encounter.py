@@ -51,9 +51,16 @@ def test_field_on_the_form_is_accepted() -> None:
     assert warnings == []
 
 
-def test_field_name_match_ignores_case() -> None:
-    ok, _ = check(_rule('valueInEncounter("qa visit numeric").is.lessThan(7)'), _spec())
-    assert ok is True
+def test_field_name_in_another_case_is_rejected_since_avni_matches_concept_names_exactly() -> None:
+    ok, warnings = check(_rule('valueInEncounter("qa visit numeric").is.lessThan(7)'), _spec())
+    assert ok is False
+    assert "off-bundle concept names: ['qa visit numeric']" in warnings
+
+
+def test_answer_in_another_case_is_rejected() -> None:
+    ok, warnings = check(_rule('valueInEncounter("QA Visit Coded").containsAnswerConceptName("qa yes")'), _spec())
+    assert ok is False
+    assert any("off-bundle answer(s) ['qa yes']" in warning for warning in warnings)
 
 
 def test_registration_field_is_not_checked_against_the_current_form() -> None:
