@@ -15,9 +15,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import zipfile
+from collections import Counter
 from enum import Enum
 from typing import Any
 
@@ -708,59 +710,191 @@ def classify_bundle(bundle_path: str) -> BundleOrigin:
 # ── Helper for the agent: a compact summary of bundle fields ──────────────────
 
 
-def list_bundle_fields(bundle_path: str) -> dict:
-    """Return a compact summary of every form's sections + fields.
+def list_bundle_fields(
+    bundle_path: str,
+    form_name: str | None = None,
+    form_uuid: str | None = None,
+) -> dict:
+    """Return a compact summary of the bundle's live forms, sections + fields.
 
     Useful for the agent to ground edit operations + rule intents in real
     names. Coded fields include their `answers` list so the agent can echo
-    exact answer strings back to the user before generating rules.
+    exact answer strings back to the user before generating rules. Each
+    form carries `usedIn` — one entry per active form mapping, naming the
+    subject type, program and encounter type the form is used for — so the
+    agent can answer "which subject type is this form for" from the bundle.
+    Voided (deleted) forms and fields are left out; `find_bundle_ids` still
+    reports a pasted ID of a deleted field, with `fieldVoided` set.
 
-    Each form carries its `uuid` and `usedIn` — one entry per form mapping,
-    naming the subject type, program and encounter type the form is used
-    for — so the agent can answer "which subject type is this form for"
-    from the bundle. Each field carries its form element `uuid` and its
-    `conceptUuid`, so an ID the user pastes from the admin app can be
-    matched to a field.
+    IDs are returned only for the form asked about: with `form_name` (and
+    `form_uuid` when several forms share the name) the result holds just
+    that form, with its `uuid` and each field's form element `uuid` and
+    `conceptUuid`. Without them every form is listed with no IDs, except a
+    form `uuid` where another form, live or deleted, shares its name:
+    `edit_bundle_fields` counts deleted forms when it matches a name, so it
+    needs the `uuid` there. Two IDs per field on every form made the list too large for
+    the model on mid-sized and large organisations; `find_bundle_ids`
+    matches a pasted ID instead.
     """
+    with _open_bundle(bundle_path) as workdir:
+        all_forms = _load_forms(workdir)
+        indexes = _load_mapping_indexes(workdir)
+        mappings = _load_form_mappings(workdir)
+    forms = {
+        fname: form for fname, form in all_forms.items() if not form.get("voided")
+    }
+    if form_name is not None or form_uuid is not None:
+        picked = [
+            fname for fname, form in forms.items()
+            if (form_name is None or form.get("name") == form_name)
+            and (form_uuid is None or form.get("uuid") == form_uuid)
+        ]
+        return {
+            "bundle_path": bundle_path,
+            "forms": [
+                _form_summary(
+                    fname, forms[fname], indexes, mappings,
+                    form_id=True, field_ids=True,
+                )
+                for fname in sorted(picked)
+            ],
+        }
+    name_counts = Counter(_norm(f.get("name", "")) for f in all_forms.values())
+    return {
+        "bundle_path": bundle_path,
+        "forms": [
+            _form_summary(
+                fname, forms[fname], indexes, mappings,
+                form_id=name_counts[_norm(forms[fname].get("name", ""))] > 1,
+                field_ids=False,
+            )
+            for fname in sorted(forms)
+        ],
+    }
+
+
+def _form_summary(
+    fname: str,
+    form: dict,
+    indexes: dict[str, tuple[list[str], dict[str, str]]],
+    mappings: list[dict],
+    *,
+    form_id: bool,
+    field_ids: bool,
+) -> dict:
+    sections = []
+    for g in form.get("formElementGroups", []):
+        fields = []
+        for e in g.get("formElements", []):
+            if e.get("voided"):
+                continue
+            concept = e.get("concept") or {}
+            field: dict = {
+                "name": e.get("name"),
+                "conceptName": concept.get("name"),
+                "dataType": concept.get("dataType"),
+            }
+            if field_ids:
+                field["uuid"] = e.get("uuid")
+                field["conceptUuid"] = concept.get("uuid")
+            if concept.get("dataType") == "Coded":
+                field["answers"] = [
+                    a.get("name") for a in (concept.get("answers") or [])
+                    if a.get("name") and not a.get("voided")
+                ]
+            fields.append(field)
+        sections.append({"name": g.get("name"), "fields": fields})
+    summary: dict = {
+        "file": fname,
+        "form": form.get("name"),
+        "formType": form.get("formType"),
+        "usedIn": [
+            _mapping_names(m, indexes) for m in _active_mappings_for(form, mappings)
+        ],
+        "sections": sections,
+    }
+    if form_id:
+        summary["uuid"] = form.get("uuid")
+    return summary
+
+
+_PASTED_ID_SEPARATORS = re.compile(r"[\s,;]+")
+_PASTED_ID_WRAPPERS = "\"'`“”‘’()[]{}<>"
+
+
+def _id_key(value: str | None) -> str | None:
+    return value.strip().lower() if isinstance(value, str) else None
+
+
+def split_pasted_ids(ids: list[str]) -> list[str]:
+    """Clean IDs as a user pastes them: one or several per entry, split on
+    commas, semicolons and whitespace, quotes and brackets stripped, lower
+    case, duplicates dropped (first order kept)."""
+    out: list[str] = []
+    for entry in ids:
+        for part in _PASTED_ID_SEPARATORS.split(entry or ""):
+            key = part.strip(_PASTED_ID_WRAPPERS).lower()
+            if key and key not in out:
+                out.append(key)
+    return out
+
+
+def find_bundle_ids(bundle_path: str, ids: list[str]) -> dict:
+    """Match IDs pasted from the admin app to the bundle's live forms.
+
+    IDs are matched ignoring case. Each entry may hold several IDs, split on
+    commas, semicolons and whitespace, with surrounding quotes and brackets
+    removed (see `split_pasted_ids`); `matches` is keyed by the cleaned,
+    lower-case ID.
+
+    Each ID is checked against form UUIDs, form element UUIDs and concept
+    UUIDs (a concept can sit on several forms, so it can match more than
+    once). Returns {"matches": {id: [match, ...]}}, an empty list for an ID
+    that matches nothing. A match names the `form`, `formUuid` and `usedIn`,
+    plus `section`, `field`, `conceptName` and `matchedAs` ("field" or
+    "concept") for a field match; `matchedAs` is "form" for a form match.
+    An ID found only on deleted forms is still matched, with `formDeleted`
+    set, so the chat can say the form was deleted instead of "no match";
+    when it is also on a live form, only the live matches are kept.
+    """
+    wanted = split_pasted_ids(ids)
+    matches: dict[str, list[dict]] = {i: [] for i in wanted}
     with _open_bundle(bundle_path) as workdir:
         forms = _load_forms(workdir)
         indexes = _load_mapping_indexes(workdir)
         mappings = _load_form_mappings(workdir)
-        out_forms: list[dict] = []
-        for fname in sorted(forms):
-            form = forms[fname]
-            sections = []
-            for g in form.get("formElementGroups", []):
-                fields = []
-                for e in g.get("formElements", []):
-                    concept = e.get("concept") or {}
-                    field: dict = {
-                        "name": e.get("name"),
-                        "uuid": e.get("uuid"),
-                        "conceptName": concept.get("name"),
-                        "conceptUuid": concept.get("uuid"),
-                        "dataType": concept.get("dataType"),
-                        "voided": bool(e.get("voided", False)),
-                    }
-                    if concept.get("dataType") == "Coded":
-                        field["answers"] = [
-                            a.get("name") for a in (concept.get("answers") or [])
-                            if a.get("name") and not a.get("voided")
-                        ]
-                    fields.append(field)
-                sections.append({"name": g.get("name"), "fields": fields})
-            out_forms.append({
-                "file": fname,
-                "form": form.get("name"),
-                "uuid": form.get("uuid"),
-                "formType": form.get("formType"),
-                "usedIn": [
-                    _mapping_names(m, indexes)
-                    for m in _active_mappings_for(form, mappings)
-                ],
-                "sections": sections,
-            })
-        return {"bundle_path": bundle_path, "forms": out_forms}
+    for fname in sorted(forms):
+        form = forms[fname]
+        deleted = bool(form.get("voided"))
+        base = {
+            "form": form.get("name"),
+            "formUuid": form.get("uuid"),
+            **({"formDeleted": True} if deleted else {}),
+            "usedIn": [
+                _mapping_names(m, indexes) for m in _active_mappings_for(form, mappings)
+            ],
+        }
+        if _id_key(form.get("uuid")) in matches:
+            matches[_id_key(form.get("uuid"))].append({**base, "matchedAs": "form"})
+        for g in form.get("formElementGroups", []):
+            for e in g.get("formElements", []):
+                concept = e.get("concept") or {}
+                for raw, kind in ((e.get("uuid"), "field"), (concept.get("uuid"), "concept")):
+                    key = _id_key(raw)
+                    if key in matches:
+                        matches[key].append({
+                            **base,
+                            "section": g.get("name"),
+                            "field": e.get("name"),
+                            "conceptName": concept.get("name"),
+                            "fieldVoided": bool(e.get("voided", False)),
+                            "matchedAs": kind,
+                        })
+    for key, found in matches.items():
+        live = [m for m in found if not m.get("formDeleted")]
+        if live:
+            matches[key] = live
+    return {"matches": matches}
 
 
 # ── Rule generation support (VISIT_SCHEDULE_RULE_SDD §9.2) ───────────────────

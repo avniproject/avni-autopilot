@@ -26,8 +26,10 @@ from domain.bundle_editor import (
     BundleOrigin,
     apply_field_edits,
     classify_bundle,
+    find_bundle_ids as _find_bundle_ids,
     list_bundle_fields as _list_bundle_fields,
     load_form_rule_context,
+    split_pasted_ids,
 )
 from domain.docs.knowledge_base import DocsKnowledgeBase
 from domain.generators import unlinked_form_names
@@ -503,21 +505,39 @@ async def resume_bundle(
 @tool
 def list_bundle_fields(
     bundle_path: str | None = None,
+    form_name: str | None = None,
+    form_uuid: str | None = None,
+    ids: list[str] | None = None,
     config: RunnableConfig = None,
 ) -> dict:
     """Inspect a bundle (ZIP or unpacked directory) and return a compact
-    summary of every form, section, and field. Coded fields include their
-    `answers` list.
+    summary of its forms, sections, and fields. Deleted forms are left out.
+    Coded fields include their `answers` list.
 
-    Each form has its `uuid` and `usedIn`: one entry per form mapping with
-    the `subjectType`, `program` and `encounterType` the form is used for
-    (keys absent when they do not apply). Each field has its form element
-    `uuid`, its `conceptName` and its `conceptUuid`. Rules read a field's
-    value by `conceptName`, which can differ from the question `name`. Use
-    these to answer which subject type,
-    program or visit type a form belongs to, to match an ID the user pastes
-    to its field, and to fill in IDs yourself — never ask the user for an
-    ID or a mapping that is in this output.
+    Three ways to call it:
+    - No `form_name`, `form_uuid` or `ids`: every form, with no IDs. Each
+      form has `usedIn`: one entry per form mapping with the `subjectType`,
+      `program` and `encounterType` the form is used for (keys absent when
+      they do not apply). A form whose name another form shares also has its
+      `uuid`, so the copies can be told apart. Call this once per chat; it
+      stays in the conversation, so read it again from there. In the webapp
+      a repeat call on an unchanged app returns only `unchanged` and a
+      `note`. The list is the setup as downloaded when the chat opened (plus
+      changes made in this chat), not a fresh read of the server.
+    - `form_name` (plus `form_uuid` when several forms share the name): that
+      form only, with its `uuid` and each field's form element `uuid` and
+      `conceptUuid`. Use it when you need IDs for one form.
+    - `ids`: IDs the user pasted, as given (any case, quoted, or several in
+      one entry joined by commas or spaces). Returns `matches`, keyed by the
+      cleaned lower-case ID: for each ID the form,
+      page (`section`) and field it belongs to and whether it matched a
+      form, a field (form element) or a concept; an empty list when nothing
+      matches. `formDeleted` marks a match found only on a deleted form.
+
+    Rules read a field's value by `conceptName`, which can differ from the
+    question `name`. Use this output to answer which subject type, program
+    or visit type a form belongs to and to fill in IDs yourself — never ask
+    the user for an ID or a mapping this tool can give.
 
     Use this BEFORE any tool that takes bundle names as arguments so your
     call uses real names from the bundle. The user often types informally —
@@ -531,18 +551,70 @@ def list_bundle_fields(
     Args:
         bundle_path: Path to a bundle ZIP file or an unpacked bundle directory.
             Ignored in a webapp session; required in the REPL.
+        form_name: Exact name of one form whose IDs you need.
+        form_uuid: The form's `uuid`, only when several forms share the name.
+        ids: IDs the user pasted, to match to forms and fields.
     """
     resolved = _resolve_bundle_path(bundle_path, config)
     if not resolved:
         return {"status": "error", "error": _NO_BUNDLE_ERROR}
+    form_uuid = (form_uuid or "").strip() or None
+    if form_name is not None and not form_name.strip():
+        if not form_uuid:
+            return {"status": "error", "error": "Form name is empty."}
+        form_name = None
+    if ids is not None:
+        if not split_pasted_ids(ids):
+            return {"status": "error", "error": "No IDs given to look up."}
+        if form_name or form_uuid:
+            return {"status": "error", "error": (
+                "Pass either ids or form_name/form_uuid, not both: ids are "
+                "matched across every form."
+            )}
+    full_list = ids is None and form_name is None and form_uuid is None
+    session = _session_of(config)
+    snapshot = _bundle_snapshot_key(resolved)
+    if full_list and session is not None and snapshot is not None \
+            and getattr(session, "fields_listed_for", None) == snapshot:
+        return {"status": "done", "result": {
+            "unchanged": True, "note": _FIELD_LIST_UNCHANGED_NOTE,
+        }}
     try:
-        fields = _list_bundle_fields(resolved)
+        if ids is not None:
+            fields = _find_bundle_ids(resolved, ids)
+        else:
+            fields = _list_bundle_fields(resolved, form_name, form_uuid)
     except FileNotFoundError as exc:
         return _unreadable_bundle(exc)
     except Exception as exc:  # noqa: BLE001
         return {"status": "error", "error": str(exc)}
     fields.pop("bundle_path", None)
+    if (form_name or form_uuid) and ids is None and not fields["forms"]:
+        missing = f"{form_name!r} with uuid {form_uuid!r}" if form_uuid else repr(form_name)
+        return {"status": "error", "error": f"No form {missing} in the bundle."}
+    if full_list and session is not None and snapshot is not None:
+        session.fields_listed_for = snapshot
     return {"status": "done", "result": fields}
+
+
+_FIELD_LIST_UNCHANGED_NOTE = (
+    "The app has not changed since the full field list was last returned in "
+    "this chat; read it from there. It is the organisation's setup as "
+    "downloaded when this chat opened, plus changes made in this chat. "
+    "Changes made in App Designer since the chat opened are not in it; to "
+    "see them the user starts a new chat."
+)
+
+
+def _bundle_snapshot_key(bundle_path: str) -> tuple | None:
+    """Identity of a bundle ZIP's current contents, or None for a directory."""
+    try:
+        stat = os.stat(bundle_path)
+    except OSError:
+        return None
+    if not os.path.isfile(bundle_path):
+        return None
+    return (os.path.abspath(bundle_path), stat.st_mtime_ns, stat.st_size)
 
 
 @tool
@@ -558,9 +630,13 @@ def edit_bundle_fields(
         "op_id":  "<your-id>",
         "kind":   "field.add" | "field.rename" | "field.remove"
                   | "field.set_selection_type",
-        "target": { "form": "...", "section": "...", "field": "..."? },
+        "target": { "form": "...", "section": "...", "field": "..."?,
+                    "form_uuid": "..."? },
         "payload": { ... }     # kind-specific
       }
+
+    Pass `form_uuid` only when the field list shows the form's `uuid`
+    (another form, possibly deleted, shares its name).
 
     field.add payload: name (required), dataType (default 'Text'),
       mandatory?, options? (required for Coded), selectionType?, unit?, min?,

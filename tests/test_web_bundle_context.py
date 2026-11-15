@@ -317,6 +317,85 @@ def test_list_bundle_fields_carries_no_server_path(tmp_path: Path) -> None:
     _assert_no_server_path(result, session.bundle_path, tmp_path)
 
 
+def test_list_bundle_fields_gives_ids_for_one_form_and_matches_pasted_ids(tmp_path: Path) -> None:
+    session = _session(tmp_path)
+    session.bundle_path = _ekam_copy(tmp_path)
+    config = _session_config(session)
+    full = tools.list_bundle_fields.invoke({}, config=config)["result"]["forms"]
+    assert all("conceptUuid" not in fld for f in full for s in f["sections"] for fld in s["fields"])
+
+    one = tools.list_bundle_fields.invoke({"form_name": "ANC Cancellation"}, config=config)
+    [form] = one["result"]["forms"]
+    field = form["sections"][0]["fields"][0]
+    assert form["uuid"] and field["uuid"] and field["conceptUuid"]
+
+    found = tools.list_bundle_fields.invoke({"ids": [field["uuid"]]}, config=config)
+    [match] = found["result"]["matches"][field["uuid"]]
+    assert (match["form"], match["field"], match["matchedAs"]) == (
+        "ANC Cancellation", field["name"], "field",
+    )
+    _assert_no_server_path(found, session.bundle_path, tmp_path)
+
+
+@pytest.mark.parametrize(("args", "error"), [
+    ({"ids": []}, "No IDs given to look up."),
+    ({"ids": ["  "]}, "No IDs given to look up."),
+    ({"ids": ['"", ']}, "No IDs given to look up."),
+    ({"form_name": ""}, "Form name is empty."),
+    ({"form_name": "  ", "form_uuid": ""}, "Form name is empty."),
+    ({"ids": ["x"], "form_name": "ANC Cancellation"},
+     "Pass either ids or form_name/form_uuid, not both: ids are matched across every form."),
+])
+def test_list_bundle_fields_rejects_empty_lookups(
+    tmp_path: Path, args: dict, error: str,
+) -> None:
+    session = _session(tmp_path)
+    session.bundle_path = _ekam_copy(tmp_path)
+    result = tools.list_bundle_fields.invoke(args, config=_session_config(session))
+    assert result == {"status": "error", "error": error}
+
+
+def test_list_bundle_fields_finds_a_form_by_uuid_with_a_blank_name(tmp_path: Path) -> None:
+    session = _session(tmp_path)
+    session.bundle_path = _ekam_copy(tmp_path)
+    config = _session_config(session)
+    [form] = tools.list_bundle_fields.invoke(
+        {"form_name": "ANC Cancellation"}, config=config,
+    )["result"]["forms"]
+    result = tools.list_bundle_fields.invoke(
+        {"form_name": "", "form_uuid": form["uuid"]}, config=config,
+    )
+    assert [f["form"] for f in result["result"]["forms"]] == ["ANC Cancellation"]
+
+
+def test_repeat_full_list_on_an_unchanged_bundle_returns_a_short_note(tmp_path: Path) -> None:
+    session = _session(tmp_path)
+    session.bundle_path = _ekam_copy(tmp_path)
+    config = _session_config(session)
+    first = tools.list_bundle_fields.invoke({}, config=config)
+    assert first["result"]["forms"]
+    again = tools.list_bundle_fields.invoke({}, config=config)
+    assert again == {"status": "done", "result": {
+        "unchanged": True, "note": tools._FIELD_LIST_UNCHANGED_NOTE,
+    }}
+    # One-form and ID lookups are not cut short.
+    one = tools.list_bundle_fields.invoke({"form_name": "ANC Cancellation"}, config=config)
+    assert one["result"]["forms"]
+
+    tools.edit_bundle_fields.invoke({"operations": [_add_field_op()]}, config=config)
+    after_edit = tools.list_bundle_fields.invoke({}, config=config)
+    assert after_edit["result"]["forms"]
+
+
+def test_list_bundle_fields_reports_an_unknown_form(tmp_path: Path) -> None:
+    session = _session(tmp_path)
+    session.bundle_path = _ekam_copy(tmp_path)
+    result = tools.list_bundle_fields.invoke(
+        {"form_name": "No Such Form"}, config=_session_config(session),
+    )
+    assert result == {"status": "error", "error": "No form 'No Such Form' in the bundle."}
+
+
 @pytest.mark.parametrize("tool_name", ["list_bundle_fields", "edit_bundle_fields"])
 def test_an_unreadable_bundle_is_reported_without_its_path(tmp_path: Path, tool_name: str) -> None:
     session = _session(tmp_path)

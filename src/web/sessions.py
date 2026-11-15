@@ -130,6 +130,9 @@ class ChatSession:
     # Notes from the last build or update tool call, shown by the chat
     # service and kept out of what the model reads.
     pending_notices: list[str] = field(default_factory=list)
+    # Bundle identity (path, mtime, size) the full field list was last
+    # returned for; a repeat call on the same bundle returns a short note.
+    fields_listed_for: Optional[tuple] = None
 
     @property
     def org_slug(self) -> str:
