@@ -112,8 +112,8 @@ def _summarize_tool_result(content: Any) -> str:
 
 
 def _uploaded_spreadsheet_names(session: ChatSession) -> list[str]:
-    """Names of the .xlsx workbooks uploaded for this org."""
-    input_dir = Path(settings.input_root) / session.org_slug
+    """Names of the .xlsx workbooks uploaded in this chat."""
+    input_dir = session.input_dir
     return [Path(p).name for p in find_spreadsheets(str(input_dir))]
 
 
@@ -218,7 +218,7 @@ def _build_org_context(session: ChatSession) -> str:
     """
     return (
         f"The signed-in user is an admin for the **{session.org_name}** "
-        f"organisation. Its folder slug is `{session.org_slug}`. "
+        f"organisation. Its slug is `{session.org_slug}`. "
         f"Whenever a tool takes an `org` argument (generate_bundle, "
         f"edit_bundle_from_spec), use `{session.org_slug}` — do NOT prompt "
         f"the user for the org name; it is implicit from the session.\n\n"

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import time
 from pathlib import Path
 from typing import Literal
@@ -30,9 +31,10 @@ from domain.bundle_editor import (
     list_bundle_fields as _list_bundle_fields,
     load_form_rule_context,
     split_pasted_ids,
+    unlinked_forms_in_bundle,
 )
 from domain.docs.knowledge_base import DocsKnowledgeBase
-from domain.generators import unlinked_form_names
+from domain.generators import unlinked_form_names, unlinked_forms, unlinked_forms_error
 from domain.rules.generator import RuleGenerator
 from domain.rules.prompts import entity_param_for_form_type
 from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
@@ -60,6 +62,12 @@ _phase2_graph = build_phase2_graph()
 _rule_generator = RuleGenerator()
 _docs_kb = DocsKnowledgeBase()
 _saved_states: dict[str, dict] = {}
+# Webapp session id that started each paused run, so one chat cannot resume
+# (and take the bundle of) another chat's run.
+_saved_state_owners: dict[str, str] = {}
+# Chat-added fields each run was cleared to remove when it started; a field
+# added while the run waits for confirmation needs its own go-ahead.
+_run_cleared_chat_fields: dict[str, list] = {}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -99,6 +107,49 @@ _SETUP_LOADING_ERROR = (
     "again in a moment."
 )
 
+_CHAT_FIELDS_REMOVED_BY_UPDATE = (
+    "Not updated yet. An update from the spreadsheets removes every field "
+    "they do not have, so any of these fields added in this chat that are "
+    "not in the spreadsheets would be removed: {fields}."
+)
+_CHAT_FIELDS_LOST_BY_BUILD = (
+    "Not built yet. A build is made from the spreadsheets only, so these "
+    "fields added in this chat would not be in it unless the spreadsheets "
+    "have them: {fields}."
+)
+_CHAT_FIELDS_NEXT_STEP = (
+    " Tell the user, suggest adding them to the spreadsheet first, and call "
+    "again with confirmed_chat_fields_may_be_removed=true only after they "
+    "say to go ahead."
+)
+
+
+def _chat_fields_unconfirmed(session, confirmed: bool) -> bool:  # noqa: ANN001
+    return bool(getattr(session, "fields_added_in_chat", None)) and not confirmed
+
+
+def _chat_fields_error(session, template: str, fields: list | None = None) -> dict:  # noqa: ANN001
+    listed = ", ".join(
+        f"{form} › {name}" for form, name in (fields or session.fields_added_in_chat)
+    )
+    return {"status": "error", "error": template.format(fields=listed) + _CHAT_FIELDS_NEXT_STEP}
+
+
+async def _run_and_report(initial: dict, thread_id: str, session, config) -> dict:  # noqa: ANN001
+    """Run phase 1 (and phase 2 when nothing needs confirming) and report it.
+
+    A run that pauses keeps which chat started it and which chat-added
+    fields it was cleared to drop, so `resume_bundle` can check both.
+    """
+    result = await _run_phase1_then_pause_or_finish(initial, thread_id)
+    if session is not None and result.get("status") == "needs_confirmation":
+        _saved_state_owners[thread_id] = getattr(session, "session_id", "")
+        _run_cleared_chat_fields[thread_id] = list(
+            getattr(session, "fields_added_in_chat", None) or []
+        )
+    return _report_bundle(result, config)
+
+
 _SEPARATE_BUILD_NOT_CONFIRMED_ERROR = (
     "Not built. The organisation's current setup could not be loaded, or its "
     "forms were set up outside Autopilot, so a build makes a separate new set "
@@ -126,6 +177,19 @@ _UNREADABLE_BUNDLE_ERROR = (
 )
 
 
+def _new_thread_id(org: str) -> str:
+    """Id of a build or update run; random so two chats for one org never share one."""
+    return f"bundle-{org}-{int(time.time())}-{secrets.token_hex(4)}"
+
+
+def _org_dirs(org: str, session) -> tuple[str, str]:  # noqa: ANN001
+    """Spreadsheet and output folders: the chat's own in a webapp session,
+    `<input_root>/<org>` and `<output_root>/<org>` in the REPL."""
+    if session is not None:
+        return str(session.input_dir), str(session.output_dir)
+    return os.path.join(settings.input_root, org), os.path.join(settings.output_root, org)
+
+
 def _has_spreadsheets(input_dir: str) -> bool:
     return bool(find_spreadsheets(input_dir))
 
@@ -149,6 +213,7 @@ def _report_bundle(result: dict, config: RunnableConfig | None) -> dict:
     the person at the terminal.
     """
     session = _session_of(config)
+    unlinked_by_uuid = result.pop("unlinked_form_uuids", None)
     if session is None:
         return result
     session.pending_notices = result.pop("notices", [])
@@ -159,7 +224,83 @@ def _report_bundle(result: dict, config: RunnableConfig | None) -> dict:
     if zip_path:
         session.bundle_path = Path(zip_path)
         result["bundle_updated"] = True
+        _carry_build_errors(session, result, unlinked_by_uuid or {})
+        _track_fields_added_in_chat(session, result)
     return result
+
+
+def _carry_build_errors(session, result: dict, built_unlinked: dict[str, str]) -> None:  # noqa: ANN001
+    """Keep a build's unlinked-forms error on every later card of that bundle.
+
+    A build that leaves forms unlinked is offered with that error, and the
+    card holds back Upload to org while it has errors. A later field edit or
+    update changes the same bundle but cannot link forms, and its own result
+    carries no build errors, so without this its card would offer the upload.
+    The forms are checked again in the bundle, so one that is gone (or
+    linked) no longer counts. Only forms a build in this chat left unlinked
+    count: an org's own setup can hold forms with no mapping on purpose.
+    Forms are matched by UUID, as several forms can share a name. When the
+    bundle cannot be read again the error is kept, so Upload stays held back.
+    """
+    if result.get("mode") == "generate":
+        session.build_unlinked_forms = dict(built_unlinked)
+        return
+    earlier: dict[str, str] = getattr(session, "build_unlinked_forms", None) or {}
+    if not earlier:
+        return
+    try:
+        in_bundle = unlinked_forms_in_bundle(str(session.bundle_path))
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"unlinked-forms check skipped, keeping the build's error: {exc}")
+        in_bundle = earlier
+    still = {uuid: name for uuid, name in earlier.items() if uuid in in_bundle}
+    session.build_unlinked_forms = still
+    if still:
+        names = list(still.values())
+        result["unlinked_forms"] = names
+        result["errors"] = [*(result.get("errors") or []), unlinked_forms_error(names)]
+
+
+def fields_added_after_edits(
+    added: list[tuple[str, str]], operations: list[dict], applied: set[str],
+) -> list[tuple[str, str]]:
+    """The (form, field) pairs added in this chat that are still in the
+    bundle under those names, after the applied `operations` in order.
+
+    An add records the field; a remove of a recorded field forgets it, and a
+    rename carries it to its new name, so an update never asks about a field
+    the chat has already taken out, or names it by an old name. Names match
+    the way field edits match them: case-folded, surrounding spaces ignored.
+    """
+    def key(form: str | None, name: str | None) -> tuple[str, str]:
+        return (form or "").strip().lower(), (name or "").strip().lower()
+
+    tracked = list(added)
+    for op in operations:
+        if op.get("op_id") not in applied:
+            continue
+        target, payload = op.get("target") or {}, op.get("payload") or {}
+        form, kind = target.get("form", ""), op.get("kind")
+        if kind == "field.add":
+            name = payload.get("name", "")
+            if key(form, name) not in {key(*f) for f in tracked}:
+                tracked.append((form, name))
+        elif kind == "field.remove":
+            tracked = [f for f in tracked if key(*f) != key(form, target.get("field"))]
+        elif kind == "field.rename":
+            new_name = (payload.get("new_name") or "").strip()
+            tracked = [
+                (f[0], new_name) if key(*f) == key(form, target.get("field")) else f
+                for f in tracked
+            ]
+    return tracked
+
+
+def _track_fields_added_in_chat(session, result: dict) -> None:  # noqa: ANN001
+    """Forget chat-added fields once a build or update has replaced or
+    checked the bundle against the spreadsheets."""
+    if result.get("mode") in ("generate", "edit_from_spec"):
+        session.fields_added_in_chat = []
 
 
 
@@ -215,10 +356,12 @@ def _shape_generate_summary(summary: dict, state: dict) -> None:
     as ready.
     """
     forms = state.get("forms_json", [])
-    unlinked = unlinked_form_names(forms, state.get("form_mappings_json", []))
+    mappings = state.get("form_mappings_json", [])
+    unlinked = unlinked_form_names(forms, mappings)
     if not unlinked:
         return
     summary["unlinked_forms"] = unlinked
+    summary["unlinked_form_uuids"] = unlinked_forms(forms, mappings)
     if len(unlinked) == len(forms):
         log.warning(f"build withheld: none of {len(forms)} form(s) linked")
         summary["status"] = "error"
@@ -227,11 +370,7 @@ def _shape_generate_summary(summary: dict, state: dict) -> None:
         for key in _SPEC_COUNT_KEYS:
             summary.pop(key, None)
         return
-    summary["errors"] = [
-        *summary["errors"],
-        "These forms could not be linked to a subject type, program or visit "
-        "type, so no screen in the app opens them: " + ", ".join(unlinked) + ".",
-    ]
+    summary["errors"] = [*summary["errors"], unlinked_forms_error(unlinked)]
 
 
 # Counts of the bundle built from the spreadsheets. An update applies only
@@ -240,6 +379,17 @@ _SPEC_COUNT_KEYS = (
     "subject_types", "programs", "encounter_types", "main_forms",
     "cancellation_forms", "concepts", "form_mappings",
 )
+
+
+def _fields_removed_by_update(state: dict) -> list[str]:
+    """`Form › Field` for each field the update voided because the
+    spreadsheets no longer have it."""
+    applied = set((state.get("edit_result") or {}).get("applied") or [])
+    return [
+        f"{op['target'].get('form')} › {op['target'].get('field')}"
+        for op in state.get("diff_ops") or []
+        if op.get("kind") == "field.remove" and op.get("op_id") in applied
+    ]
 
 
 def _shape_edit_from_spec_summary(summary: dict, state: dict) -> None:
@@ -272,6 +422,14 @@ def _shape_edit_from_spec_summary(summary: dict, state: dict) -> None:
     )
     if left_as_they_are:
         summary["notices"].append(left_as_they_are)
+    removed = _fields_removed_by_update(state)
+    if removed:
+        summary["removed_fields"] = removed
+        summary["notices"].append(
+            "These fields are not in the spreadsheets, so the update removed "
+            "them from the app: " + ", ".join(removed)
+            + ". To keep one, add it to the spreadsheet and update again."
+        )
     if summary["zip_path"]:
         return
     matched_forms = len(state.get("forms_json", [])) - len(unmatched)
@@ -353,6 +511,7 @@ async def generate_bundle(
     org: str,
     user_instructions: str | None = None,
     confirmed_separate_build: bool = False,
+    confirmed_chat_fields_may_be_removed: bool = False,
     config: RunnableConfig = None,
 ) -> dict:
     """Start an Avni bundle generation for a specific org.
@@ -378,28 +537,39 @@ async def generate_bundle(
             that this build is separate from the organisation's existing
             forms and still wants it. Required when the organisation's setup
             could not be loaded or its forms were set up outside Autopilot.
+        confirmed_chat_fields_may_be_removed: Set to true only after the user
+            has heard that fields added in this chat are not carried into a
+            build from the spreadsheets, and still wants it. Required when
+            fields were added in this chat; the tool names them.
     """
     org = org.strip().lower()
-    input_dir = os.path.join(settings.input_root, org)
-    output_dir = os.path.join(settings.output_root, org)
+    session = _session_of(config)
+    input_dir, output_dir = _org_dirs(org, session)
     if not _has_spreadsheets(input_dir):
         return {"status": "error", "error": _NO_SPREADSHEET_ERROR}
-    session = _session_of(config)
     if session is not None:
         if session.org_setup_loading:
             return {"status": "error", "error": _SETUP_LOADING_ERROR}
         if session.build_needs_confirmation and not confirmed_separate_build:
             return {"status": "error", "error": _SEPARATE_BUILD_NOT_CONFIRMED_ERROR}
+        if _chat_fields_unconfirmed(session, confirmed_chat_fields_may_be_removed):
+            return _chat_fields_error(session, _CHAT_FIELDS_LOST_BY_BUILD)
 
-    thread_id = f"bundle-{org}-{int(time.time())}"
+    thread_id = _new_thread_id(org)
+    if session is not None:
+        # Each build gets its own folder: the pipeline writes `<Org>.zip`,
+        # and a build that is withheld must not overwrite the bundle the
+        # chat already has.
+        output_dir = os.path.join(output_dir, thread_id)
     initial = initial_state(org, input_dir, output_dir, user_instructions)
-    return _report_bundle(await _run_phase1_then_pause_or_finish(initial, thread_id), config)
+    return await _run_and_report(initial, thread_id, session, config)
 
 
 @tool
 async def edit_bundle_from_spec(
     org: str,
     user_instructions: str | None = None,
+    confirmed_chat_fields_may_be_removed: bool = False,
     config: RunnableConfig = None,
 ) -> dict:
     """Update the org's existing bundle from the current source .xlsx (the spec).
@@ -421,14 +591,22 @@ async def edit_bundle_from_spec(
     tool returns `needs_confirmation`. Resume with the existing
     `resume_bundle(thread_id, resolutions)` — same as for generate_bundle.
 
+    Any field the spreadsheets do not have is removed, including fields
+    added in this chat. When fields were added in this chat the tool first
+    returns an error naming them; call again with
+    `confirmed_chat_fields_may_be_removed=true` once the user agrees.
+
     Args:
         org: Org subfolder name, case-insensitive (e.g. 'srijan').
         user_instructions: Optional natural-language instruction passed to
             the LLM enrichment step.
+        confirmed_chat_fields_may_be_removed: Set to true only after the user
+            has heard which fields added in this chat the update may remove
+            and still wants it.
     """
     org = org.strip().lower()
-    input_dir = os.path.join(settings.input_root, org)
     session = _session_of(config)
+    input_dir, output_dir = _org_dirs(org, session)
     if session is not None:
         bundle_path = str(session.bundle_path) if session.bundle_path else ""
     else:
@@ -452,20 +630,24 @@ async def edit_bundle_from_spec(
         return _unreadable_bundle(exc)
     if origin is not BundleOrigin.AUTOPILOT:
         return {"status": "error", "error": _UNUPDATABLE_BUNDLE_ERRORS[origin]}
+    if session is not None and _chat_fields_unconfirmed(
+        session, confirmed_chat_fields_may_be_removed,
+    ):
+        return _chat_fields_error(session, _CHAT_FIELDS_REMOVED_BY_UPDATE)
 
-    output_dir = os.path.join(settings.output_root, org)
-    thread_id = f"bundle-{org}-{int(time.time())}"
+    thread_id = _new_thread_id(org)
     initial = initial_state(
         org, input_dir, output_dir, user_instructions,
         mode="edit_from_spec", bundle_path=bundle_path,
     )
-    return _report_bundle(await _run_phase1_then_pause_or_finish(initial, thread_id), config)
+    return await _run_and_report(initial, thread_id, session, config)
 
 
 @tool
 async def resume_bundle(
     thread_id: str,
     resolutions: dict[str, str],
+    confirmed_chat_fields_may_be_removed: bool = False,
     config: RunnableConfig = None,
 ) -> dict:
     """Resume a paused bundle run after the user confirms pending changes.
@@ -477,8 +659,32 @@ async def resume_bundle(
             "yes"               — apply Claude's proposed `after`
             "no"                — skip this change
             "edit:<new_value>"  — apply with a user-provided override
+        confirmed_chat_fields_may_be_removed: Set to true only after the
+            user agreed that fields added in this chat while the run waited
+            may be removed (the tool names them when it applies).
     """
+    session = _session_of(config)
+    owner = _saved_state_owners.get(thread_id)
+    if session is not None and owner is not None and owner != getattr(session, "session_id", ""):
+        log.warning(f"resume_bundle thread_id={thread_id} belongs to another session")
+        return {"status": "error", "code": "E_NOT_THIS_CHAT", "error": (
+            f"thread_id={thread_id!r} is not a run of this chat. Use the "
+            "thread_id from this chat's own needs_confirmation result; do not "
+            "start a new run because of this."
+        )}
+    if session is not None and thread_id in _saved_states:
+        cleared = _run_cleared_chat_fields.get(thread_id, [])
+        added_since = [f for f in session.fields_added_in_chat if f not in cleared]
+        if added_since and not confirmed_chat_fields_may_be_removed:
+            template = (
+                _CHAT_FIELDS_REMOVED_BY_UPDATE
+                if _saved_states[thread_id].get("mode") == "edit_from_spec"
+                else _CHAT_FIELDS_LOST_BY_BUILD
+            )
+            return _chat_fields_error(session, template, added_since)
     saved = _saved_states.pop(thread_id, None)
+    _saved_state_owners.pop(thread_id, None)
+    _run_cleared_chat_fields.pop(thread_id, None)
     log.info(
         "resume_bundle thread_id=%s found_saved=%s n_resolutions=%d",
         thread_id, saved is not None, len(resolutions or {}),
@@ -678,6 +884,13 @@ def edit_bundle_fields(
     response = {"status": "done", "result": result.model_dump(exclude={"bundle_path"})}
     if result.forms_modified or result.concepts_appended:
         response["zip_path"] = resolved
+    session = _session_of(config)
+    if session is not None:
+        session.fields_added_in_chat = fields_added_after_edits(
+            getattr(session, "fields_added_in_chat", None) or [],
+            operations,
+            set(result.applied),
+        )
     return _report_bundle(response, config)
 
 

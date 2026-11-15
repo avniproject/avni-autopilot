@@ -25,7 +25,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from domain.generators import form_element_type, form_uuid, make_uuid
+from domain.generators import form_element_type, form_uuid, make_uuid, unlinked_forms
 from domain.rules.concept_answers import merge_answer_scopes
 from models import EditOperation, EditResult, RejectedOp
 
@@ -689,6 +689,17 @@ class BundleOrigin(str, Enum):
     NO_FORMS = "no_forms"
     AUTOPILOT = "autopilot"
     OTHER = "other"
+
+
+def unlinked_forms_in_bundle(bundle_path: str) -> dict[str, str]:
+    """The bundle's live forms that no active form mapping links (UUID -> name).
+
+    Raises FileNotFoundError when the path is not a bundle ZIP or directory.
+    """
+    with _open_bundle(bundle_path) as workdir:
+        forms = [f for f in _load_forms(workdir).values() if not f.get("voided")]
+        mappings = [m for m in _load_form_mappings(workdir) if not m.get("voided")]
+    return unlinked_forms([{"content": f} for f in forms], mappings)
 
 
 def classify_bundle(bundle_path: str) -> BundleOrigin:

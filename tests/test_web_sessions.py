@@ -122,3 +122,22 @@ async def test_reaper_cancels_cleanly_and_removes_all_sessions(tmp_path: Path) -
     assert len(store) == 0
     assert not a.workdir.exists()
     assert not b.workdir.exists()
+
+
+# ── Per-chat folders ──────────────────────────────────────────────────────────
+
+
+def test_each_chat_has_its_own_upload_and_output_folders(tmp_path: Path) -> None:
+    """Two chats for one org (two tabs, or two admins) never share files."""
+    store = _make_store(tmp_path)
+    first = store.create(org_name="Durga India", username="alice")
+    (first.input_dir / "MODELLING.XLSX").write_bytes(b"x")
+    (first.output_dir / "Durga_india.zip").write_bytes(b"zip")
+
+    second = store.create(org_name="Durga India", username="bob")
+
+    assert second.input_dir != first.input_dir
+    assert second.output_dir != first.output_dir
+    assert list(second.input_dir.iterdir()) == []
+    assert (first.input_dir / "MODELLING.XLSX").read_bytes() == b"x"
+    assert (first.output_dir / "Durga_india.zip").read_bytes() == b"zip"

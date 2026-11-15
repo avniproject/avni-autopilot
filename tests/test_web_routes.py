@@ -235,7 +235,20 @@ def test_a_rejected_upload_writes_none_of_its_files(client: TestClient) -> None:
     assert r.status_code == 400
     assert "'old.xls'" in r.json()["detail"]["error"]
     assert "good.xlsx" not in r.json()["detail"]["error"]
+    assert not list(Path(settings.ai_session_dir).rglob("good.xlsx"))
     assert not list(Path(settings.input_root).rglob("good.xlsx"))
+
+
+def test_a_second_chat_for_the_org_leaves_the_first_chats_upload(client: TestClient) -> None:
+    first = client.post("/sessions", headers={"Authorization": "Bearer abc"}).json()["session_id"]
+    files = [("files", ("Modelling.xlsx", io.BytesIO(b"PK\x03\x04"), "application/x"))]
+    uploaded = Path(client.post(f"/sessions/{first}/upload", files=files).json()["paths"][0])
+
+    second = client.post("/sessions", headers={"Authorization": "Bearer abc"}).json()["session_id"]
+
+    assert second != first
+    assert uploaded.read_bytes() == b"PK\x03\x04"
+    assert first in uploaded.parts and second not in uploaded.parts
 
 
 def test_upload_accepts_upper_case_xlsx(client: TestClient) -> None:

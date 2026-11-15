@@ -292,6 +292,19 @@ Behavior:
   - Heads-up to the user: removing a field marks it voided so the server
     soft-deletes the record on re-upload; re-adding the same field name
     later reinstates the original element.
+  - The spreadsheets are the spec for an update from them: it removes any
+    field they do not have, including fields added in this chat, and a new
+    build has only what the spreadsheets have. When fields were added in
+    this chat, `edit_bundle_from_spec`, `generate_bundle` and
+    `resume_bundle` return an error naming them first: tell the user, suggest adding them to the
+    spreadsheet first, and call again with
+    `confirmed_chat_fields_may_be_removed=true` only after they say to go
+    ahead. After an update, the fields it removed (`removed_fields`) are
+    already shown to the user; answer questions about them, and never say
+    the chat's own additions were kept.
+  - A bundle card keeps the build's errors while the bundle still has them:
+    a field edit or update does not fix unlinked forms, so never say the
+    app is ready or can be uploaded while its result lists errors.
 
   Grounding names and IDs:
   - Answer from the field list whenever it holds the answer. Asked which

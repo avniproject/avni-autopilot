@@ -29,8 +29,8 @@ import web.chat_service as chat_service_module
 import web.sessions as sessions_module
 from config import Settings
 from web.chat_service import ChatService, _build_org_context
-from domain.bundle_editor import BundleOrigin, classify_bundle
-from domain.generators import form_uuid
+from domain.bundle_editor import BundleOrigin, classify_bundle, unlinked_forms_in_bundle
+from domain.generators import form_uuid, unlinked_forms_error
 from web.sessions import ChatSession, OrgSetupStatus, download_org_bundle
 
 EKAM_BUNDLE = Path(__file__).resolve().parents[1] / "requirements" / "Ekam.zip"
@@ -118,14 +118,33 @@ def test_context_says_no_spreadsheet_when_none_uploaded(input_root: Path, tmp_pa
 
 
 def test_context_lists_uploaded_spreadsheets_only(input_root: Path, tmp_path: Path) -> None:
-    org_dir = input_root / "durga_india"
-    org_dir.mkdir()
+    org_dir = tmp_path / "work" / "input"
+    org_dir.mkdir(parents=True, exist_ok=True)
     (org_dir / "Modelling.xlsx").write_bytes(b"x")
     (org_dir / "notes.txt").write_text("not a spreadsheet")
     context = _build_org_context(_session(tmp_path))
     assert "`Modelling.xlsx`" in context
     assert "notes.txt" not in context
     assert "No spreadsheet has been uploaded" not in context
+
+
+def test_a_second_chat_neither_sees_nor_clears_the_first_chats_files(
+    input_root: Path, tmp_path: Path,
+) -> None:
+    store = sessions_module.SessionStore(
+        root_dir=tmp_path / "sessions", idle_minutes=30, max_hours=2,
+    )
+    first = store.create("Durga India", "alice")
+    (first.input_dir / "MODELLING.XLSX").write_bytes(b"x")
+    assert "`MODELLING.XLSX`" in _build_org_context(first)
+
+    second = store.create("Durga India", "alice")
+    context = _build_org_context(second)
+    assert "No spreadsheet has been uploaded in this chat" in context
+    assert "MODELLING.XLSX" not in context
+    # Opening the second chat leaves the first chat's upload in place.
+    assert (first.input_dir / "MODELLING.XLSX").exists()
+    assert "`MODELLING.XLSX`" in _build_org_context(first)
 
 
 def test_context_never_names_a_server_path(input_root: Path, tmp_path: Path) -> None:
@@ -191,8 +210,8 @@ def test_agent_sees_a_spreadsheet_uploaded_after_the_chat_started(
     config = {"configurable": {"thread_id": "t1"}}
 
     agent.invoke({"messages": [HumanMessage(content="build my app")]}, config=config)
-    org_dir = input_root / "durga_india"
-    org_dir.mkdir()
+    org_dir = tmp_path / "work" / "input"
+    org_dir.mkdir(parents=True, exist_ok=True)
     (org_dir / "Scoping.xlsx").write_bytes(b"x")
     session.org_setup_status = OrgSetupStatus.LOADED
     session.bundle_origin = BundleOrigin.AUTOPILOT
@@ -220,7 +239,7 @@ def test_repl_agent_keeps_the_static_prompt(monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.mark.asyncio
 async def test_generate_bundle_refuses_without_a_spreadsheet(input_root: Path) -> None:
-    (input_root / "durga_india").mkdir()
+    (input_root.parent / "work" / "input").mkdir(parents=True)
     result = await tools.generate_bundle.ainvoke({"org": "durga_india"})
     assert result["status"] == "error"
     assert "No spreadsheet has been uploaded" in result["error"]
@@ -242,8 +261,8 @@ async def test_edit_from_spec_refuses_without_a_spreadsheet(input_root: Path, tm
 async def test_edit_from_spec_without_a_session_bundle_names_no_path(
     input_root: Path, tmp_path: Path,
 ) -> None:
-    org_dir = input_root / "durga_india"
-    org_dir.mkdir()
+    org_dir = tmp_path / "work" / "input"
+    org_dir.mkdir(parents=True, exist_ok=True)
     (org_dir / "Modelling.xlsx").write_bytes(b"x")
     session = _session(tmp_path)
     session.org_setup_status = OrgSetupStatus.FAILED
@@ -259,8 +278,8 @@ async def test_edit_from_spec_without_a_session_bundle_names_no_path(
 async def test_edit_from_spec_edits_the_session_bundle(
     monkeypatch: pytest.MonkeyPatch, input_root: Path, tmp_path: Path,
 ) -> None:
-    org_dir = input_root / "durga_india"
-    org_dir.mkdir()
+    org_dir = tmp_path / "work" / "input"
+    org_dir.mkdir(parents=True, exist_ok=True)
     (org_dir / "Modelling.xlsx").write_bytes(b"x")
     session = _loaded_session(tmp_path, _autopilot_bundle(tmp_path), BundleOrigin.AUTOPILOT)
     captured: dict[str, Any] = {}
@@ -396,6 +415,224 @@ def test_list_bundle_fields_reports_an_unknown_form(tmp_path: Path) -> None:
     assert result == {"status": "error", "error": "No form 'No Such Form' in the bundle."}
 
 
+def _card_after(session: ChatSession, result: dict) -> dict:
+    """The bundle card the chat shows for a tool result."""
+    ChatService(session)._handle_tool_message(
+        ToolMessage(content=json.dumps(result), tool_call_id="c1"),
+    )
+    cards = [e for e in session.bus.replay_since(0) if e.type == "bundle.ready"]
+    return cards[-1].data["summary"]
+
+
+def _built_with_unlinked_forms(tmp_path: Path, unlinked: list[str]) -> ChatSession:
+    """A session whose bundle a build in this chat left with unlinked forms.
+
+    Ekam's own `Immunization Checklist` and `Location` have no form mapping,
+    so they stand in for forms the build could not link.
+    """
+    session = _session(tmp_path)
+    bundle = _ekam_copy(tmp_path)
+    uuid_by_name = {name: uuid for uuid, name in unlinked_forms_in_bundle(str(bundle)).items()}
+    built = tools._report_bundle({
+        "status": "done", "mode": "generate", "zip_path": str(bundle),
+        "unlinked_forms": unlinked, "errors": [unlinked_forms_error(unlinked)], "notices": [],
+        "unlinked_form_uuids": {uuid_by_name.get(name, f"uuid-{name}"): name for name in unlinked},
+    }, _session_config(session))
+    assert "unlinked_form_uuids" not in built
+    assert _card_after(session, built)["errors"] == [unlinked_forms_error(unlinked)]
+    return session
+
+
+def test_a_field_edit_keeps_the_builds_unlinked_forms_error_on_its_card(tmp_path: Path) -> None:
+    session = _built_with_unlinked_forms(tmp_path, ["Immunization Checklist", "Location"])
+
+    edited = tools.edit_bundle_fields.invoke(
+        {"operations": [_add_field_op()]}, config=_session_config(session),
+    )
+
+    expected = unlinked_forms_error(["Immunization Checklist", "Location"])
+    assert edited["bundle_updated"] is True
+    assert edited["errors"] == [expected]  # the model reads it too
+    assert _card_after(session, edited)["errors"] == [expected]
+
+
+def test_a_later_card_names_only_forms_still_unlinked_in_the_bundle(tmp_path: Path) -> None:
+    session = _built_with_unlinked_forms(tmp_path, ["Location", "Form Removed Since"])
+
+    edited = tools.edit_bundle_fields.invoke(
+        {"operations": [_add_field_op()]}, config=_session_config(session),
+    )
+
+    assert _card_after(session, edited)["errors"] == [unlinked_forms_error(["Location"])]
+
+
+def test_an_update_keeps_the_builds_unlinked_forms_error(tmp_path: Path) -> None:
+    session = _built_with_unlinked_forms(tmp_path, ["Location"])
+    updated = tools._report_bundle({
+        "status": "done", "mode": "edit_from_spec", "zip_path": str(session.bundle_path),
+        "errors": [], "notices": [],
+    }, _session_config(session))
+    assert _card_after(session, updated)["errors"] == [unlinked_forms_error(["Location"])]
+
+
+def test_a_same_named_form_does_not_stand_in_for_the_built_one(tmp_path: Path) -> None:
+    """The build's unlinked "Location" has another UUID than Ekam's own
+    unlinked "Location", so it is gone from the bundle and no longer counts."""
+    session = _session(tmp_path)
+    bundle = _ekam_copy(tmp_path)
+    tools._report_bundle({
+        "status": "done", "mode": "generate", "zip_path": str(bundle),
+        "unlinked_forms": ["Location"], "errors": [], "notices": [],
+        "unlinked_form_uuids": {"uuid-of-the-built-location": "Location"},
+    }, _session_config(session))
+    edited = tools.edit_bundle_fields.invoke(
+        {"operations": [_add_field_op()]}, config=_session_config(session),
+    )
+    assert "errors" not in edited
+
+
+def test_an_unreadable_bundle_keeps_the_builds_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    session = _built_with_unlinked_forms(tmp_path, ["Location"])
+
+    def unreadable(_path: str) -> dict:
+        raise ValueError("bad form JSON")
+
+    monkeypatch.setattr(tools, "unlinked_forms_in_bundle", unreadable)
+    edited = tools.edit_bundle_fields.invoke(
+        {"operations": [_add_field_op()]}, config=_session_config(session),
+    )
+    assert edited["bundle_updated"] is True
+    assert edited["errors"] == [unlinked_forms_error(["Location"])]
+
+
+@pytest.mark.asyncio
+async def test_a_chat_cannot_resume_another_chats_paused_run(tmp_path: Path) -> None:
+    other = ChatSession(session_id="sid-2", org_name="Durga India", username="u", workdir=tmp_path)
+    tools._saved_states["bundle-x-1"] = {"org_name": "durga_india"}
+    tools._saved_state_owners["bundle-x-1"] = _session(tmp_path).session_id
+    try:
+        result = await tools.resume_bundle.ainvoke(
+            {"thread_id": "bundle-x-1", "resolutions": {}}, config=_session_config(other),
+        )
+        assert result["code"] == "E_NOT_THIS_CHAT"
+        assert "do not start a new run" in result["error"]
+        assert "bundle-x-1" in tools._saved_states  # still there for its own chat
+    finally:
+        tools._saved_states.pop("bundle-x-1", None)
+        tools._saved_state_owners.pop("bundle-x-1", None)
+
+
+def _op(op_id: str, kind: str, field: str | None = None, **payload: str) -> dict:
+    target = {"form": "ANC", "section": "Details"}
+    if field is not None:
+        target["field"] = field
+    return {"op_id": op_id, "kind": kind, "target": target, "payload": payload}
+
+
+def test_chat_fields_follow_removes_and_renames() -> None:
+    ops = [
+        _op("op-1", "field.add", name="Height"),
+        _op("op-2", "field.add", name="Weight"),
+        _op("op-3", "field.remove", field=" height"),        # case and spaces as edits match
+        _op("op-4", "field.rename", field="Weight", new_name="Body Weight"),
+        _op("op-5", "field.rename", field="Pulse", new_name="Heart Rate"),  # not added here
+        _op("op-6", "field.add", name="Rejected Field"),
+    ]
+    applied = {"op-1", "op-2", "op-3", "op-4", "op-5"}
+    assert tools.fields_added_after_edits([], ops, applied) == [("ANC", "Body Weight")]
+
+
+def test_chat_fields_carry_over_between_edits() -> None:
+    earlier = [("ANC", "Height")]
+    ops = [_op("op-1", "field.add", name="height"), _op("op-2", "field.add", name="BMI")]
+    assert tools.fields_added_after_edits(earlier, ops, {"op-1", "op-2"}) == [
+        ("ANC", "Height"), ("ANC", "BMI"),
+    ]
+    assert tools.fields_added_after_edits(
+        earlier, [_op("op-1", "field.remove", field="Height")], {"op-1"},
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_resume_asks_about_fields_added_while_the_run_waited(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    session = _session(tmp_path)
+    session.fields_added_in_chat = [("ANC", "Cleared Before"), ("ANC", "Added While Paused")]
+    tools._saved_states["bundle-x-2"] = {"mode": "edit_from_spec"}
+    tools._saved_state_owners["bundle-x-2"] = session.session_id
+    tools._run_cleared_chat_fields["bundle-x-2"] = [("ANC", "Cleared Before")]
+
+    async def finished(_saved: dict, _thread_id: str) -> dict:
+        return {"status": "done", "mode": "edit_from_spec", "notices": []}
+
+    monkeypatch.setattr(tools, "_run_phase2", finished)
+    try:
+        held = await tools.resume_bundle.ainvoke(
+            {"thread_id": "bundle-x-2", "resolutions": {}}, config=_session_config(session),
+        )
+        assert held["status"] == "error"
+        assert "ANC › Added While Paused" in held["error"]
+        assert "Cleared Before" not in held["error"]
+        assert "bundle-x-2" in tools._saved_states
+
+        resumed = await tools.resume_bundle.ainvoke(
+            {"thread_id": "bundle-x-2", "resolutions": {},
+             "confirmed_chat_fields_may_be_removed": True},
+            config=_session_config(session),
+        )
+        assert resumed["status"] == "done"
+        assert "bundle-x-2" not in tools._saved_states
+        assert "bundle-x-2" not in tools._run_cleared_chat_fields
+    finally:
+        for registry in (tools._saved_states, tools._saved_state_owners, tools._run_cleared_chat_fields):
+            registry.pop("bundle-x-2", None)
+
+
+@pytest.mark.asyncio
+async def test_a_build_asks_before_dropping_fields_added_in_chat(
+    input_root: Path, tmp_path: Path,
+) -> None:
+    _upload_sheet(input_root)
+    session = _loaded_session(tmp_path, _empty_bundle(tmp_path), BundleOrigin.NO_FORMS)
+    session.fields_added_in_chat = [("ANC", "Remarks")]
+    result = await tools.generate_bundle.ainvoke(
+        {"org": "durga_india"}, config=_session_config(session),
+    )
+    assert result["status"] == "error"
+    assert result["error"].startswith("Not built yet")
+    assert "ANC › Remarks" in result["error"]
+
+
+def test_run_ids_differ_within_one_second() -> None:
+    assert tools._new_thread_id("durga_india") != tools._new_thread_id("durga_india")
+
+
+def test_an_orgs_own_unmapped_forms_do_not_block_its_edits(tmp_path: Path) -> None:
+    """Forms with no mapping in the org's own setup were not left so by a
+    build here, so an edit of that setup is not held back."""
+    session = _loaded_session(tmp_path, _ekam_copy(tmp_path), BundleOrigin.OTHER)
+    edited = tools.edit_bundle_fields.invoke(
+        {"operations": [_add_field_op()]}, config=_session_config(session),
+    )
+    assert "errors" not in edited
+    assert _card_after(session, edited).get("errors") in (None, [])
+
+
+def test_a_new_build_without_unlinked_forms_clears_the_carried_error(tmp_path: Path) -> None:
+    session = _built_with_unlinked_forms(tmp_path, ["Location"])
+    tools._report_bundle({
+        "status": "done", "mode": "generate", "zip_path": str(session.bundle_path),
+        "errors": [], "notices": [],
+    }, _session_config(session))
+    edited = tools.edit_bundle_fields.invoke(
+        {"operations": [_add_field_op()]}, config=_session_config(session),
+    )
+    assert "errors" not in edited
+
+
 @pytest.mark.parametrize("tool_name", ["list_bundle_fields", "edit_bundle_fields"])
 def test_an_unreadable_bundle_is_reported_without_its_path(tmp_path: Path, tool_name: str) -> None:
     session = _session(tmp_path)
@@ -410,8 +647,8 @@ def test_an_unreadable_bundle_is_reported_without_its_path(tmp_path: Path, tool_
 async def test_edit_from_spec_reports_an_unreadable_bundle_without_its_path(
     input_root: Path, tmp_path: Path,
 ) -> None:
-    org_dir = input_root / "durga_india"
-    org_dir.mkdir()
+    org_dir = tmp_path / "work" / "input"
+    org_dir.mkdir(parents=True, exist_ok=True)
     (org_dir / "Modelling.xlsx").write_bytes(b"x")
     session = _session(tmp_path)
     session.org_setup_status = OrgSetupStatus.LOADED
@@ -427,8 +664,8 @@ async def test_edit_from_spec_reports_an_unreadable_bundle_without_its_path(
 async def test_a_build_hands_its_bundle_to_the_session(
     monkeypatch: pytest.MonkeyPatch, input_root: Path, tmp_path: Path,
 ) -> None:
-    org_dir = input_root / "durga_india"
-    org_dir.mkdir()
+    org_dir = tmp_path / "work" / "input"
+    org_dir.mkdir(parents=True, exist_ok=True)
     (org_dir / "Modelling.xlsx").write_bytes(b"x")
     session = _loaded_session(tmp_path, _empty_bundle(tmp_path), BundleOrigin.NO_FORMS)
     built = tmp_path / "output" / "Durga_india.zip"
@@ -627,8 +864,9 @@ def test_context_after_a_build_in_chat_describes_that_bundle(input_root: Path, t
 
 
 def _upload_sheet(input_root: Path, name: str = "Modelling.xlsx") -> None:
-    org_dir = input_root / "durga_india"
-    org_dir.mkdir(exist_ok=True)
+    """Upload into the chat's own folder (`_session`'s workdir is `<tmp>/work`)."""
+    org_dir = input_root.parent / "work" / "input"
+    org_dir.mkdir(parents=True, exist_ok=True)
     (org_dir / name).write_bytes(b"x")
 
 
@@ -743,7 +981,7 @@ def test_upper_case_xlsx_is_listed_and_discovered(input_root: Path, tmp_path: Pa
 
     _upload_sheet(input_root, "MODELLING.XLSX")
     assert "`MODELLING.XLSX`" in _build_org_context(_session(tmp_path))
-    state = initial_state("durga_india", str(input_root / "durga_india"), str(tmp_path / "out"))
+    state = initial_state("durga_india", str(tmp_path / "work" / "input"), str(tmp_path / "out"))
     found = discover_files(state)
     assert [Path(p).name for p in found["file_paths"]] == ["MODELLING.XLSX"]
     assert found["errors"] == []

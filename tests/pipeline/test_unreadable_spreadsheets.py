@@ -91,7 +91,8 @@ def test_an_update_with_an_unreadable_file_reports_it(
     bundle = Path(built["zip_path"])
     before = bundle.read_bytes()
     _renamed_text_file(org_dir / "Forms.xlsx")
-    session = SimpleNamespace(bundle_path=bundle, org_setup_loading=False)
+    session = SimpleNamespace(
+        input_dir=Path(tools.settings.input_root) / ORG, output_dir=Path(tools.settings.output_root) / ORG, bundle_path=bundle, org_setup_loading=False)
 
     result = asyncio.run(tools.edit_bundle_from_spec.ainvoke(
         {"org": ORG}, config={"configurable": {"session": session}},

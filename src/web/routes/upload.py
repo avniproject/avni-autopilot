@@ -135,10 +135,9 @@ async def upload_scoping_files(
 ) -> dict[str, Any]:
     """Stream uploaded .xlsx files into the org's input directory.
 
-    Writes to `settings.input_root/<org_slug>/` — the same folder convention
-    the existing `generate_bundle(org)` tool reads from. The slug is derived
-    from the user's authenticated org (NOT user-supplied), so the chat agent
-    can call `generate_bundle(org=<slug>)` without asking the user for it.
+    Writes to the session's own `input_dir`, which the build and update
+    tools read in a webapp session. It is per chat, so a second chat for the
+    same org neither sees nor clears these files.
 
     Files with non-xlsx suffixes (including old-format .xls, which the
     pipeline cannot read) and Office lock files are rejected before any file
@@ -160,7 +159,7 @@ async def upload_scoping_files(
                 "code": "E_BAD_FILE_TYPE",
             },
         )
-    input_dir = Path(settings.input_root) / session.org_slug
+    input_dir = session.input_dir
     input_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[str] = []

@@ -62,8 +62,18 @@ def _build() -> Path:
     return Path(result["zip_path"])
 
 
+def _web_session(bundle: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        input_dir=Path(tools.settings.input_root) / ORG,
+        output_dir=Path(tools.settings.output_root) / ORG,
+        bundle_path=bundle,
+        org_setup_loading=False,
+        fields_added_in_chat=[],
+    )
+
+
 def _update(bundle: Path) -> dict:
-    session = SimpleNamespace(bundle_path=bundle, org_setup_loading=False)
+    session = _web_session(bundle)
     return asyncio.run(
         tools.edit_bundle_from_spec.ainvoke({"org": ORG}, config={"configurable": {"session": session}})
     )
@@ -115,7 +125,7 @@ def test_update_names_forms_it_cannot_add(offline_pipeline: Path, tmp_path: Path
 
 def test_update_that_changes_the_bundle_shows_the_card(offline_pipeline: Path, tmp_path: Path) -> None:
     bundle = _build()
-    session = SimpleNamespace(bundle_path=bundle, org_setup_loading=False)
+    session = _web_session(bundle)
     fields = tools.list_bundle_fields.invoke({}, config={"configurable": {"session": session}})
     form = next(f for f in fields["result"]["forms"] if f["form"] == REMOVED_FORM)
     section = form["sections"][0]
@@ -138,6 +148,119 @@ def test_update_that_changes_the_bundle_shows_the_card(offline_pipeline: Path, t
     events = _bundle_ready_events(result, tmp_path, bundle)
     assert len(events) == 1
     assert "main_forms" not in events[0].data["summary"]
+
+
+def test_update_names_a_field_added_in_chat_that_it_removes(offline_pipeline: Path) -> None:
+    """The spreadsheets are the spec, so an update removes a field added in
+    the chat; the user is told which, whatever the model says."""
+    bundle = _build()
+    session = _web_session(bundle)
+    config = {"configurable": {"session": session}}
+    form = next(
+        f for f in tools.list_bundle_fields.invoke({}, config=config)["result"]["forms"]
+        if f["form"] == REMOVED_FORM
+    )
+    added = tools.edit_bundle_fields.invoke({"operations": [{
+        "op_id": "op-1", "kind": "field.add",
+        "target": {"form": REMOVED_FORM, "section": form["sections"][0]["name"]},
+        "payload": {"name": "QA17 Chat Field", "dataType": "Text"},
+    }]}, config=config)
+    assert added["bundle_updated"] is True
+    assert session.fields_added_in_chat == [(REMOVED_FORM, "QA17 Chat Field")]
+    before = bundle.read_bytes()
+
+    held = asyncio.run(tools.edit_bundle_from_spec.ainvoke({"org": ORG}, config=config))
+
+    assert held["status"] == "error"
+    assert f"{REMOVED_FORM} › QA17 Chat Field" in held["error"]
+    assert "confirmed_chat_fields_may_be_removed=true" in held["error"]
+    assert bundle.read_bytes() == before
+
+    result = asyncio.run(tools.edit_bundle_from_spec.ainvoke(
+        {"org": ORG, "confirmed_chat_fields_may_be_removed": True}, config=config,
+    ))
+
+    assert result["status"] == "done"
+    assert session.fields_added_in_chat == []
+    assert result["removed_fields"] == [f"{REMOVED_FORM} › QA17 Chat Field"]
+    [notice] = [n for n in session.pending_notices if "QA17 Chat Field" in n]
+    assert "update removed them" in notice and "add it to the spreadsheet" in notice
+    assert notice in result["already_shown_to_user"]
+
+
+def _chat_edit(config: dict, op: dict) -> None:
+    result = tools.edit_bundle_fields.invoke({"operations": [op]}, config=config)
+    assert result["status"] == "done" and not result["result"]["rejected"], result
+
+
+def _section_of(config: dict, form_name: str) -> str:
+    forms = tools.list_bundle_fields.invoke({"form_name": form_name}, config=config)
+    return forms["result"]["forms"][0]["sections"][0]["name"]
+
+
+def test_an_update_does_not_ask_about_a_field_the_chat_added_then_removed(
+    offline_pipeline: Path,
+) -> None:
+    session = _web_session(_build())
+    config = {"configurable": {"session": session}}
+    section = _section_of(config, REMOVED_FORM)
+    _chat_edit(config, {"op_id": "op-1", "kind": "field.add",
+                        "target": {"form": REMOVED_FORM, "section": section},
+                        "payload": {"name": "QA17 Chat Field", "dataType": "Text"}})
+    _chat_edit(config, {"op_id": "op-2", "kind": "field.remove",
+                        "target": {"form": REMOVED_FORM, "section": section,
+                                   "field": "qa17 chat field "}, "payload": {}})
+    assert session.fields_added_in_chat == []
+
+    result = asyncio.run(tools.edit_bundle_from_spec.ainvoke({"org": ORG}, config=config))
+
+    assert result["status"] == "done", result.get("error")
+
+
+def test_an_update_names_a_chat_field_by_its_name_after_a_rename(offline_pipeline: Path) -> None:
+    session = _web_session(_build())
+    config = {"configurable": {"session": session}}
+    section = _section_of(config, REMOVED_FORM)
+    _chat_edit(config, {"op_id": "op-1", "kind": "field.add",
+                        "target": {"form": REMOVED_FORM, "section": section},
+                        "payload": {"name": "QA17 Chat Field", "dataType": "Text"}})
+    _chat_edit(config, {"op_id": "op-2", "kind": "field.rename",
+                        "target": {"form": REMOVED_FORM, "section": section,
+                                   "field": "QA17 Chat Field"},
+                        "payload": {"new_name": "QA17 Renamed Field"}})
+
+    held = asyncio.run(tools.edit_bundle_from_spec.ainvoke({"org": ORG}, config=config))
+
+    assert held["status"] == "error"
+    assert f"{REMOVED_FORM} › QA17 Renamed Field" in held["error"]
+    assert "QA17 Chat Field" not in held["error"]
+
+
+def test_each_build_in_a_chat_writes_its_own_bundle_file(offline_pipeline: Path) -> None:
+    """A later build (withheld or not) never overwrites the bundle the chat has."""
+    session = _web_session(None)
+    session.build_needs_confirmation = False
+    session.pending_notices = []
+    config = {"configurable": {"session": session}}
+
+    asyncio.run(tools.generate_bundle.ainvoke({"org": ORG}, config=config))
+    first = session.bundle_path
+    first_bytes = first.read_bytes()
+    asyncio.run(tools.generate_bundle.ainvoke({"org": ORG}, config=config))
+
+    assert session.bundle_path != first
+    assert session.bundle_path.parent.parent == first.parent.parent == session.output_dir
+    assert first.read_bytes() == first_bytes
+
+
+def test_an_update_that_removes_nothing_names_no_field(offline_pipeline: Path) -> None:
+    bundle = _build()
+    session = _web_session(bundle)
+    result = asyncio.run(tools.edit_bundle_from_spec.ainvoke(
+        {"org": ORG}, config={"configurable": {"session": session}},
+    ))
+    assert "removed_fields" not in result
+    assert not any("update removed them" in n for n in session.pending_notices)
 
 
 def test_unmatched_forms_are_named_once() -> None:

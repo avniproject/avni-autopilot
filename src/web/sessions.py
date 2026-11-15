@@ -34,26 +34,6 @@ from web.events import EventBus, error_payload, session_loading, session_ready
 log = logging.getLogger(__name__)
 
 
-def _purge_org_dir(dir_path: Path, patterns: tuple[str, ...]) -> None:
-    """Best-effort wipe of files matching `patterns` under `dir_path`.
-
-    Best-effort because per-file IOErrors are logged and skipped — purge
-    is an isolation optimisation across sessions for the same org, not a
-    correctness gate.
-    """
-    if not dir_path.exists():
-        return
-    for pattern in patterns:
-        for path in dir_path.glob(pattern):
-            try:
-                if path.is_dir():
-                    shutil.rmtree(path, ignore_errors=True)
-                else:
-                    path.unlink()
-            except OSError as exc:
-                log.warning(f"purge skipped {path}: {exc}")
-
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -133,6 +113,28 @@ class ChatSession:
     # Bundle identity (path, mtime, size) the full field list was last
     # returned for; a repeat call on the same bundle returns a short note.
     fields_listed_for: Optional[tuple] = None
+    # Forms (UUID -> name) the last build in this chat left unlinked and
+    # that are still unlinked in the bundle; later cards carry the error.
+    build_unlinked_forms: dict[str, str] = field(default_factory=dict)
+    # (form, field) for each field added in this chat since the last build
+    # or update and still in the bundle under that name; an update from
+    # spreadsheets may remove them, so it needs the user's go-ahead first.
+    fields_added_in_chat: list[tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def input_dir(self) -> Path:
+        """This chat's own folder of uploaded spreadsheets.
+
+        Per chat, not per organisation: a second chat for the same org (a
+        second tab, or another admin) must not see or clear this chat's
+        uploads. Removed with the session's workdir.
+        """
+        return self.workdir / "input"
+
+    @property
+    def output_dir(self) -> Path:
+        """This chat's own folder for bundles it builds."""
+        return self.workdir / "output"
 
     @property
     def org_slug(self) -> str:
@@ -263,18 +265,12 @@ class SessionStore:
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
-    def create(
-        self,
-        org_name: str,
-        username: str,
-        shared_input_root: Optional[Path] = None,
-        shared_output_root: Optional[Path] = None,
-    ) -> ChatSession:
+    def create(self, org_name: str, username: str) -> ChatSession:
         """Allocate a session id, create its workdir, and register the record.
 
-        When `shared_input_root` / `shared_output_root` are supplied, the
-        org's subdir under each is wiped — prevents the previous session's
-        uploads being parsed alongside the new session's files.
+        Uploads and built bundles live under the session's own workdir
+        (`input_dir`, `output_dir`), so chats for the same org never share or
+        clear each other's files.
         """
         session_id = secrets.token_urlsafe(16)
         workdir = self._root_dir / session_id
@@ -287,10 +283,6 @@ class SessionStore:
             username=username,
             workdir=workdir,
         )
-        if shared_input_root is not None:
-            _purge_org_dir(shared_input_root / session.org_slug, ("*.xlsx", "*.xls"))
-        if shared_output_root is not None:
-            _purge_org_dir(shared_output_root / session.org_slug, ("*",))
         self._sessions[session_id] = session
         log.info(f"session created sid={session_id} org={org_name!r}")
         return session

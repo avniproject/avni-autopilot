@@ -266,3 +266,11 @@ def test_rule_context_still_resolves_mapping_names(bundle_dir: Path) -> None:
     assert context["encounter_type"] == "ANC"
     assert context["available_encounter_types"] == ["ANC", "Home Visit"]
     assert context["available_programs"] == ["Pregnancy"]
+
+
+def test_unlinked_form_names_counts_forms_that_share_a_uuid() -> None:
+    from domain.generators import unlinked_form_names, unlinked_forms
+
+    forms = [{"content": {"uuid": "u1", "name": "A"}}, {"content": {"uuid": "u1", "name": "A"}}]
+    assert unlinked_form_names(forms, []) == ["A", "A"]
+    assert unlinked_forms(forms, []) == {"u1": "A"}

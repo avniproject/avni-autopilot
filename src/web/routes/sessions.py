@@ -63,12 +63,7 @@ async def create_session(
             detail={"error": exc.message, "code": "E_AUTH"},
         ) from exc
 
-    session = store.create(
-        org_name=info.organisation_name,
-        username=info.username,
-        shared_input_root=Path(settings.input_root),
-        shared_output_root=Path(settings.output_root),
-    )
+    session = store.create(org_name=info.organisation_name, username=info.username)
     session.chat_service = ChatService(session)
     asyncio.create_task(download_org_bundle(session, token))
 

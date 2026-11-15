@@ -471,8 +471,29 @@ def unlinked_form_names(forms: list[dict], form_mappings: list[dict]) -> list[st
     """Forms with no mapping, or whose mapping lacks a subject type, program
     or visit type its form type needs.
 
-    Such a form is in the bundle but no screen in Avni opens it.
+    Such a form is in the bundle but no screen in Avni opens it. One entry
+    per form, so forms sharing a name or UUID are each counted.
     """
+    linked = _linked_form_uuids(form_mappings)
+    return [
+        form["content"].get("name", "")
+        for form in forms
+        if form["content"].get("uuid") not in linked
+    ]
+
+
+def unlinked_forms(forms: list[dict], form_mappings: list[dict]) -> dict[str, str]:
+    """`unlinked_form_names` keyed by form UUID (UUID -> name), in form order."""
+    linked = _linked_form_uuids(form_mappings)
+    return {
+        form["content"].get("uuid", ""): form["content"].get("name", "")
+        for form in forms
+        if form["content"].get("uuid") not in linked
+    }
+
+
+def _linked_form_uuids(form_mappings: list[dict]) -> set[str]:
+    """UUIDs of forms a mapping links with everything their form type needs."""
     linked_form_uuids: set[str] = set()
     for mapping in form_mappings:
         form_type = mapping.get("formType", "")
@@ -483,11 +504,15 @@ def unlinked_form_names(forms: list[dict], form_mappings: list[dict]) -> list[st
             linked = linked and bool(mapping.get("encounterTypeUUID"))
         if linked:
             linked_form_uuids.add(mapping.get("formUUID", ""))
-    return [
-        form["content"].get("name", "")
-        for form in forms
-        if form["content"].get("uuid") not in linked_form_uuids
-    ]
+    return linked_form_uuids
+
+
+def unlinked_forms_error(names: list[str]) -> str:
+    """The build error naming forms no screen in the app opens."""
+    return (
+        "These forms could not be linked to a subject type, program or visit "
+        "type, so no screen in the app opens them: " + ", ".join(names) + "."
+    )
 
 
 def make_form_mappings(

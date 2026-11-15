@@ -136,6 +136,7 @@ def _model_reads_notes_only_as_already_shown(result: dict, notices: list[str]) -
 def _web_build() -> tuple[dict, list[str]]:
     """A build in a webapp session: what the model reads, and the notices the chat shows."""
     session = SimpleNamespace(
+        input_dir=Path(tools.settings.input_root) / ORG, output_dir=Path(tools.settings.output_root) / ORG, 
         bundle_path=None, org_setup_loading=False, build_needs_confirmation=False, pending_notices=[],
     )
     result = asyncio.run(
@@ -148,7 +149,8 @@ def _web_build() -> tuple[dict, list[str]]:
 
 def _web_update(bundle: Path) -> tuple[dict, list[str]]:
     """An update in a webapp session: what the model reads, and the notices the chat shows."""
-    session = SimpleNamespace(bundle_path=bundle, org_setup_loading=False, pending_notices=[])
+    session = SimpleNamespace(
+        input_dir=Path(tools.settings.input_root) / ORG, output_dir=Path(tools.settings.output_root) / ORG, bundle_path=bundle, org_setup_loading=False, pending_notices=[])
     result = asyncio.run(
         tools.edit_bundle_from_spec.ainvoke({"org": ORG}, config={"configurable": {"session": session}})
     )
