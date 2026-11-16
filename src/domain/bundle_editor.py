@@ -25,8 +25,19 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from domain.generators import form_element_type, form_uuid, make_uuid, unlinked_forms
+from domain.generators import (
+    SELECTION_TYPE_DATA_TYPES,
+    form_element_type,
+    NAME_LIMIT,
+    form_uuid,
+    is_over_name_limit,
+    make_uuid,
+    name_key,
+    selection_words,
+    unlinked_forms,
+)
 from domain.rules.concept_answers import merge_answer_scopes
+from domain.wording import shortened
 from models import EditOperation, EditResult, RejectedOp
 
 log = logging.getLogger(__name__)
@@ -69,16 +80,26 @@ def apply_field_edits(bundle_path: str, operations: list[dict]) -> EditResult:
             try:
                 _apply_one(op, forms, concepts, result, modified_forms)
             except _OpReject as r:
-                result.rejected.append(RejectedOp(op_id=op.op_id, kind=r.kind, reason=r.reason))
+                result.rejected.append(RejectedOp(op_id=op.op_id, kind=r.kind, reason=r.reason, hint=r.hint))
+
+        for file_name in modified_forms:
+            form = forms[file_name]
+            _renumber_clashing_display_orders(form.get("formElementGroups", []))
+            for group in form.get("formElementGroups", []):
+                _renumber_clashing_display_orders(group.get("formElements", []))
 
         # Post-apply integrity check
-        integrity = _check_integrity(forms, concepts)
+        integrity = _check_integrity(forms, modified_forms)
         if integrity:
-            for reason in integrity:
-                result.rejected.append(RejectedOp(op_id="*", kind="integrity", reason=reason))
-            # Abort: don't write anything.
-            log.warning("Bundle edit aborted; integrity check failed: %s", integrity)
-            return result
+            # Nothing is written, so no op counts as applied.
+            log.warning(f"Bundle edit aborted; integrity check failed: {integrity}")
+            return EditResult(
+                bundle_path=bundle_path,
+                rejected=[
+                    *result.rejected,
+                    *(RejectedOp(op_id="*", kind="integrity", reason=reason) for reason in integrity),
+                ],
+            )
 
         # Write back only the forms we changed; rewrite concepts.json if any
         # concept was appended.
@@ -102,9 +123,10 @@ def apply_field_edits(bundle_path: str, operations: list[dict]) -> EditResult:
 
 
 class _OpReject(Exception):
-    def __init__(self, kind: str, reason: str):
+    def __init__(self, kind: str, reason: str, hint: str | None = None):
         self.kind = kind
         self.reason = reason
+        self.hint = hint
 
 
 def _apply_one(
@@ -119,25 +141,38 @@ def _apply_one(
         raise _OpReject("schema", "target.form is required")
 
     file_name, form = _find_form(forms, form_name, op.target.get("form_uuid"))
-    section = _find_section(form, op.target.get("section", ""), op.target.get("section_uuid"))
+    if op.kind == "section.add":
+        _apply_section_add(op, form, form_name, result)
+    elif op.kind == "form.reorder_sections":
+        _apply_section_reorder(op, form)
+    else:
+        section = _find_section(form, op.target.get("section", ""), op.target.get("section_uuid"))
+        _apply_section_op(op, form, section, concepts, result, form_name)
 
+    modified_forms.add(file_name)
+    result.applied.append(op.op_id)
+
+
+def _apply_section_op(
+    op: EditOperation,
+    form: dict,
+    section: dict,
+    concepts: dict[str, dict],
+    result: EditResult,
+    form_name: str,
+) -> None:
     if op.kind == "field.add":
         _apply_add(op, form, section, concepts, result, form_name)
     elif op.kind == "field.rename":
         _apply_rename(op, form, section, concepts, result, form_name)
     elif op.kind == "field.remove":
         _apply_remove(op, section, result)
-    elif op.kind == "field.set_selection_type":
-        if not _apply_set_selection_type(op, section, result):
-            result.applied.append(op.op_id)
-            return
     elif op.kind == "section.reorder_fields":
         _apply_reorder(op, section, result)
+    elif op.kind == "section.remove":
+        _apply_section_remove(section, result)
     else:
         raise _OpReject("schema", f"unsupported kind: {op.kind}")
-
-    modified_forms.add(file_name)
-    result.applied.append(op.op_id)
 
 
 def _apply_add(
@@ -157,26 +192,49 @@ def _apply_add(
         opts = payload.get("options")
         if not isinstance(opts, list) or not opts:
             raise _OpReject("schema", "payload.options (non-empty list) is required for Coded fields")
+    _check_name_length(field_name, "field name")
+    if data_type == "Coded":
+        for option in payload["options"]:
+            _check_name_length(option, f"answer of field {field_name!r}")
 
-    new_uuid = make_uuid(f"formElement:{form_name}:{field_name}")
+    new_uuid = _element_uuid_in_section(form, section, form_name, field_name)
     existing = _find_element_by_uuid(section, new_uuid)
 
-    if existing is not None and not existing.get("voided", False):
+    clash = _live_element_named(section, field_name)
+    if clash is None and existing is not None and not existing.get("voided", False):
+        # The element of this name's UUID can carry another name after a rename
+        # in the Avni app, which keeps the UUID.
+        clash = existing
+    if clash is not None:
         raise _OpReject(
             "duplicate_name",
-            f"field {field_name!r} already exists (live) in section {section.get('name')!r}",
+            f"field {clash.get('name')!r} already exists (live) in section {section.get('name')!r}",
         )
+    _check_not_live_on_other_page(form, section, field_name)
 
     if existing is not None and existing.get("voided", False):
-        # Reinstate
+        # Reinstate. Checked before any change: a rejected op is not undone.
+        _check_selection_type_kept(existing, payload, field_name)
         existing["voided"] = False
+        # Like an added field it goes to the end of the page; a reorder places it.
+        existing["displayOrder"] = _next_display_order(section.get("formElements", []))
         _apply_properties(existing, payload, field_name)
         result.form_elements_reinstated += 1
+        if (
+            not payload.get("selectionType")
+            and _reinstated_data_type(existing, payload) in SELECTION_TYPE_DATA_TYPES
+            and existing["type"] != form_element_type(None)
+        ):
+            result.warnings.append(
+                f"field {field_name!r} came back as {selection_words(existing['type'])}, "
+                "as it was before it was removed; Avni cannot switch an existing "
+                "field between single and multi select."
+            )
     else:
         # New element
         elements = section.setdefault("formElements", [])
-        max_order = max((e.get("displayOrder", 0) for e in elements), default=0)
-        new_elem = _build_element(form_name, field_name, payload, new_uuid, max_order + 1)
+        new_elem = _build_element(form_name, field_name, payload, new_uuid,
+                                  _next_display_order(elements))
         elements.append(new_elem)
         result.form_elements_added += 1
 
@@ -195,17 +253,12 @@ def _apply_rename(
     result: EditResult,
     form_name: str,
 ) -> None:
-    field_name = op.target.get("field", "").strip()
     new_name = (op.payload.get("new_name") or "").strip()
-    if not field_name or not new_name:
-        raise _OpReject("schema", "target.field and payload.new_name are required for field.rename")
+    if not new_name:
+        raise _OpReject("schema", "payload.new_name is required for field.rename")
+    _check_name_length(new_name, "field name")
 
-    existing = _find_live_element_by_name(section, field_name)
-    if existing is None:
-        raise _OpReject(
-            "not_found",
-            f"live field {field_name!r} not found in section {section.get('name')!r}",
-        )
+    existing = _find_target_element(op, section)
 
     captured = {
         "displayOrder": existing.get("displayOrder"),
@@ -220,23 +273,41 @@ def _apply_rename(
     existing["voided"] = True
 
     # Add new element at the captured displayOrder.
-    new_uuid = make_uuid(f"formElement:{form_name}:{new_name}")
+    new_uuid = _element_uuid_in_section(form, section, form_name, new_name)
     new_existing = _find_element_by_uuid(section, new_uuid)
 
-    if new_existing is not None and not new_existing.get("voided", False):
+    clash = _live_element_named(section, new_name)
+    if clash is None and new_existing is not None and not new_existing.get("voided", False):
+        clash = new_existing
+    if clash is not None:
         # Restore the original element from voided state, since the rename is
         # impossible here.
         existing["voided"] = False
         raise _OpReject(
             "duplicate_name",
-            f"cannot rename to {new_name!r}: a live field with that name already exists in section {section.get('name')!r}",
+            f"cannot rename to {new_name!r}: a live field {clash.get('name')!r} already exists in section {section.get('name')!r}",
         )
+    try:
+        _check_not_live_on_other_page(form, section, new_name)
+    except _OpReject:
+        existing["voided"] = False
+        raise
 
     if new_existing is not None and new_existing.get("voided", False):
-        # Reinstate (e.g. renaming back to a previously removed name).
+        # Reinstate (e.g. renaming back to a previously removed name). It keeps
+        # its own properties, as the server has it, but takes the renamed
+        # field's place on the page.
         new_existing["voided"] = False
-        # Reinstate keeps its own original properties; do NOT clobber with captured
-        # (the user is bringing back a previously-deleted field exactly as it was).
+        new_existing["displayOrder"] = captured["displayOrder"]
+        if (
+            new_existing.get("concept", {}).get("dataType") in SELECTION_TYPE_DATA_TYPES
+            and form_element_type(new_existing.get("type")) != form_element_type(captured["type"])
+        ):
+            result.warnings.append(
+                f"field {new_name!r} came back as {selection_words(new_existing.get('type'))}, "
+                "as it was before it was removed; Avni cannot switch an existing "
+                "field between single and multi select."
+            )
     else:
         new_elem = _build_element_from_captured(new_name, captured, new_uuid)
         section["formElements"].append(new_elem)
@@ -259,50 +330,68 @@ def _apply_rename(
 
 
 def _apply_remove(op: EditOperation, section: dict, result: EditResult) -> None:
-    field_name = op.target.get("field", "").strip()
-    if not field_name:
-        raise _OpReject("schema", "target.field is required for field.remove")
-
-    existing = _find_live_element_by_name(section, field_name)
-    if existing is None:
-        raise _OpReject(
-            "not_found",
-            f"live field {field_name!r} not found in section {section.get('name')!r}",
-        )
+    existing = _find_target_element(op, section)
     existing["voided"] = True
     result.form_elements_voided += 1
 
 
-_SELECTION_TYPES = ("SingleSelect", "MultiSelect")
-
-
-def _apply_set_selection_type(op: EditOperation, section: dict, result: EditResult) -> bool:
-    """Make a live field single- or multi-select; False when it already is.
-
-    Payload: {"selectionType": "SingleSelect" | "MultiSelect"}. Avni reads the
-    element's `type`, so a stale `multiSelect` key-value is dropped with it.
-    """
-    field_name = op.target.get("field", "").strip()
-    if not field_name:
-        raise _OpReject("schema", "target.field is required for field.set_selection_type")
-    selection_type = op.payload.get("selectionType")
-    if selection_type not in _SELECTION_TYPES:
-        raise _OpReject("schema", f"payload.selectionType must be one of {list(_SELECTION_TYPES)}")
-
-    existing = _find_live_element_by_name(section, field_name)
-    if existing is None:
+def _apply_section_add(op: EditOperation, form: dict, form_name: str, result: EditResult) -> None:
+    """Add an empty page at the end of the form, or bring back the voided page of its UUID."""
+    name = (op.payload.get("name") or "").strip()
+    if not name:
+        raise _OpReject("schema", "payload.name is required for section.add")
+    groups = form.setdefault("formElementGroups", [])
+    clash = next((g for g in groups if not g.get("voided", False) and _norm(g.get("name", "")) == _norm(name)), None)
+    if clash is not None:
+        raise _OpReject("duplicate_name", f"page {clash.get('name')!r} already exists in form {form_name!r}")
+    group_uuid = make_uuid(f"formGroup:{form_name}:{name}")
+    existing = next((g for g in groups if g.get("uuid") == group_uuid), None)
+    if existing is not None and not existing.get("voided", False):
+        # Renamed in the app, which keeps the UUID.
         raise _OpReject(
-            "not_found",
-            f"live field {field_name!r} not found in section {section.get('name')!r}",
+            "duplicate_name",
+            f"page {existing.get('name')!r} of form {form_name!r} is the page "
+            f"{name!r} renamed; use it instead of adding another",
         )
-    if form_element_type(existing.get("type")) == selection_type:
-        return False
-    existing["type"] = selection_type
-    existing["keyValues"] = [
-        kv for kv in existing.get("keyValues", []) if kv.get("key") != "multiSelect"
-    ]
-    result.form_elements_retyped += 1
-    return True
+    if existing is not None:
+        existing["voided"] = False
+        existing["name"] = name
+        existing["displayOrder"] = _next_display_order(groups)
+    else:
+        groups.append({
+            "uuid": group_uuid,
+            "name": name,
+            "displayOrder": _next_display_order(groups),
+            "voided": False,
+            "formElements": [],
+        })
+    result.sections_added += 1
+
+
+def _apply_section_remove(section: dict, result: EditResult) -> None:
+    """Void a page and every field still live on it."""
+    for element in section.get("formElements", []):
+        if not element.get("voided", False):
+            element["voided"] = True
+            result.form_elements_voided += 1
+    section["voided"] = True
+    result.sections_removed += 1
+
+
+def _apply_section_reorder(op: EditOperation, form: dict) -> None:
+    """Number the form's live pages in the order given; it must name each once."""
+    order = op.payload.get("order")
+    if not isinstance(order, list) or not order:
+        raise _OpReject("schema", "payload.order (non-empty list) required for form.reorder_sections")
+    live = [g for g in form.get("formElementGroups", []) if not g.get("voided", False)]
+    live_by_name = {_norm(g.get("name", "")): g for g in live}
+    requested = [_norm(n) for n in order]
+    if len(live_by_name) != len(live) or len(set(requested)) != len(requested):
+        raise _OpReject("ambiguous_target", f"form {form.get('name')!r} has repeated page names")
+    if set(requested) != set(live_by_name):
+        raise _OpReject("schema", "payload.order must name every live page of the form exactly once")
+    for number, key in enumerate(requested, start=1):
+        live_by_name[key]["displayOrder"] = number
 
 
 def _apply_reorder(op: EditOperation, section: dict, result: EditResult) -> None:
@@ -310,9 +399,8 @@ def _apply_reorder(op: EditOperation, section: dict, result: EditResult) -> None
 
     Payload: {"order": [<field_name>, <field_name>, ...]}.
     The list must contain every live form element in the section, exactly
-    once. Voided elements are not part of the order and keep their existing
-    displayOrder (which may now overlap with live ones — that's fine because
-    the integrity check enforces uniqueness only among live elements).
+    once. Voided elements are not part of the order; a number they share
+    with a live element is resolved by `_renumber_clashing_display_orders`.
     """
     order = op.payload.get("order")
     if not isinstance(order, list) or not order:
@@ -428,12 +516,41 @@ def _build_key_values(payload: dict) -> list[dict]:
     return out
 
 
+def _reinstated_data_type(elem: dict, payload: dict) -> str:
+    return payload.get("dataType", elem.get("concept", {}).get("dataType", "Text"))
+
+
+def _check_selection_type_kept(elem: dict, payload: dict, field_name: str) -> None:
+    """Refuse re-adding an element with the other single/multi select setting.
+
+    The element can already be on the server, which refuses that switch when
+    the incoming data type takes the setting (`SELECTION_TYPE_DATA_TYPES`).
+    """
+    if _reinstated_data_type(elem, payload) not in SELECTION_TYPE_DATA_TYPES:
+        return
+    requested = payload.get("selectionType")
+    if requested and form_element_type(requested) != form_element_type(elem.get("type")):
+        raise _OpReject(
+            "not_allowed",
+            f"field {field_name!r} is {selection_words(elem.get('type'))}; Avni cannot "
+            "switch an existing field between single and multi select, as answers "
+            "already saved would change shape. Add it under a new name instead.",
+        )
+
+
 def _apply_properties(elem: dict, payload: dict, field_name: str) -> None:
-    """Overwrite a reinstated element's mutable properties from the payload."""
-    data_type = payload.get("dataType", elem.get("concept", {}).get("dataType", "Text"))
+    """Overwrite a reinstated element's mutable properties from the payload.
+
+    For data types that take a single/multi select setting the element keeps
+    its own (`_check_selection_type_kept` has refused a different one).
+    """
+    data_type = _reinstated_data_type(elem, payload)
     answers = _build_answers(data_type, payload.get("options"))
     elem["mandatory"] = bool(payload.get("mandatory", elem.get("mandatory", False)))
-    elem["type"] = form_element_type(payload.get("selectionType"))
+    if data_type in SELECTION_TYPE_DATA_TYPES:
+        elem["type"] = form_element_type(elem.get("type"))
+    else:
+        elem["type"] = form_element_type(payload.get("selectionType"))
     elem["keyValues"] = _build_key_values(payload)
     elem["concept"]["dataType"] = data_type
     elem["concept"]["answers"] = answers
@@ -443,7 +560,7 @@ def _apply_properties(elem: dict, payload: dict, field_name: str) -> None:
 
 
 def _norm(s: str) -> str:
-    return (s or "").strip().lower()
+    return name_key(s)
 
 
 def _find_form(forms: dict[str, dict], form_name: str, form_uuid: str | None) -> tuple[str, dict]:
@@ -462,7 +579,8 @@ def _find_form(forms: dict[str, dict], form_name: str, form_uuid: str | None) ->
     if len(matches) > 1:
         raise _OpReject(
             "ambiguous_target",
-            f"form {form_name!r} matches {len(matches)} forms; pass form_uuid",
+            f"form {form_name!r} matches {len(matches)} forms",
+            hint="pass form_uuid",
         )
     return matches[0]
 
@@ -475,7 +593,9 @@ def _find_section(form: dict, section_name: str, section_uuid: str | None) -> di
                 return g
         raise _OpReject("not_found", f"section_uuid {section_uuid!r} not in form {form.get('name')!r}")
     key = _norm(section_name)
-    matches = [g for g in groups if _norm(g.get("name", "")) == key]
+    named = [g for g in groups if _norm(g.get("name", "")) == key]
+    # A voided page of the same name is only a match when no live one is.
+    matches = [g for g in named if not g.get("voided", False)] or named
     if not matches:
         raise _OpReject(
             "not_found",
@@ -484,7 +604,8 @@ def _find_section(form: dict, section_name: str, section_uuid: str | None) -> di
     if len(matches) > 1:
         raise _OpReject(
             "ambiguous_target",
-            f"section {section_name!r} matches {len(matches)} sections in form {form.get('name')!r}; pass section_uuid",
+            f"section {section_name!r} matches {len(matches)} sections in form {form.get('name')!r}",
+            hint="pass section_uuid",
         )
     return matches[0]
 
@@ -496,18 +617,98 @@ def _find_element_by_uuid(section: dict, uuid: str) -> dict | None:
     return None
 
 
-def _find_live_element_by_name(section: dict, field_name: str) -> dict | None:
+def _other_sections(form: dict, section: dict) -> list[dict]:
+    return [g for g in form.get("formElementGroups", []) if g is not section]
+
+
+def _element_uuid_in_section(form: dict, section: dict, form_name: str, field_name: str) -> str:
+    """UUID for the field's element in this section.
+
+    The name-derived UUID is used unless another section of the form already
+    holds it, as after a field moves to another page. avni-server looks an
+    element up only within its own page and needs element UUIDs unique, so
+    the field then gets a UUID tied to this section; its concept, which holds
+    the recorded answers, stays the same.
+    """
+    name_uuid = make_uuid(f"formElement:{form_name}:{field_name}")
+    held_elsewhere = any(
+        e.get("uuid") == name_uuid
+        for g in _other_sections(form, section)
+        for e in g.get("formElements", [])
+    )
+    if held_elsewhere:
+        return make_uuid(f"formElement:{form_name}:{section.get('uuid')}:{field_name}")
+    return name_uuid
+
+
+def _check_not_live_on_other_page(form: dict, section: dict, field_name: str) -> None:
+    """Refuse a field still live on another page: avni-server refuses a
+    concept used twice in a form."""
+    for other in _other_sections(form, section):
+        clash = _live_element_named(other, field_name)
+        if clash is not None:
+            raise _OpReject(
+                "duplicate_name",
+                f"field {clash.get('name')!r} already exists (live) in section "
+                f"{other.get('name')!r}; remove it there before adding it here",
+            )
+
+
+def _live_elements_named(section: dict, field_name: str) -> list[dict]:
+    """Live elements whose name matches ignoring case and outer spaces."""
     key = _norm(field_name)
-    matches = [
+    return [
         e for e in section.get("formElements", [])
         if not e.get("voided", False) and _norm(e.get("name", "")) == key
     ]
+
+
+def _live_element_named(section: dict, field_name: str) -> dict | None:
+    """The first live element of that name, for refusing a second one."""
+    return next(iter(_live_elements_named(section, field_name)), None)
+
+
+def _find_target_element(op: EditOperation, section: dict) -> dict:
+    """The live element an op's target names: by `field_uuid` when given, else by `field`."""
+    field_uuid = (op.target.get("field_uuid") or "").strip()
+    if field_uuid:
+        element = _find_element_by_uuid(section, field_uuid)
+        if element is None or element.get("voided", False):
+            raise _OpReject(
+                "not_found",
+                f"no live field with uuid {field_uuid!r} in section {section.get('name')!r}",
+            )
+        return element
+    field_name = (op.target.get("field") or "").strip()
+    if not field_name:
+        raise _OpReject("schema", f"target.field or target.field_uuid is required for {op.kind}")
+    element = _find_live_element_by_name(section, field_name)
+    if element is None:
+        raise _OpReject(
+            "not_found",
+            f"live field {field_name!r} not found in section {section.get('name')!r}",
+        )
+    return element
+
+
+def _check_name_length(name: str, what: str) -> None:
+    if is_over_name_limit(name):
+        raise _OpReject(
+            "schema",
+            f"{what} {shortened(name)} is {len(name)} characters; Avni cannot import "
+            f"a name longer than {NAME_LIMIT}",
+        )
+
+
+def _find_live_element_by_name(section: dict, field_name: str) -> dict | None:
+    matches = _live_elements_named(section, field_name)
     if not matches:
         return None
     if len(matches) > 1:
         raise _OpReject(
             "ambiguous_target",
-            f"field {field_name!r} matches {len(matches)} live elements in section {section.get('name')!r}; pass field_uuid",
+            f"field {field_name!r} matches {len(matches)} live elements in section {section.get('name')!r}",
+            hint="pass field_uuid",
         )
     return matches[0]
 
@@ -515,7 +716,35 @@ def _find_live_element_by_name(section: dict, field_name: str) -> dict | None:
 # ── Integrity ────────────────────────────────────────────────────────────────
 
 
-def _check_integrity(forms: dict[str, dict], concepts: dict[str, dict]) -> list[str]:
+def _renumber_clashing_display_orders(items: list[dict]) -> None:
+    """Give each page of a form, or each question of a page, its own displayOrder
+    when two share one.
+
+    avni-server refuses a form where two pages, or two questions of a page,
+    share a displayOrder, voided or not (FormService.validateFormElementGroupDisplayOrders,
+    validateFormElementDisplayOrders). A removed field or page stays in the
+    bundle voided with its number, which a later add, rename or reorder can
+    reuse. Live items keep their relative order as 1..n; voided ones follow.
+    """
+    orders = [item.get("displayOrder") for item in items]
+    if len(set(orders)) == len(orders):
+        return
+    position = {id(item): i for i, item in enumerate(items)}
+
+    def in_order(subset: list[dict]) -> list[dict]:
+        return sorted(subset, key=lambda item: (item.get("displayOrder") or 0, position[id(item)]))
+
+    live = in_order([item for item in items if not item.get("voided", False)])
+    voided = in_order([item for item in items if item.get("voided", False)])
+    for number, item in enumerate([*live, *voided], start=1):
+        item["displayOrder"] = number
+
+
+def _next_display_order(items: list[dict]) -> int:
+    return int(max((item.get("displayOrder") or 0 for item in items), default=0)) + 1
+
+
+def _check_integrity(forms: dict[str, dict], modified_forms: set[str]) -> list[str]:
     errors: list[str] = []
 
     # No duplicate formElement.uuid within a form (includes voided).
@@ -531,25 +760,21 @@ def _check_integrity(forms: dict[str, dict], concepts: dict[str, dict]) -> list[
         if dups:
             errors.append(f"{file_name}: duplicate formElement uuid(s): {dups}")
 
-    # displayOrder uniqueness among LIVE elements within a section.
-    for file_name, form in forms.items():
-        for g in form.get("formElementGroups", []):
-            seen_orders: dict[int, int] = {}
-            for e in g.get("formElements", []):
-                if e.get("voided"):
-                    continue
-                o = e.get("displayOrder")
-                if o is None:
-                    continue
-                seen_orders[o] = seen_orders.get(o, 0) + 1
-            dups = [o for o, n in seen_orders.items() if n > 1]
+    # displayOrder unique among a form's pages and within each page, voided
+    # included, on every form written.
+    for file_name in sorted(modified_forms):
+        groups = forms[file_name].get("formElementGroups", [])
+        page_counts = Counter(g.get("displayOrder") for g in groups)
+        page_dups = sorted(o for o, n in page_counts.items() if n > 1 and o is not None)
+        if page_dups:
+            errors.append(f"{file_name}: duplicate page displayOrder: {page_dups}")
+        for g in groups:
+            counts = Counter(e.get("displayOrder") for e in g.get("formElements", []))
+            dups = sorted(o for o, n in counts.items() if n > 1 and o is not None)
             if dups:
                 errors.append(
-                    f"{file_name} / section {g.get('name')!r}: duplicate displayOrder among live: {dups}"
+                    f"{file_name} / section {g.get('name')!r}: duplicate displayOrder: {dups}"
                 )
-
-    # concepts.json has no duplicate UUIDs (dict keyed by uuid already enforces this).
-    # Skip the check.
 
     return errors
 

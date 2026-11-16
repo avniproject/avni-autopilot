@@ -51,6 +51,11 @@ def _can_proceed(state: BundleState) -> str:
     return "continue"
 
 
+def _route_after_forms(state: BundleState) -> str:
+    """Stop when a name is over Avni's limit: the server would refuse the import."""
+    return "stop" if state.get("names_over_limit") else "continue"
+
+
 def _route_after_generation(state: BundleState) -> str:
     """Branch after the desired bundle is fully realized in state.
 
@@ -100,7 +105,10 @@ def build_phase2_graph() -> Any:
     graph.set_entry_point("apply_user_decisions")
     graph.add_edge("apply_user_decisions", "generate_entities")
     graph.add_edge("generate_entities", "generate_forms")
-    graph.add_edge("generate_forms", "generate_form_mappings")
+    graph.add_conditional_edges(
+        "generate_forms", _route_after_forms,
+        {"continue": "generate_form_mappings", "stop": END},
+    )
     graph.add_edge("generate_form_mappings", "generate_rules")
     graph.add_conditional_edges(
         "generate_rules", _route_after_generation,

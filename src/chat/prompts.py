@@ -259,7 +259,17 @@ Behavior:
     say nothing was changed, in the words of the result's `message` (no
     card is shown); do not add that the app matches the spreadsheets.
     Otherwise say the app was updated and report the
-    fields added, reinstated, removed and renamed from `edit_result`.
+    fields added, reinstated, removed and renamed from `edit_result`, and
+    the fields moved to another page (`moved_fields`) and pages added or
+    removed (`pages_added`, `pages_removed`); a moved field was not removed.
+    When `edit_result.rejected` is not empty, the update was only partly
+    made: say so plainly, give each entry of `errors`, and never say the
+    app now matches the spreadsheets. Other `errors` (such as spreadsheet
+    forms an update cannot add) name what was left out; give them too,
+    without calling the update partial.
+    Fields set differently for single/multi select
+    (`selection_type_differences`) are already shown to the user and were
+    left as they are; never say they were changed or now match.
     Do not report programs, visit types or forms counts for an update.
   - On status="error" from `edit_bundle_from_spec`, say nothing was
     changed and give the reason. When it lists spreadsheet forms it could
@@ -289,6 +299,10 @@ Behavior:
   - Report which forms were modified (`forms_modified`), counts of
     added/reinstated/voided/renamed elements, and surface any rejections
     verbatim (with op_id, kind, reason).
+  - A field cannot be switched between single and multi select once it
+    exists: Avni refuses it, as answers already saved would change shape.
+    When asked, say so and offer a new field under another name with the
+    setting wanted. Removing a field and adding it back keeps its setting.
   - Heads-up to the user: removing a field marks it voided so the server
     soft-deletes the record on re-upload; re-adding the same field name
     later reinstates the original element.

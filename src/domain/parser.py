@@ -20,6 +20,7 @@ from typing import Any
 
 import pandas as pd
 
+from domain.generators import SELECTION_TYPE_DATA_TYPES, name_key, selection_type_of
 from domain.rules.parser import (
     apply_intents_to_forms,
     detect_rule_columns,
@@ -274,16 +275,6 @@ def _resolve_subject_type(raw: str, known: set[str]) -> str:
         if match:
             return match
     return _clean_subject_name(raw)
-
-
-def _selection_type(text: str) -> str | None:
-    """'MultiSelect' / 'SingleSelect' when the text names one, else None."""
-    lower = text.lower()
-    if "multi" in lower:
-        return "MultiSelect"
-    if "single" in lower:
-        return "SingleSelect"
-    return None
 
 
 def _map_data_type(raw: str) -> str:
@@ -1131,6 +1122,7 @@ def parse_form_df(
     current_section = "General Information"
     fields: list[FieldSpec] = []
     unrecognised_data_types: dict[str, str] = {}
+    unrecognised_selection_types: dict[str, str] = {}
 
     for row_idx in range(data_start, df.shape[0]):
         row = df.iloc[row_idx]
@@ -1229,13 +1221,22 @@ def parse_form_df(
 
         selection_type = None
         if selection_idx is not None:
-            selection_type = _selection_type(_clean(row.iloc[selection_idx]))
+            selection_cell = _clean(row.iloc[selection_idx])
+            selection_type = selection_type_of(selection_cell)
         # Without a selection cell, a type keyword such as "Multi Select" in
         # the data-type cell (or displaced into the options cell) decides it.
         if selection_type is None and avni_dtype == "Coded" and raw_dtype in _DATA_TYPE_MAP:
-            selection_type = _selection_type(raw_dtype)
+            selection_type = selection_type_of(raw_dtype)
         if selection_type is None and _displaced_type_keyword:
-            selection_type = _selection_type(_displaced_type_keyword)
+            selection_type = selection_type_of(_displaced_type_keyword)
+        # Named only where the setting counts and nothing else decided it.
+        if (
+            selection_idx is not None
+            and selection_cell
+            and selection_type is None
+            and avni_dtype in SELECTION_TYPE_DATA_TYPES
+        ):
+            unrecognised_selection_types[field_name] = selection_cell
 
         min_val, max_val = None, None
         if min_max_idx is not None:
@@ -1287,27 +1288,21 @@ def parse_form_df(
         program = entity_mapping.get("program")
         encounter_type = entity_mapping.get("encounterType")
 
-    # Build sections
-    sections: list[SectionSpec] = []
-    cur_name: str | None = None
-    cur_fields: list[FieldSpec] = []
+    # Build sections. A page name that comes back later in the sheet, in any
+    # case or spacing, adds its fields to the earlier page under its first
+    # spelling: the section UUID derives from the name, so two sections of
+    # one name would replace each other in the bundle.
+    page_names: dict[str, str] = {}
+    fields_by_section: dict[str, list[FieldSpec]] = {}
     for f in fields:
-        sec_name = f.group or "General Information"
-        if sec_name != cur_name:
-            if cur_fields:
-                sections.append(
-                    SectionSpec(
-                        name=cur_name or "General Information", fields=cur_fields
-                    )
-                )
-            cur_name = sec_name
-            cur_fields = [f]
-        else:
-            cur_fields.append(f)
-    if cur_fields:
-        sections.append(
-            SectionSpec(name=cur_name or "General Information", fields=cur_fields)
-        )
+        page = f.group or "General Information"
+        key = name_key(page)
+        page_names.setdefault(key, page.strip())
+        fields_by_section.setdefault(key, []).append(f)
+    sections = [
+        SectionSpec(name=page_names[key], fields=section_fields)
+        for key, section_fields in fields_by_section.items()
+    ]
 
     return FormSpec(
         name=sheet_name.strip(),
@@ -1317,6 +1312,7 @@ def parse_form_df(
         encounterType=encounter_type,
         sections=sections,
         unrecognised_data_types=unrecognised_data_types,
+        unrecognised_selection_types=unrecognised_selection_types,
     )
 
 
@@ -1715,6 +1711,7 @@ def parse_scoping_docs(
     )
     spec.unmatched_rule_intents = unmatched_rule_intents
     spec.validation_warnings.extend(_unrecognised_data_type_warnings(all_forms))
+    spec.validation_warnings.extend(_unrecognised_selection_type_warnings(all_forms))
     return spec, skipped_sheets
 
 
@@ -1725,5 +1722,16 @@ def _unrecognised_data_type_warnings(forms: list[FormSpec]) -> list[str]:
         f"the builder reads, so the field was read as Text."
         for form in forms
         for field_name, raw in form.unrecognised_data_types.items()
+    ]
+
+
+def _unrecognised_selection_type_warnings(forms: list[FormSpec]) -> list[str]:
+    """One warning per field whose Selection Type cell was not recognised."""
+    return [
+        f"Form {form.name!r}, field {field_name!r}: Selection Type {raw!r} is not "
+        f"one the builder reads (Single Select or Multi Select), so the field "
+        f"was read as single select."
+        for form in forms
+        for field_name, raw in form.unrecognised_selection_types.items()
     ]
 

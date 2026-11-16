@@ -26,6 +26,8 @@ class BundleState(TypedDict):
     diff_ops: list[dict]                    # computed by diff_against_bundle
     unmatched_forms: list[str]              # spec forms absent from the bundle (cannot be added)
     forms_not_in_spec: list[str]            # bundle forms absent from the spec (left as they are)
+    selection_type_differences: list[str]   # fields left single/multi select unlike the spec
+    name_clashes: list[str]                 # spec rows left out: same name as another row apart from capitals
     skipped_sheet_notes: list[str]          # plain-words notes naming sheets nothing was read from
     edit_result: dict                       # set by apply_diff_edits (an EditResult dump)
     # Form ↔ entity linking
@@ -51,6 +53,7 @@ class BundleState(TypedDict):
     concepts_json: list[dict]
     mapping_specs: list[dict]               # intermediate metadata for mapping resolution
     form_mappings_json: list[dict]
+    names_over_limit: list[str]             # field/answer names Avni cannot import; stops the build
     zip_path: str
     errors: list[str]
 
@@ -76,6 +79,8 @@ def initial_state(
         "diff_ops": [],
         "unmatched_forms": [],
         "forms_not_in_spec": [],
+        "selection_type_differences": [],
+        "name_clashes": [],
         "skipped_sheet_notes": [],
         "edit_result": {},
         "user_instructions": user_instructions,
@@ -95,6 +100,7 @@ def initial_state(
         "concepts_json": [],
         "mapping_specs": [],
         "form_mappings_json": [],
+        "names_over_limit": [],
         "zip_path": "",
         "errors": [],
     }

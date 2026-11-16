@@ -12,6 +12,7 @@ behaviour makes uploads idempotent.
 
 from __future__ import annotations
 
+import re
 import uuid
 from types import SimpleNamespace
 from typing import Callable
@@ -25,6 +26,19 @@ _NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "avni.project.org")
 def make_uuid(seed: str) -> str:
     """Deterministic UUID v5 — same seed always returns the same UUID."""
     return str(uuid.uuid5(_NAMESPACE, seed))
+
+
+# Longest field or answer (concept) name avni-server imports.
+NAME_LIMIT = 255
+
+
+def is_over_name_limit(name: str | None) -> bool:
+    return len(name or "") > NAME_LIMIT
+
+
+def name_key(name: str | None) -> str:
+    """Key under which two names count as the same: case and outer spaces ignored."""
+    return (name or "").strip().lower()
 
 
 def safe_filename(name: str) -> str:
@@ -199,9 +213,48 @@ def form_uuid(form_name: str) -> str:
     return make_uuid(f"form:{form_name}")
 
 
+# Concept data types whose form elements are single or multi select. avni-server
+# (ConceptDataType.multiSelectTypes, FormService) refuses to import a bundle that
+# changes the `type` of such an element it already has, as saved answers would
+# change shape; a new element can take either type.
+SELECTION_TYPE_DATA_TYPES = frozenset(
+    {"Coded", "Subject", "Image", "ImageV2", "Video", "File", "Encounter"}
+)
+
+
+def selection_words(element_type: str | None) -> str:
+    """'single select' or 'multi select' for a form element `type`, as shown to users."""
+    return "multi select" if form_element_type(element_type) == "MultiSelect" else "single select"
+
+
+# Selection Type spellings read, compared with case, spaces and punctuation dropped.
+_MULTI_SELECT_SPELLINGS = frozenset({
+    "multi", "multiple", "multiselect", "multipleselect", "multiselection",
+    "multipleselection", "multichoice", "multiplechoice",
+})
+_SINGLE_SELECT_SPELLINGS = frozenset({
+    "single", "singleselect", "singleselection", "singlechoice",
+})
+
+
+def selection_type_of(text: str | None) -> str | None:
+    """'MultiSelect' / 'SingleSelect' when the text is a spelling of one, else None.
+
+    Only whole spellings count ("Multi Select", "multiple", "single-select"),
+    so "Not multi", "Single/Multi" or the typo "Mutli Select" name neither.
+    """
+    spelling = re.sub(r"[^a-z]", "", (text or "").lower())
+    if spelling in _MULTI_SELECT_SPELLINGS:
+        return "MultiSelect"
+    if spelling in _SINGLE_SELECT_SPELLINGS:
+        return "SingleSelect"
+    return None
+
+
 def form_element_type(selection_type: str | None) -> str:
-    """The form element `type` Avni reads to tell multi-select from single-select."""
-    return "MultiSelect" if selection_type == "MultiSelect" else "SingleSelect"
+    """The form element `type` Avni reads to tell multi-select from single-select;
+    single select unless the text spells multi select."""
+    return "MultiSelect" if selection_type_of(selection_type) == "MultiSelect" else "SingleSelect"
 
 
 def _build_form(

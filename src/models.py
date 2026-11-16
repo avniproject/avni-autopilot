@@ -69,6 +69,9 @@ class FormSpec(BaseModel):
     # Data Type cells the parser did not recognise, keyed by field name; those
     # fields were read as Text.
     unrecognised_data_types: dict[str, str] = Field(default_factory=dict, exclude=True)
+    # Selection Type cells the parser did not recognise, keyed by field name;
+    # those fields were read as single select.
+    unrecognised_selection_types: dict[str, str] = Field(default_factory=dict, exclude=True)
 
 
 # ── Entity-level ───────────────────────────────────────────────────────────────
@@ -320,8 +323,10 @@ EditOpKind = Literal[
     "field.add",
     "field.rename",
     "field.remove",
-    "field.set_selection_type",
     "section.reorder_fields",
+    "section.add",
+    "section.remove",
+    "form.reorder_sections",
 ]
 
 RejectionKind = Literal[
@@ -330,6 +335,7 @@ RejectionKind = Literal[
     "duplicate_name",
     "schema",
     "integrity",
+    "not_allowed",
 ]
 
 
@@ -345,6 +351,7 @@ class RejectedOp(BaseModel):
     op_id: str
     kind: RejectionKind
     reason: str
+    hint: str | None = None   # how a chat edit can retry, e.g. "pass field_uuid"
 
 
 class EditResult(BaseModel):
@@ -357,5 +364,6 @@ class EditResult(BaseModel):
     form_elements_reinstated: int = 0
     form_elements_voided: int = 0
     form_elements_renamed: int = 0
-    form_elements_retyped: int = 0
+    sections_added: int = 0
+    sections_removed: int = 0
     concepts_appended: int = 0

@@ -19,14 +19,15 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Iterable, Literal
 
+from domain.generators import NAME_LIMIT, is_over_name_limit, name_key
 from domain.llm import LLMHelper
+from domain.wording import first_names, shortened
 from models import Change, FormSpec
 
 log = logging.getLogger(__name__)
 
-NAME_LIMIT = 255
 
 
 # ── Problem detection ─────────────────────────────────────────────────────────
@@ -59,7 +60,7 @@ def _detect_cross_form_conflicts(forms: list[FormSpec]) -> list[_FieldProblem]:
             for fld in (section.fields or []):
                 if fld.dataType != "Coded" or not fld.options:
                     continue
-                occurrences[fld.name.strip().lower()].append((form, section.name, fld))
+                occurrences[name_key(fld.name)].append((form, section.name, fld))
 
     problems: list[_FieldProblem] = []
     for instances in occurrences.values():
@@ -94,6 +95,64 @@ def _detect_cross_form_conflicts(forms: list[FormSpec]) -> list[_FieldProblem]:
     return problems
 
 
+def names_over_limit(forms: list[FormSpec]) -> list[str]:
+    """Field and answer names a build would send that are over Avni's limit.
+
+    Each is named by where it is and how long it is; an answer shared by
+    several fields is named once. Only Coded fields' options become answer
+    concepts. The AI review offers shorter field names (not answer names);
+    without it, or with an offer turned down, these remain and the server
+    refuses the import.
+    """
+    return _entries_over_limit(
+        (f"{form.name} › {section.name}", fld.name,
+         (fld.options or []) if fld.dataType == "Coded" else [])
+        for form in forms
+        for section in (form.sections or [])
+        for fld in (section.fields or [])
+    )
+
+
+def added_names_over_limit(ops: list[dict]) -> list[str]:
+    """Field and answer names in an update's `field.add` ops that are over the limit."""
+    return _entries_over_limit(
+        (f"{op['target'].get('form')} › {op['target'].get('section')}",
+         op["payload"].get("name") or "", op["payload"].get("options") or [])
+        for op in ops
+        if op.get("kind") == "field.add"
+    )
+
+
+def _entries_over_limit(fields: Iterable[tuple[str, str, list[str]]]) -> list[str]:
+    """Entries for (where, field name, answer names) over the limit; a shared answer once."""
+    found: list[str] = []
+    answers_named: set[str] = set()
+    for where, field_name, answers in fields:
+        if is_over_name_limit(field_name):
+            found.append(_field_entry(where, field_name))
+        for answer in answers:
+            if is_over_name_limit(answer) and answer not in answers_named:
+                answers_named.add(answer)
+                found.append(_answer_entry(where, field_name, answer))
+    return found
+
+
+def name_limit_error(found: list[str]) -> str:
+    return (
+        f"Avni cannot import a field or answer name longer than {NAME_LIMIT} "
+        f"characters. Shorten these in the spreadsheet ({len(found)}): "
+        + first_names(found) + "."
+    )
+
+
+def _field_entry(where: str, name: str) -> str:
+    return f"{where}: field {shortened(name)} ({len(name)} characters)"
+
+
+def _answer_entry(where: str, field_name: str, answer: str) -> str:
+    return f"{where} › {shortened(field_name)}: answer {shortened(answer)} ({len(answer)} characters)"
+
+
 def _detect_problems(forms: list[FormSpec]) -> list[_FieldProblem]:
     """Scan all forms for long_name and duplicate_field problems."""
     problems: list[_FieldProblem] = []
@@ -102,7 +161,7 @@ def _detect_problems(forms: list[FormSpec]) -> list[_FieldProblem]:
         # ── long_name ─────────────────────────────────────────────────────────
         for section in (form.sections or []):
             for fld in (section.fields or []):
-                if len(fld.name) > NAME_LIMIT:
+                if is_over_name_limit(fld.name):
                     problems.append(_FieldProblem(
                         kind="long_name",
                         form_name=form.name,
@@ -116,7 +175,7 @@ def _detect_problems(forms: list[FormSpec]) -> list[_FieldProblem]:
         name_groups: dict[str, list[tuple[str, str]]] = {}
         for section in (form.sections or []):
             for fld in (section.fields or []):
-                key = fld.name.strip().lower()
+                key = name_key(fld.name)
                 name_groups.setdefault(key, []).append((section.name, fld.name))
 
         for occurrences in name_groups.values():

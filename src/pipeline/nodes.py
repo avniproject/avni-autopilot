@@ -17,9 +17,18 @@ from typing import Any
 
 from domain.bundle_editor import apply_field_edits, load_bundle_snapshot
 from domain.changes import apply_resolutions
-from domain.diff import current_forms_not_in_desired, diff, unmatched_desired_forms
+from domain.diff import (
+    current_forms_not_in_desired,
+    diff,
+    unmatched_desired_forms,
+)
 from domain.spreadsheets import find_spreadsheets
-from domain.enricher import enrich_forms
+from domain.enricher import (
+    added_names_over_limit,
+    enrich_forms,
+    name_limit_error,
+    names_over_limit,
+)
 from domain.form_links import (
     apply_form_link_results,
     build_entity_catalog,
@@ -27,6 +36,7 @@ from domain.form_links import (
     orphan_entities,
 )
 from domain.generators import (
+    NAME_LIMIT,
     make_address_level_types,
     make_encounter_types,
     make_form_mappings,
@@ -53,10 +63,11 @@ from domain.rules.orchestrator import (
     generate_all,
 )
 from domain.rules.parser import attach_unmatched_rule_intents
-from models import Change
+from models import Change, RejectedOp
 from pipeline.state import BundleState
 
 log = logging.getLogger(__name__)
+
 
 
 # ── ZIP canonical order (mirrors BundleService.java / zip_bundle.js) ─────────
@@ -396,6 +407,16 @@ def generate_entities(state: BundleState) -> dict:
 def generate_forms(state: BundleState) -> dict:
     spec = state["entity_spec"]
 
+    # An update checks only the names it sends (`diff_against_bundle`).
+    too_long = [] if state.get("mode") == "edit_from_spec" else names_over_limit(spec.forms)
+    if too_long:
+        # The server refuses the whole import, so nothing is built.
+        log.info(f"[{state['org_name']}] build stopped: {len(too_long)} name(s) over {NAME_LIMIT} characters")
+        return {
+            "names_over_limit": too_long,
+            "errors": [*state.get("errors", []), name_limit_error(too_long)],
+        }
+
     result = make_forms_and_concepts(spec.forms)
     forms_json = result["forms"]
     concepts_json = result["concepts"]
@@ -585,7 +606,8 @@ def diff_against_bundle(state: BundleState) -> dict:
     }
     current_bundle = load_bundle_snapshot(bundle_path)
 
-    ops = diff(desired_bundle, current_bundle)
+    bundle_diff = diff(desired_bundle, current_bundle)
+    ops = bundle_diff.ops
     unmatched_forms = unmatched_desired_forms(desired_bundle, current_bundle)
     forms_not_in_spec = current_forms_not_in_desired(desired_bundle, current_bundle)
 
@@ -594,10 +616,19 @@ def diff_against_bundle(state: BundleState) -> dict:
         state["org_name"], os.path.basename(bundle_path), len(ops),
         ", ".join(f"{kind}={n}" for kind, n in _count_by_kind(ops).items()) or "none",
     )
+    too_long = added_names_over_limit(ops)
+    if too_long:
+        # The server would refuse the updated bundle, so nothing is changed.
+        log.info(f"[{state['org_name']}] update stopped: {len(too_long)} name(s) over {NAME_LIMIT} characters")
+        errors.append(name_limit_error(too_long))
+        ops = []
     return {
+        "names_over_limit": too_long,
         "diff_ops": ops,
         "unmatched_forms": unmatched_forms,
         "forms_not_in_spec": forms_not_in_spec,
+        "selection_type_differences": bundle_diff.selection_type_differences,
+        "name_clashes": bundle_diff.name_clashes,
         "errors": errors,
     }
 
@@ -619,21 +650,46 @@ def apply_diff_edits(state: BundleState) -> dict:
                                 "forms_modified": []}}
 
     result = apply_field_edits(bundle_path, ops)
+    changed = bool(result.forms_modified or result.concepts_appended)
 
     if result.rejected:
-        errors.append(
-            f"edit_from_spec: {len(result.rejected)} op(s) rejected — bundle may be partially updated"
-        )
+        errors.append(_rejected_update_message(result.rejected, changed))
 
     log.info(
-        "[%s] edit_from_spec applied: +%d added, %d voided, %d renamed, %d reinstated, %d retyped",
-        state["org_name"], result.form_elements_added, result.form_elements_voided,
-        result.form_elements_renamed, result.form_elements_reinstated,
-        result.form_elements_retyped,
+        f"[{state['org_name']}] edit_from_spec applied: +{result.form_elements_added} added, "
+        f"{result.form_elements_voided} voided, {result.form_elements_renamed} renamed, "
+        f"{result.form_elements_reinstated} reinstated"
     )
-    changed = bool(result.forms_modified or result.concepts_appended)
     return {"edit_result": result.model_dump(exclude={"bundle_path"}), "errors": errors,
             "zip_path": bundle_path if changed else ""}
+
+
+def _rejected_update_message(rejected: list[RejectedOp], changed: bool) -> str:
+    """Plain wording for update changes the editor refused.
+
+    A failed integrity check (`op_id` "*") aborts the whole update, so then
+    nothing was written; `changed` says whether the other changes went in.
+    """
+    integrity = [r.reason for r in rejected if r.kind == "integrity"]
+    refused = [r.reason for r in rejected if r.kind != "integrity"]
+    if integrity:
+        message = (
+            "The update was not applied, as the changes together would leave the "
+            "app's forms invalid: " + "; ".join(integrity) + "."
+        )
+        if refused:
+            message += " These changes could not be made either: " + "; ".join(refused) + "."
+        return message
+    if not changed:
+        return (
+            f"The update could not make any of its {len(refused)} change(s): "
+            + "; ".join(refused) + "."
+        )
+    return (
+        f"The update could not make {len(refused)} change(s); the other changes "
+        "were made, so the app does not fully match the spreadsheets: "
+        + "; ".join(refused) + "."
+    )
 
 
 def _count_by_kind(ops: list[dict]) -> dict[str, int]:

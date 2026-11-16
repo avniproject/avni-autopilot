@@ -606,6 +606,40 @@ async def test_a_build_asks_before_dropping_fields_added_in_chat(
     assert "ANC › Remarks" in result["error"]
 
 
+@pytest.mark.parametrize(("forms_not_in_spec", "ending"), [
+    ([], "it already has."),
+    (["Old Survey"], "the app's other forms were left as they are."),
+])
+def test_an_update_with_only_selection_differences_says_what_was_left(
+    forms_not_in_spec: list[str], ending: str,
+) -> None:
+    summary = {"status": "done", "zip_path": "", "errors": [], "notices": []}
+    tools._shape_edit_from_spec_summary(summary, {
+        "forms_json": [{}], "unmatched_forms": [], "forms_not_in_spec": forms_not_in_spec,
+        "selection_type_differences": ["ANC › Signs (single select in the app, multi select in the spreadsheets)"],
+        "edit_result": {"applied": []}, "diff_ops": [],
+    })
+    assert summary["no_changes"] is True
+    assert summary["message"].endswith(ending)
+    assert "only differences" not in summary["message"]
+
+
+def test_the_left_as_they_are_notice_names_the_first_ten_fields() -> None:
+    differences = [f"ANC › Field {n} (single select in the app, multi select in the spreadsheets)"
+                   for n in range(1, 50)]
+    summary = {"status": "done", "zip_path": "", "errors": [], "notices": []}
+    tools._shape_edit_from_spec_summary(summary, {
+        "forms_json": [{}], "unmatched_forms": [], "forms_not_in_spec": [],
+        "selection_type_differences": differences,
+        "edit_result": {"applied": []}, "diff_ops": [],
+    })
+    [notice] = summary["notices"]
+    assert notice.startswith("49 field(s)")
+    assert "Field 10 " in notice and "Field 11 " not in notice
+    assert "and 39 more" in notice
+    assert summary["selection_type_differences"] == differences
+
+
 def test_run_ids_differ_within_one_second() -> None:
     assert tools._new_thread_id("durga_india") != tools._new_thread_id("durga_india")
 

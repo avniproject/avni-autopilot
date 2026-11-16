@@ -13,18 +13,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 import socket
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import openpyxl
 import pytest
 from langchain_core.messages import ToolMessage
 
 import chat.tools as tools
 from config import Settings
 from domain.bundle_editor import BundleOrigin, classify_bundle
+from domain.generators import NAME_LIMIT
 from domain.llm import LLMHelper
 from domain.rules.generator import RuleGenerator
 from web.chat_service import ChatService
@@ -48,12 +49,27 @@ def offline_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     org_dir = tmp_path / "input" / ORG
     org_dir.mkdir(parents=True)
     for sheet in ORG_SHEETS.glob("*.xlsx"):
-        shutil.copy(sheet, org_dir / sheet.name.upper())
+        _copy_with_short_names(sheet, org_dir / sheet.name.upper())
     monkeypatch.setattr(
         tools, "settings",
         Settings(input_root=str(tmp_path / "input"), output_root=str(tmp_path / "output")),
     )
     return org_dir
+
+
+def _copy_with_short_names(sheet: Path, dest: Path) -> None:
+    """Copy a workbook with every text over Avni's name limit cut to fit.
+
+    Without the AI review nothing offers shorter names, and a build with a
+    name over the limit is an error.
+    """
+    workbook = openpyxl.load_workbook(sheet)
+    for worksheet in workbook.worksheets:
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if isinstance(cell.value, str) and len(cell.value) > NAME_LIMIT:
+                    cell.value = cell.value[:NAME_LIMIT - 5]
+    workbook.save(dest)
 
 
 def _build() -> Path:
@@ -323,19 +339,193 @@ def _multi_select_elements(bundle: Path) -> set[str]:
         }
 
 
-def test_update_fixes_multi_select_fields_of_a_bundle_built_by_the_old_generator(
+def test_update_leaves_old_multi_select_fields_and_names_them(
     offline_pipeline: Path, tmp_path: Path,
 ) -> None:
+    """avni-server refuses a single/multi select switch on fields it already
+    has, so an update of an old-generator bundle must not switch them."""
     built = _build()
     expected = _multi_select_elements(built)
     assert expected
     old = _as_built_by_the_old_generator(built, tmp_path / "old.zip")
-    assert _multi_select_elements(old) == set()
+    before = old.read_bytes()
+    session = _web_session(old)
+    session.pending_notices = []
 
-    result = _update(old)
+    result = asyncio.run(tools.edit_bundle_from_spec.ainvoke(
+        {"org": ORG}, config={"configurable": {"session": session}},
+    ))
+
     assert result["status"] == "done", result.get("error")
-    assert result["bundle_updated"] is True
-    assert result["edit_result"]["form_elements_retyped"] == len(expected)
-    assert _multi_select_elements(old) == expected
+    assert result["no_changes"] is True
+    assert "bundle_updated" not in result
+    assert old.read_bytes() == before
+    assert _multi_select_elements(old) == set()
+    differences = result["selection_type_differences"]
+    assert len(differences) == len(expected)
+    assert all("(single select in the app, multi select in the spreadsheets)" in d for d in differences)
+    [notice] = [n for n in session.pending_notices if "single and multi select" in n]
+    assert differences[0] in notice
 
-    assert _update(old)["no_changes"] is True
+
+def _restore_long_names(org_dir: Path) -> None:
+    for sheet in ORG_SHEETS.glob("*.xlsx"):
+        (org_dir / sheet.name.upper()).write_bytes(sheet.read_bytes())
+
+
+def test_a_build_with_a_name_over_the_limit_is_not_offered(offline_pipeline: Path) -> None:
+    """Without the AI review nothing offers a shorter name, and the server
+    refuses a concept name over the limit, so no bundle is offered and the
+    error says which names."""
+    _restore_long_names(offline_pipeline)
+    result = asyncio.run(tools.generate_bundle.ainvoke({"org": ORG}))
+    assert result["status"] == "error"
+    assert not result.get("zip_path")
+    assert "main_forms" not in result
+    assert result["error"].startswith("The app was not built. Avni cannot import")
+    assert "Baseline for Men › Household Roles: field 'In many families" in result["error"]
+    assert "(306 characters)" in result["error"]
+    assert not list((Path(tools.settings.output_root) / ORG).glob("**/*.zip"))
+
+
+def test_an_update_with_a_name_over_the_limit_changes_nothing(offline_pipeline: Path) -> None:
+    bundle = _build()
+    before = bundle.read_bytes()
+    _restore_long_names(offline_pipeline)
+    result = _update(bundle)
+    assert result["status"] == "error"
+    assert result["error"].startswith("Nothing in the bundle was changed. Avni cannot import")
+    assert bundle.read_bytes() == before
+
+
+def test_an_update_change_the_editor_refused_is_worded_for_the_user() -> None:
+    from models import RejectedOp
+    from pipeline.nodes import _rejected_update_message
+
+    message = _rejected_update_message([RejectedOp(
+        op_id="op-1", kind="ambiguous_target",
+        reason="field 'Importance' matches 2 live elements in section 'Details'",
+        hint="pass field_uuid",
+    )], changed=True)
+    assert message == (
+        "The update could not make 1 change(s); the other changes were made, so the "
+        "app does not fully match the spreadsheets: field 'Importance' matches 2 live "
+        "elements in section 'Details'."
+    )
+    assert "edit_from_spec" not in message and "field_uuid" not in message
+
+
+def test_an_update_aborted_by_the_integrity_check_says_nothing_was_applied() -> None:
+    from models import RejectedOp
+    from pipeline.nodes import _rejected_update_message
+
+    message = _rejected_update_message([
+        RejectedOp(op_id="*", kind="integrity", reason="anc.json: duplicate formElement uuid(s): ['u1']"),
+    ], changed=False)
+    assert message.startswith("The update was not applied")
+    assert "other changes were made" not in message
+
+
+def test_an_integrity_abort_still_names_the_changes_refused_before_it() -> None:
+    from models import RejectedOp
+    from pipeline.nodes import _rejected_update_message
+
+    message = _rejected_update_message([
+        RejectedOp(op_id="op-1", kind="not_allowed", reason="field 'Signs' is multi select"),
+        RejectedOp(op_id="*", kind="integrity", reason="anc.json: duplicate formElement uuid(s): ['u1']"),
+    ], changed=False)
+    assert message.startswith("The update was not applied")
+    assert "These changes could not be made either: field 'Signs' is multi select." in message
+
+
+def test_an_update_whose_every_change_was_refused_never_says_others_were_made() -> None:
+    from models import RejectedOp
+    from pipeline.nodes import _rejected_update_message
+
+    message = _rejected_update_message([
+        RejectedOp(op_id="op-1", kind="duplicate_name", reason="field 'A' already exists"),
+        RejectedOp(op_id="op-2", kind="not_allowed", reason="field 'B' is multi select"),
+    ], changed=False)
+    assert message == (
+        "The update could not make any of its 2 change(s): "
+        "field 'A' already exists; field 'B' is multi select."
+    )
+
+
+def test_only_names_sent_to_avni_are_checked() -> None:
+    """A Text field's options never become answers, an update checks only the
+    names in its `field.add` ops, and a shared answer is named once."""
+    from domain.enricher import added_names_over_limit, names_over_limit
+    from models import FieldSpec, FormSpec, SectionSpec
+
+    long_name = "x" * 300
+    form = FormSpec(name="New Survey", formType="Encounter", sections=[
+        SectionSpec(name="Page", fields=[FieldSpec(name="Notes", dataType="Text", options=[long_name])]),
+    ])
+    assert names_over_limit([form]) == []
+    ops = [
+        {"kind": "field.add", "target": {"form": "ANC", "section": "Details"},
+         "payload": {"name": "Signs", "dataType": "Coded", "options": [long_name, "B"]}},
+        {"kind": "field.add", "target": {"form": "ANC", "section": "More"},
+         "payload": {"name": "Other signs", "dataType": "Coded", "options": [long_name]}},
+    ]
+    [entry] = added_names_over_limit(ops)
+    assert entry.startswith("ANC › Details › 'Signs': answer 'xxx")
+
+
+def test_the_long_name_error_names_the_first_ten() -> None:
+    from domain.enricher import name_limit_error
+
+    error = name_limit_error([f"Form › Page: field 'F{n}' (300 characters)" for n in range(25)])
+    assert "(25):" in error and "'F9'" in error and "'F10'" not in error
+    assert error.endswith("and 15 more.")
+
+
+def _update_summary(**state) -> dict:
+    from chat.tools import _summarize
+
+    return _summarize({"mode": "edit_from_spec", "org_name": ORG, "zip_path": "",
+                       "errors": [], "forms_json": [{}], **state})
+
+
+def _applied(ops: list[dict]) -> dict:
+    return {"diff_ops": ops, "edit_result": {"applied": [op["op_id"] for op in ops]}}
+
+
+def test_an_update_names_pages_added_and_removed_and_fields_moved() -> None:
+    ops = [
+        {"op_id": "d1", "kind": "field.remove", "payload": {},
+         "target": {"form": "Session", "section": "Session Details", "field": "Session Aim"}},
+        {"op_id": "d2", "kind": "field.remove", "payload": {},
+         "target": {"form": "Session", "section": "Old", "field": "Venue"}},
+        {"op_id": "d3", "kind": "section.remove", "payload": {},
+         "target": {"form": "Session", "section": "Old"}},
+        {"op_id": "d4", "kind": "section.add", "target": {"form": "Session"},
+         "payload": {"name": "Observation"}},
+        {"op_id": "d5", "kind": "field.add", "target": {"form": "Session", "section": "Observation"},
+         "payload": {"name": "Session Aim", "dataType": "Text"}},
+    ]
+    summary = _update_summary(zip_path="bundle.zip", **_applied(ops))
+
+    assert summary["moved_fields"] == ["Session › Session Aim (Session Details → Observation)"]
+    assert summary["removed_fields"] == ["Session › Venue"]
+    assert summary["pages_added"] == ["Session › Observation"]
+    assert summary["pages_removed"] == ["Session › Old"]
+    assert not any("Session Aim" in n and "removed" in n for n in summary["notices"])
+
+
+def test_an_update_that_changes_nothing_still_says_it_matches() -> None:
+    summary = _update_summary()
+
+    assert summary["message"] == "The bundle already matches the spreadsheets; nothing was changed."
+
+
+def test_rows_left_out_for_capitals_are_named_and_never_called_a_match() -> None:
+    clash = "ANC › 'weight' (page 'History') has the same name as 'Weight' (page 'Details') apart from capitals"
+    summary = _update_summary(name_clashes=[clash], selection_type_differences=["ANC › Signs (x)"])
+
+    assert summary["name_clashes"] == [clash]
+    assert any(clash in n and "Rename one row of each pair" in n for n in summary["notices"])
+    assert "match" not in summary["message"]
+    assert "differ from another only in capitals were left out" in summary["message"]
+    assert "cannot switch a field it already has" in summary["message"]
