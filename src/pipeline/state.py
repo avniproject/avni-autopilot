@@ -28,6 +28,10 @@ class BundleState(TypedDict):
     forms_not_in_spec: list[str]            # bundle forms absent from the spec (left as they are)
     selection_type_differences: list[str]   # fields left single/multi select unlike the spec
     name_clashes: list[str]                 # spec rows left out: same name as another row apart from capitals
+    fields_on_another_page: list[str]       # fields the spec puts on another page; left on their page
+    pages_not_added: list[str]              # "Form › Page" new in the spec; an update does not add pages
+    pages_not_removed: list[str]            # "Form › Page" not in the spec; an update does not remove pages
+    unread_selection_types: list[str]       # "Form › Field: 'cell'" Selection Type cells not understood
     skipped_sheet_notes: list[str]          # plain-words notes naming sheets nothing was read from
     edit_result: dict                       # set by apply_diff_edits (an EditResult dump)
     # Form ↔ entity linking
@@ -81,6 +85,10 @@ def initial_state(
         "forms_not_in_spec": [],
         "selection_type_differences": [],
         "name_clashes": [],
+        "fields_on_another_page": [],
+        "pages_not_added": [],
+        "pages_not_removed": [],
+        "unread_selection_types": [],
         "skipped_sheet_notes": [],
         "edit_result": {},
         "user_instructions": user_instructions,

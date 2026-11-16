@@ -1,9 +1,8 @@
-"""Moving a field to another page of a form (`domain.diff` + `domain.bundle_editor`).
+"""Fields and pages in an update and in chat edits (`domain.diff` + `domain.bundle_editor`).
 
-A field's element UUID comes from its form and name, not its page. avni-server
-looks an element up only within its own page and needs element UUIDs unique,
-so a moved field is voided on its old page and gets a new element, with a UUID
-tied to its new page, that keeps the same concept.
+An update does not add, remove or reorder pages, and does not move fields
+between pages: a moved field would be a new element without the original's
+rules and settings. Such fields stay on their page and are named.
 
 Usage:
     uv run --extra dev pytest tests/domain/test_field_page_move.py
@@ -90,47 +89,31 @@ def _ops_against(bundle: Path, pages: dict[str, list[str]]) -> list[dict]:
 START = {"Details": ["Weight", "Height"], "History": ["Past illness"]}
 
 
-@pytest.mark.parametrize("pages_after_move", [
+@pytest.mark.parametrize("pages", [
     {"Details": ["Weight"], "History": ["Past illness", "Height"]},
-    # Target page listed first: the add would run before the remove without
-    # removals ordered first.
     {"History": ["Past illness", "Height"], "Details": ["Weight"]},
 ])
-def test_moving_a_field_to_another_page_is_applied(tmp_path: Path, pages_after_move) -> None:
+def test_a_field_on_another_page_in_the_sheet_stays_on_its_page(tmp_path: Path, pages) -> None:
     bundle = _write_bundle(tmp_path, _form(START))
 
-    _, result = _update(bundle, _form(pages_after_move))
+    bundle_diff = diff(_snapshot(_form(pages)), load_bundle_snapshot(str(bundle)))
+
+    assert bundle_diff.ops == []
+    assert bundle_diff.fields_on_another_page == [
+        "ANC › Height (page 'Details' in the app, 'History' in the spreadsheets)"]
+
+
+def test_a_field_on_another_page_stays_while_the_rest_of_the_update_goes_through(
+    tmp_path: Path,
+) -> None:
+    bundle = _write_bundle(tmp_path, _form(START))
+    pages = {"Details": ["Weight", "Pulse"], "History": ["Height", "Past illness"]}
+
+    ops, result = _update(bundle, _form(pages))
 
     assert result.rejected == []
-    assert _live_pages(bundle) == {"Details": ["Weight"], "History": ["Past illness", "Height"]}
-    assert max(_element_uuids(bundle).values()) == 1
-    moved = next(e for g in _bundle_form(bundle)["formElementGroups"] if g["name"] == "History"
-                 for e in g["formElements"] if e["name"] == "Height")
-    assert moved["uuid"] != make_uuid(f"formElement:{FORM}:Height")
-    assert moved["concept"]["uuid"] == make_uuid("concept:Height")
-
-
-def test_updating_again_after_a_move_changes_nothing(tmp_path: Path) -> None:
-    bundle = _write_bundle(tmp_path, _form(START))
-    moved = _form({"Details": ["Weight"], "History": ["Past illness", "Height"]})
-    _update(bundle, moved)
-
-    ops, _ = _update(bundle, moved)
-
-    assert ops == []
-
-
-def test_moving_a_field_back_reinstates_its_first_element(tmp_path: Path) -> None:
-    bundle = _write_bundle(tmp_path, _form(START))
-    _update(bundle, _form({"Details": ["Weight"], "History": ["Past illness", "Height"]}))
-
-    _, result = _update(bundle, _form(START))
-
-    assert result.rejected == []
-    assert result.form_elements_reinstated == 1
-    assert _live_pages(bundle) == {"Details": ["Weight", "Height"], "History": ["Past illness"]}
-    assert max(_element_uuids(bundle).values()) == 1
-    assert _ops_against(bundle, START) == []
+    assert [(op["kind"], op["payload"].get("name")) for op in ops] == [("field.add", "Pulse")]
+    assert _live_pages(bundle) == {"Details": ["Weight", "Height", "Pulse"], "History": ["Past illness"]}
 
 
 def test_chat_add_of_a_field_live_on_another_page_is_rejected_alone(tmp_path: Path) -> None:
@@ -149,7 +132,7 @@ def test_chat_add_of_a_field_live_on_another_page_is_rejected_alone(tmp_path: Pa
     assert _live_pages(bundle)["History"] == ["Past illness", "Allergies"]
 
 
-def test_chat_remove_then_add_on_another_page_moves_the_field(tmp_path: Path) -> None:
+def test_chat_remove_then_add_on_another_page_is_refused(tmp_path: Path) -> None:
     bundle = _write_bundle(tmp_path, _form(START))
 
     result = apply_field_edits(str(bundle), [
@@ -159,8 +142,9 @@ def test_chat_remove_then_add_on_another_page_moves_the_field(tmp_path: Path) ->
          "payload": {"name": "Height", "dataType": "Text"}},
     ])
 
-    assert result.rejected == []
-    assert _live_pages(bundle) == {"Details": ["Weight"], "History": ["Past illness", "Height"]}
+    assert [(r.op_id, r.kind) for r in result.rejected] == [("op-2", "not_allowed")]
+    assert "is on page 'Details'" in result.rejected[0].reason
+    assert _live_pages(bundle) == {"Details": ["Weight"], "History": ["Past illness"]}
     assert max(_element_uuids(bundle).values()) == 1
 
 
@@ -177,7 +161,7 @@ def test_chat_rename_onto_a_field_live_on_another_page_is_rejected(tmp_path: Pat
     assert _live_pages(bundle) == {"Details": ["Weight", "Height"], "History": ["Past illness"]}
 
 
-def test_chat_rename_onto_a_name_removed_from_another_page_is_applied(tmp_path: Path) -> None:
+def test_chat_rename_onto_a_name_removed_from_another_page_is_refused(tmp_path: Path) -> None:
     bundle = _write_bundle(tmp_path, _form(START))
     apply_field_edits(str(bundle), [{
         "op_id": "op-1", "kind": "field.remove",
@@ -190,9 +174,8 @@ def test_chat_rename_onto_a_name_removed_from_another_page_is_applied(tmp_path: 
         "payload": {"new_name": "Height"},
     }])
 
-    assert result.rejected == []
-    assert _live_pages(bundle)["History"] == ["Height"]
-    assert max(_element_uuids(bundle).values()) == 1
+    assert [r.kind for r in result.rejected] == ["not_allowed"]
+    assert _live_pages(bundle)["History"] == ["Past illness"]
 
 
 # ── Pages only on one side ────────────────────────────────────────────────────
@@ -212,93 +195,34 @@ def _live_page_order(bundle: Path) -> list[str]:
     return [g["name"] for g in sorted(groups, key=lambda g: g["displayOrder"]) if not g.get("voided")]
 
 
-def test_a_field_moved_onto_a_new_page_moves_with_the_page_added(tmp_path: Path) -> None:
+@pytest.mark.parametrize("pages", [
+    {"Details": ["Weight", "Height"]},                                         # page dropped
+    {"Details": ["Weight", "Height"], "History": ["Past illness"], "Body": ["Pulse"]},  # page added
+    {"Details": ["Weight", "Height"], "Medical history": ["Past illness"]},   # page renamed
+    {"History": ["Past illness"], "Details": ["Weight", "Height"]},           # pages reordered
+])
+def test_an_update_leaves_pages_as_they_are(tmp_path: Path, pages) -> None:
+    bundle = _write_bundle(tmp_path, _form(START))
+
+    ops, result = _update(bundle, _form(pages))
+
+    assert ops == [] and result.rejected == []
+    assert _live_page_order(bundle) == ["Details", "History"]
+    assert _live_pages(bundle) == START
+
+
+def test_a_field_moved_onto_a_new_page_stays_and_is_named(tmp_path: Path) -> None:
     bundle = _write_bundle(tmp_path, _form(START))
     pages = {"Details": ["Weight"], "Body": ["Height"], "History": ["Past illness"]}
 
-    ops, result = _update(bundle, _form(pages))
+    bundle_diff = diff(_snapshot(_form(pages)), load_bundle_snapshot(str(bundle)))
 
-    assert result.rejected == [] and result.sections_added == 1
-    assert _live_pages(bundle) == pages
-    assert _live_page_order(bundle) == ["Details", "Body", "History"]
-    assert _display_orders_unique(bundle)
-    assert _ops_against(bundle, pages) == []
-
-
-def test_a_page_dropped_from_the_spreadsheets_is_removed_with_its_fields(tmp_path: Path) -> None:
-    bundle = _write_bundle(tmp_path, _form(START))
-
-    ops, result = _update(bundle, _form({"Details": ["Weight", "Height"]}))
-
-    assert result.rejected == [] and result.sections_removed == 1
-    assert [op["kind"] for op in ops] == ["field.remove", "section.remove"]
-    assert _live_pages(bundle) == {"Details": ["Weight", "Height"], "History": []}
-    assert _live_page_order(bundle) == ["Details"]
-    assert _ops_against(bundle, {"Details": ["Weight", "Height"]}) == []
-
-
-def test_a_field_moved_off_a_dropped_page_is_kept(tmp_path: Path) -> None:
-    bundle = _write_bundle(tmp_path, _form(START))
-    pages = {"Details": ["Weight", "Past illness", "Height"]}
-
-    _, result = _update(bundle, _form(pages))
-
-    assert result.rejected == []
-    assert _live_pages(bundle)["Details"] == ["Weight", "Past illness", "Height"]
-    assert _live_page_order(bundle) == ["Details"]
-    assert _ops_against(bundle, pages) == []
-
-
-def test_a_renamed_page_moves_its_fields_to_the_new_name(tmp_path: Path) -> None:
-    bundle = _write_bundle(tmp_path, _form(START))
-    pages = {"Details": ["Weight", "Height"], "Medical history": ["Past illness"]}
-
-    _, result = _update(bundle, _form(pages))
-
-    assert result.rejected == []
-    assert result.sections_added == 1 and result.sections_removed == 1
-    assert _live_page_order(bundle) == ["Details", "Medical history"]
-    assert _live_pages(bundle)["Medical history"] == ["Past illness"]
-    assert max(_element_uuids(bundle).values()) == 1
-    assert _display_orders_unique(bundle)
-    assert _ops_against(bundle, pages) == []
-
-
-def test_a_page_brought_back_reuses_its_voided_page(tmp_path: Path) -> None:
-    bundle = _write_bundle(tmp_path, _form(START))
-    _update(bundle, _form({"Details": ["Weight", "Height"]}))
-
-    _, result = _update(bundle, _form(START))
-
-    assert result.rejected == []
-    assert len(_bundle_form(bundle)["formElementGroups"]) == 2
-    assert _live_pages(bundle) == START
-    assert _display_orders_unique(bundle)
-    assert _ops_against(bundle, START) == []
-
-
-def test_pages_reordered_in_the_spreadsheets_are_reordered(tmp_path: Path) -> None:
-    bundle = _write_bundle(tmp_path, _form(START))
-    pages = {"History": ["Past illness"], "Details": ["Weight", "Height"]}
-
-    ops, result = _update(bundle, _form(pages))
-
-    assert [op["kind"] for op in ops] == ["form.reorder_sections"]
-    assert _live_page_order(bundle) == ["History", "Details"]
-    assert _ops_against(bundle, pages) == []
+    assert bundle_diff.ops == []
+    assert bundle_diff.fields_on_another_page == [
+        "ANC › Height (page 'Details' in the app, 'Body' in the spreadsheets)"]
 
 
 # ── Field order and display order ─────────────────────────────────────────────
-
-
-def test_a_moved_field_lands_where_the_sheet_puts_it(tmp_path: Path) -> None:
-    bundle = _write_bundle(tmp_path, _form(START))
-    pages = {"Details": ["Weight"], "History": ["Height", "Past illness"]}
-
-    _update(bundle, _form(pages))
-
-    assert _live_pages(bundle) == pages
-    assert _ops_against(bundle, pages) == []
 
 
 def test_a_field_brought_back_lands_where_the_sheet_puts_it(tmp_path: Path) -> None:
@@ -515,59 +439,42 @@ def test_an_integrity_abort_reports_nothing_applied(tmp_path: Path) -> None:
     assert (bundle / "forms" / FORM_FILE).read_bytes() == before
 
 
-def test_a_field_brought_back_at_the_end_of_its_page_lands_last(tmp_path: Path) -> None:
-    """No reorder is sent when the sheet puts it last, so it must go to the end."""
-    bundle = _write_bundle(tmp_path, _form({"Details": ["Weight", "Height", "Pulse"]}))
-    _update(bundle, _form({"Details": ["Weight", "Pulse"]}))
-
-    ops, _ = _update(bundle, _form({"Details": ["Weight", "Pulse", "Height"]}))
-
-    assert [op["kind"] for op in ops] == ["field.add"]
-    assert _live_pages(bundle)["Details"] == ["Weight", "Pulse", "Height"]
-
-
-def test_the_integrity_check_counts_voided_questions_and_pages() -> None:
+def test_the_integrity_check_counts_voided_questions() -> None:
     from domain.bundle_editor import _check_integrity
 
     form = _form(START)
     form["formElementGroups"][0]["formElements"].append(dict(_element("Old", 1), uuid="old", voided=True))
-    form["formElementGroups"].append({"uuid": "gone", "name": "Gone", "displayOrder": 2,
-                                      "voided": True, "formElements": []})
     errors = _check_integrity({FORM_FILE: form}, {FORM_FILE})
-    assert errors == [
-        f"{FORM_FILE}: duplicate page displayOrder: [2]",
-        f"{FORM_FILE} / section 'Details': duplicate displayOrder: [1]",
-    ]
+    assert errors == [f"{FORM_FILE} / section 'Details': duplicate displayOrder: [1]"]
     assert _check_integrity({FORM_FILE: form}, set()) == []
 
 
 # ── Pages and fields as the Avni app may have changed them ────────────────────
 
 
-def test_a_page_added_in_the_app_with_the_spreadsheet_name_is_kept(tmp_path: Path) -> None:
+def test_a_page_added_in_the_app_with_the_spreadsheet_name_is_left_as_it_is(tmp_path: Path) -> None:
     form = _form(START)
     form["formElementGroups"][1]["uuid"] = "made-in-app-designer"
     bundle = _write_bundle(tmp_path, form)
 
-    ops, _ = _update(bundle, _form(START))
+    bundle_diff = diff(_snapshot(_form(START)), load_bundle_snapshot(str(bundle)))
 
-    assert ops == []
+    assert bundle_diff.ops == [] and bundle_diff.fields_on_another_page == []
 
 
 def test_a_page_and_field_renamed_in_the_app_are_reordered_by_their_app_names(
     tmp_path: Path,
 ) -> None:
     form = _form(START)
-    form["formElementGroups"][1]["name"] = "Past"           # page renamed in the app
+    form["formElementGroups"][0]["name"] = "Measurements"  # page renamed in the app
     form["formElementGroups"][0]["formElements"][0]["name"] = "Body weight"  # field renamed
     bundle = _write_bundle(tmp_path, form)
-    pages = {"History": ["Past illness"], "Details": ["Height", "Weight"]}
+    pages = {"Details": ["Height", "Weight"], "History": ["Past illness"]}
 
     ops, result = _update(bundle, _form(pages))
 
     assert result.rejected == []
-    assert _live_page_order(bundle) == ["Past", "Details"]
-    assert _live_pages(bundle)["Details"] == ["Height", "Body weight"]
+    assert _live_pages(bundle)["Measurements"] == ["Height", "Body weight"]
 
 
 def test_of_two_rows_differing_in_capitals_the_one_the_app_has_is_kept(tmp_path: Path) -> None:
@@ -604,14 +511,62 @@ def test_a_rename_bringing_back_a_removed_field_takes_the_renamed_fields_place(
         "Avni cannot switch an existing field between single and multi select."]
 
 
-def test_adding_a_page_renamed_in_the_app_is_refused(tmp_path: Path) -> None:
+# ── Review fixes ──────────────────────────────────────────────────────────────
+
+
+def test_a_field_with_another_uuid_but_the_same_concept_on_its_page_is_kept(tmp_path: Path) -> None:
+    """E.g. moved by an earlier build with a page-tied UUID, or added in App Designer."""
     form = _form(START)
-    form["formElementGroups"][1]["name"] = "Past"
+    form["formElementGroups"][1]["formElements"][0]["uuid"] = "page-tied"
+    form["formElementGroups"][1]["formElements"][0]["rule"] = "skip logic"
     bundle = _write_bundle(tmp_path, form)
 
-    result = apply_field_edits(str(bundle), [{
-        "op_id": "op-1", "kind": "section.add", "target": {"form": FORM},
-        "payload": {"name": "History"}}])
+    ops, result = _update(bundle, _form(START))
 
-    assert [r.kind for r in result.rejected] == ["duplicate_name"]
-    assert _live_page_order(bundle) == ["Details", "Past"]
+    assert ops == [] and result.rejected == []
+
+
+def test_pages_on_one_side_only_are_named(tmp_path: Path) -> None:
+    bundle = _write_bundle(tmp_path, _form(START))
+
+    bundle_diff = diff(_snapshot(_form({"Details": ["Weight", "Height"], "Body": ["Pulse"]})),
+                       load_bundle_snapshot(str(bundle)))
+
+    assert bundle_diff.ops == []
+    assert bundle_diff.pages_not_added == ["ANC › Body"]
+    assert bundle_diff.pages_not_removed == ["ANC › History"]
+
+
+def test_a_reorder_keeps_a_field_the_sheet_puts_on_another_page(tmp_path: Path) -> None:
+    bundle = _write_bundle(tmp_path, _form({"Details": ["Weight", "Height", "Pulse"], "History": ["Past illness"]}))
+    pages = {"Details": ["Pulse", "Weight"], "History": ["Past illness", "Height"]}
+
+    ops, result = _update(bundle, _form(pages))
+
+    assert result.rejected == []
+    assert [op["kind"] for op in ops] == ["section.reorder_fields"]
+    assert _live_pages(bundle)["Details"] == ["Pulse", "Weight", "Height"]
+
+
+def test_fields_for_a_voided_page_are_not_added_to_it(tmp_path: Path) -> None:
+    form = _form(START)
+    form["formElementGroups"][1]["voided"] = True
+    form["formElementGroups"][1]["formElements"][0]["voided"] = True
+    bundle = _write_bundle(tmp_path, form)
+
+    bundle_diff = diff(_snapshot(_form(START)), load_bundle_snapshot(str(bundle)))
+
+    assert bundle_diff.ops == []
+    assert bundle_diff.pages_not_added == ["ANC › History"]
+
+
+def test_a_field_removed_from_another_page_is_named_not_refused(tmp_path: Path) -> None:
+    bundle = _write_bundle(tmp_path, _form(START))
+    _update(bundle, _form({"Details": ["Weight"], "History": ["Past illness"]}))  # Height removed
+
+    ops, result = _update(bundle, _form({"Details": ["Weight"], "History": ["Past illness", "Height"]}))
+
+    assert ops == [] and result.rejected == []
+    assert diff(_snapshot(_form({"Details": ["Weight"], "History": ["Past illness", "Height"]})),
+                load_bundle_snapshot(str(bundle))).fields_on_another_page == [
+        "ANC › Height (removed from page 'Details' in the app, on 'History' in the spreadsheets)"]

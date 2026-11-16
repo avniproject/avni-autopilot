@@ -259,9 +259,7 @@ Behavior:
     say nothing was changed, in the words of the result's `message` (no
     card is shown); do not add that the app matches the spreadsheets.
     Otherwise say the app was updated and report the
-    fields added, reinstated, removed and renamed from `edit_result`, and
-    the fields moved to another page (`moved_fields`) and pages added or
-    removed (`pages_added`, `pages_removed`); a moved field was not removed.
+    fields added, reinstated, removed and renamed from `edit_result`.
     When `edit_result.rejected` is not empty, the update was only partly
     made: say so plainly, give each entry of `errors`, and never say the
     app now matches the spreadsheets. Other `errors` (such as spreadsheet

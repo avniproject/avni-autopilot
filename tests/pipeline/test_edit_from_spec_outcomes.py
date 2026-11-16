@@ -488,30 +488,24 @@ def _update_summary(**state) -> dict:
                        "errors": [], "forms_json": [{}], **state})
 
 
-def _applied(ops: list[dict]) -> dict:
-    return {"diff_ops": ops, "edit_result": {"applied": [op["op_id"] for op in ops]}}
+def test_an_update_names_fields_left_on_their_page() -> None:
+    entry = "Session › Session Aim (page 'Session Details' in the app, 'Observation' in the spreadsheets)"
+    summary = _update_summary(fields_on_another_page=[entry])
+
+    assert summary["fields_on_another_page"] == [entry]
+    assert any(entry in n and "does not move fields between pages" in n for n in summary["notices"])
 
 
-def test_an_update_names_pages_added_and_removed_and_fields_moved() -> None:
-    ops = [
-        {"op_id": "d1", "kind": "field.remove", "payload": {},
-         "target": {"form": "Session", "section": "Session Details", "field": "Session Aim"}},
-        {"op_id": "d2", "kind": "field.remove", "payload": {},
-         "target": {"form": "Session", "section": "Old", "field": "Venue"}},
-        {"op_id": "d3", "kind": "section.remove", "payload": {},
-         "target": {"form": "Session", "section": "Old"}},
-        {"op_id": "d4", "kind": "section.add", "target": {"form": "Session"},
-         "payload": {"name": "Observation"}},
-        {"op_id": "d5", "kind": "field.add", "target": {"form": "Session", "section": "Observation"},
-         "payload": {"name": "Session Aim", "dataType": "Text"}},
-    ]
-    summary = _update_summary(zip_path="bundle.zip", **_applied(ops))
+@pytest.mark.parametrize("mode", ["edit_from_spec", "generate"])
+def test_unread_selection_type_cells_are_a_notice(mode: str) -> None:
+    from chat.tools import _summarize
 
-    assert summary["moved_fields"] == ["Session › Session Aim (Session Details → Observation)"]
-    assert summary["removed_fields"] == ["Session › Venue"]
-    assert summary["pages_added"] == ["Session › Observation"]
-    assert summary["pages_removed"] == ["Session › Old"]
-    assert not any("Session Aim" in n and "removed" in n for n in summary["notices"])
+    cell = "Session › Importance: 'Multi Select (Checkbox)'"
+    summary = _summarize({"mode": mode, "org_name": ORG, "zip_path": "", "errors": [],
+                          "forms_json": [{}], "unread_selection_types": [cell]})
+
+    assert summary["unread_selection_types"] == [cell]
+    assert any(cell in n and "read as single select" in n for n in summary["notices"])
 
 
 def test_an_update_that_changes_nothing_still_says_it_matches() -> None:
@@ -529,3 +523,36 @@ def test_rows_left_out_for_capitals_are_named_and_never_called_a_match() -> None
     assert "match" not in summary["message"]
     assert "differ from another only in capitals were left out" in summary["message"]
     assert "cannot switch a field it already has" in summary["message"]
+
+
+def test_a_multi_select_checkbox_cell_reaches_the_user_as_a_notice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Himesh's testing note: "Multi Select (Checkbox)" as a Selection Type is named in the chat."""
+    import pandas as pd
+
+    import pipeline.nodes as nodes
+    from chat.tools import _summarize
+    from domain.parser import parse_form_df
+    from models import EntitySpec, SubjectTypeSpec
+
+    form = parse_form_df(pd.DataFrame([
+        ["Field Name", "Data Type", "Options", "Selection Type"],
+        ["Importance", "Coded", "High\nLow", "Multi Select (Checkbox)"],
+    ]), "Session", None)
+    spec = EntitySpec(subject_types=[SubjectTypeSpec(name="Cohort")], forms=[form])
+    monkeypatch.setattr(nodes, "parse_scoping_docs", lambda _paths: (spec, []))
+
+    parsed = nodes.parse_documents({"org_name": ORG, "file_paths": [], "errors": []})
+    summary = _summarize({"mode": "generate", "org_name": ORG, "zip_path": "", "errors": [], **parsed})
+
+    assert parsed["unread_selection_types"] == ["Session › Importance: 'Multi Select (Checkbox)'"]
+    assert any("'Multi Select (Checkbox)'" in n for n in summary["notices"])
+
+
+def test_an_update_names_pages_it_left_as_they_are_and_never_calls_it_a_match() -> None:
+    summary = _update_summary(pages_not_added=["ANC › Body"], pages_not_removed=["ANC › History"])
+
+    assert any("does not add pages, so they and their fields were left out: ANC › Body" in n
+               for n in summary["notices"])
+    assert any("does not remove pages, so they and their fields were left as they are: ANC › History" in n
+               for n in summary["notices"])
+    assert "match" not in summary["message"]

@@ -224,8 +224,8 @@ def test_a_rejected_re_add_leaves_the_removed_field_removed(tmp_path: Path) -> N
 
 
 def test_a_field_moved_to_a_new_section_is_not_reported_as_left_as_it_is() -> None:
-    """The moved field gets a new element on its new page, so its old setting
-    does not carry over and it is not named as left single/multi select."""
+    """An update does not move fields between pages, so the field stays on its
+    page; it is named there, not also as left single/multi select."""
     from domain.diff import diff
 
     current = _bundle_with(_coded("Signs", "MultiSelect"))
@@ -234,7 +234,8 @@ def test_a_field_moved_to_a_new_section_is_not_reported_as_left_as_it_is() -> No
     moved = groups[0]["formElements"].pop()
     groups.append({"uuid": "g-new", "name": "Symptoms", "formElements": [moved]})
     result = diff(desired, current)
-    assert [op["kind"] for op in result.ops] == ["field.remove", "section.add", "field.add"]
+    assert result.ops == []
+    assert len(result.fields_on_another_page) == 1
     assert result.selection_type_differences == []
 
 

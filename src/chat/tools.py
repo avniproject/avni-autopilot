@@ -335,6 +335,15 @@ def _summarize(state: dict) -> dict:
         "errors": state.get("errors", []),
         "notices": list(state.get("skipped_sheet_notes", [])),
     }
+    unread_selection_types = state.get("unread_selection_types") or []
+    if unread_selection_types:
+        summary["unread_selection_types"] = unread_selection_types
+        summary["notices"].append(
+            "These Selection Type cells were not understood, so the fields were "
+            "read as single select: " + first_names(unread_selection_types)
+            + ". Write Single Select or Multi Select there; once a field is "
+            "uploaded, Avni cannot switch it to multi select."
+        )
     if state.get("names_over_limit"):
         _shape_stopped_summary(summary, state)
     elif state.get("mode") == "edit_from_spec":
@@ -397,42 +406,14 @@ _SPEC_COUNT_KEYS = (
 )
 
 
-def _applied_update_ops(state: dict, kind: str) -> list[dict]:
+def _fields_removed_by_update(state: dict) -> list[str]:
+    """`Form › Field` for each field the update voided because the
+    spreadsheets no longer have it."""
     applied = set((state.get("edit_result") or {}).get("applied") or [])
     return [
-        op for op in state.get("diff_ops") or []
-        if op.get("kind") == kind and op.get("op_id") in applied
-    ]
-
-
-def _fields_moved_and_removed_by_update(state: dict) -> tuple[list[str], list[str]]:
-    """`Form › Field (Old page → New page)` for each field the update moved to
-    another page, and `Form › Field` for each it voided because the
-    spreadsheets no longer have it.
-
-    A move is a removal from one page and an add of the same name on another
-    page of the form.
-    """
-    added_on = {
-        (op["target"].get("form"), name_key(op["payload"].get("name"))): op["target"].get("section")
-        for op in _applied_update_ops(state, "field.add")
-    }
-    moved: list[str] = []
-    removed: list[str] = []
-    for op in _applied_update_ops(state, "field.remove"):
-        form, field_name, page = (op["target"].get(k) for k in ("form", "field", "section"))
-        new_page = added_on.get((form, name_key(field_name)))
-        if new_page is not None and name_key(new_page) != name_key(page):
-            moved.append(f"{form} › {field_name} ({page} → {new_page})")
-        else:
-            removed.append(f"{form} › {field_name}")
-    return moved, removed
-
-
-def _pages_changed_by_update(state: dict, kind: str) -> list[str]:
-    return [
-        f"{op['target'].get('form')} › {op['target'].get('section') or op['payload'].get('name')}"
-        for op in _applied_update_ops(state, kind)
+        f"{op['target'].get('form')} › {op['target'].get('field')}"
+        for op in state.get("diff_ops") or []
+        if op.get("kind") == "field.remove" and op.get("op_id") in applied
     ]
 
 
@@ -474,17 +455,29 @@ def _shape_edit_from_spec_summary(summary: dict, state: dict) -> None:
             "differ only in capitals as one question: " + first_names(name_clashes)
             + ". Rename one row of each pair and update again."
         )
-    pages_added = _pages_changed_by_update(state, "section.add")
-    if pages_added:
-        summary["pages_added"] = pages_added
-        summary["notices"].append("These pages were added: " + first_names(pages_added) + ".")
-    pages_removed = _pages_changed_by_update(state, "section.remove")
-    if pages_removed:
-        summary["pages_removed"] = pages_removed
+    pages_not_added = state.get("pages_not_added") or []
+    if pages_not_added:
+        summary["pages_not_added"] = pages_not_added
         summary["notices"].append(
-            "These pages are not in the spreadsheets, so the update removed them "
-            "and the fields on them that the spreadsheets do not have elsewhere: "
-            + first_names(pages_removed) + "."
+            "These pages are new in the spreadsheets, and an update does not add "
+            "pages, so they and their fields were left out: "
+            + first_names(pages_not_added) + "."
+        )
+    pages_not_removed = state.get("pages_not_removed") or []
+    if pages_not_removed:
+        summary["pages_not_removed"] = pages_not_removed
+        summary["notices"].append(
+            "These pages are in the app but not in the spreadsheets, and an update "
+            "does not remove pages, so they and their fields were left as they are: "
+            + first_names(pages_not_removed) + "."
+        )
+    on_another_page = state.get("fields_on_another_page") or []
+    if on_another_page:
+        summary["fields_on_another_page"] = on_another_page
+        summary["notices"].append(
+            "These fields are on another page in the spreadsheets, and an update "
+            "does not move fields between pages, so they were left on their page: "
+            + first_names(on_another_page) + "."
         )
     selection_differences = state.get("selection_type_differences") or []
     if selection_differences:
@@ -496,13 +489,7 @@ def _shape_edit_from_spec_summary(summary: dict, state: dict) -> None:
             + ". Avni cannot switch a field it already has between single and "
             "multi select, as answers already saved would change shape."
         )
-    moved, removed = _fields_moved_and_removed_by_update(state)
-    if moved:
-        summary["moved_fields"] = moved
-        summary["notices"].append(
-            "These fields moved to another page, as in the spreadsheets: "
-            + first_names(moved) + "."
-        )
+    removed = _fields_removed_by_update(state)
     if removed:
         summary["removed_fields"] = removed
         summary["notices"].append(
@@ -521,17 +508,22 @@ def _shape_edit_from_spec_summary(summary: dict, state: dict) -> None:
     else:
         summary["no_changes"] = True
         summary["message"] = _no_changes_message(
-            bool(selection_differences), bool(name_clashes), bool(left_as_they_are),
+            bool(selection_differences), bool(name_clashes),
+            bool(pages_not_added or pages_not_removed or on_another_page),
+            bool(left_as_they_are),
         )
 
 
-def _no_changes_message(selection_differs: bool, rows_left_out: bool, other_forms_left: bool) -> str:
+def _no_changes_message(selection_differs: bool, rows_left_out: bool, pages_differ: bool,
+                        other_forms_left: bool) -> str:
     """Why an update that wrote nothing changed nothing; never "matches" when something differs."""
     reasons = [
         *(["the fields set differently for single or multi select were left as "
            "they are, as Avni cannot switch a field it already has"] if selection_differs else []),
         *(["the spreadsheet rows whose names differ from another only in capitals "
            "were left out"] if rows_left_out else []),
+        *(["the pages, and the fields on another page, that differ from the "
+           "spreadsheets were left as they are"] if pages_differ else []),
     ]
     other_forms = ", and the app's other forms were left as they are." if other_forms_left else "."
     if reasons:
@@ -673,13 +665,13 @@ async def edit_bundle_from_spec(
     the LLM enrichment pass (may pause for user confirmation of long-name
     shortenings / duplicate-field disambiguations — same as generate_bundle),
     then diffs the regenerated desired bundle against the existing bundle and
-    applies the resulting edits atomically: fields added, removed, moved
-    between pages and reordered, and pages added, removed and reordered. An
-    existing field's single/multi select setting is never changed, and rows
-    whose names differ from another only in capitals are left out; the
-    result names both. In a webapp session the existing bundle is the org's
-    current setup loaded at the start of the chat, or the bundle built in
-    this chat.
+    applies the resulting field-level edits (add / remove / reorder)
+    atomically. Pages are neither added nor removed, and fields are not moved
+    between pages. An existing field's single/multi select setting is never
+    changed, and rows whose names differ from another only in capitals are
+    left out; the result names these. In a webapp session the existing
+    bundle is the org's current setup loaded at the start of the chat, or the
+    bundle built in this chat.
 
     Field UUIDs are preserved across the edit. Removed fields are voided so
     Avni soft-deletes the records on re-upload; surviving fields keep their

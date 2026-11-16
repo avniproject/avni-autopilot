@@ -7,17 +7,17 @@ Inputs (both bundle-shaped — see domain.bundle_editor.load_bundle_snapshot):
      "concepts": [<concept_dict>, ...]}
 
 Output:
-    BundleDiff — EditOperation dicts ready for `apply_field_edits`, the
-    fields whose single/multi select setting the update leaves as it is, and
-    the spreadsheet rows it leaves out because their names clash.
+    BundleDiff — EditOperation dicts ready for `apply_field_edits`, and what
+    the update leaves as it is: fields whose single/multi select setting
+    differs, fields the spreadsheets put on another page, and spreadsheet
+    rows whose names clash.
 
 Identity rule:
     Within a section, two form elements are the same field when their `uuid`
     matches. UUIDs come from the generator's deterministic seed
     (`formElement:<form>:<field>`), so the diff treats them as opaque match
-    keys. A field moved to another page gets a UUID tied to that page
-    (see bundle_editor) and keeps its concept, so on its page it also
-    matches a live element of the same concept.
+    keys. Pages are matched by UUID; a page on one side only is logged and
+    left as it is.
 """
 
 from __future__ import annotations
@@ -46,28 +46,37 @@ class BundleDiff:
     `name_clashes` names desired fields left out because another field of the
     form has the same name apart from capitals: Avni shows them as one
     question, and an update cannot tell them apart.
+
+    `fields_on_another_page` names, as "Form › Field (page '<app>' in the app,
+    '<sheet>' in the spreadsheets)", fields left on their page in the app: an
+    update does not move fields between pages, as a moved field would be a
+    new element without the original's rules and settings.
+
+    `pages_not_added` and `pages_not_removed` name, as "Form › Page", pages
+    only in the desired or only in the current bundle; an update leaves them
+    as they are.
     """
 
     ops: list[dict] = field(default_factory=list)
     selection_type_differences: list[str] = field(default_factory=list)
     name_clashes: list[str] = field(default_factory=list)
+    fields_on_another_page: list[str] = field(default_factory=list)
+    pages_not_added: list[str] = field(default_factory=list)
+    pages_not_removed: list[str] = field(default_factory=list)
 
 
 def diff(desired_bundle: dict, current_bundle: dict) -> BundleDiff:
     """Produce EditOperation dicts that morph current_bundle → desired_bundle.
 
     Ops, in the order they run:
-      - field.remove            (live in current, paired with no desired field,
-                                 including every field of a page the desired form lacks)
-      - section.remove          (live page the desired form lacks)
-      - section.add             (desired page with no live page of its UUID)
-      - field.add               (desired field with no live current field)
-      - section.reorder_fields  (a page's fields would not end in the desired order)
-      - form.reorder_sections   (the pages would not end in the desired order)
+      - field.remove            (live in current, not in desired)
+      - field.add               (in desired, not live in current)
+      - section.reorder_fields  (fields live in both are in another order)
 
-    Every removal runs before any add, so a field moved to another page is
-    gone from its old page when it is added to the new one. Forms only on one
-    side are logged; an update neither adds nor removes forms.
+    Only pages in both bundles are diffed; pages and forms on one side only
+    are logged and left as they are. A field the desired bundle puts on
+    another page of the form stays where it is and is named in
+    `fields_on_another_page`.
     A field's single/multi select setting is never switched: avni-server
     refuses that on a field it already has, so the field is named in
     `selection_type_differences` instead.
@@ -136,74 +145,68 @@ def current_forms_not_in_desired(desired_bundle: dict, current_bundle: dict) -> 
 def _diff_form(desired_form: dict, current_form: dict, form_name: str,
                result: BundleDiff, next_id) -> None:
     desired_groups = _without_name_clashes(desired_form, current_form, form_name, result)
-    page_pairs = _pair_pages(desired_groups, current_form.get("formElementGroups", []))
-    paired_ids = {id(g) for g in page_pairs.values() if _is_live(g)}
-    gone_pages = [
-        g for g in current_form.get("formElementGroups", [])
-        if _is_live(g) and id(g) not in paired_ids
-    ]
-    new_pages = [d for d in desired_groups if not _is_live(page_pairs.get(d.get("uuid")))]
-
-    # A new page may be one the app has voided; its elements can be reinstated.
-    pairings = [
-        (d, page_pairs.get(d.get("uuid")) or {}, _pair_elements(d, page_pairs.get(d.get("uuid")) or {}))
-        for d in desired_groups
-    ]
-    for d, current_section, pairs in pairings:
-        if _is_live(current_section):
-            _emit_removals(current_section, pairs, form_name, result, next_id)
-    for page in gone_pages:
-        _emit_removals(page, {}, form_name, result, next_id)
-        result.ops.append(_op(next_id, "section.remove", _page_target(form_name, page)))
-    for page in new_pages:
-        result.ops.append(_op(next_id, "section.add", {"form": form_name},
-                              {"name": page.get("name")}))
-    for d, current_section, pairs in pairings:
-        # The page the field ops address: the app's live page, else the one just added.
-        page = current_section if _is_live(current_section) else d
-        _diff_section(d, current_section, pairs, _page_target(form_name, page), result, next_id)
-
-    kept = [
-        d.get("uuid") for d in sorted(
-            (d for d in desired_groups if _is_live(page_pairs.get(d.get("uuid")))),
-            key=lambda d: page_pairs[d.get("uuid")].get("displayOrder") or 0,
-        )
-    ]
-    desired_order = [d.get("uuid") for d in desired_groups]
-    if kept + [p.get("uuid") for p in new_pages] != desired_order:
-        result.ops.append(_op(next_id, "form.reorder_sections", {"form": form_name}, {"order": [
-            (page_pairs[d.get("uuid")] if _is_live(page_pairs.get(d.get("uuid"))) else d).get("name")
-            for d in desired_groups
-        ]}))
-
-
-def _pair_pages(desired_groups: list[dict], current_groups: list[dict]) -> dict[str, dict]:
-    """Current page for each desired page UUID, where the form has one.
-
-    A desired page pairs with the live page of its UUID; failing that, with an
-    unpaired live page of the same name (as one added in the Avni app, with
-    its own UUID); failing that, with the voided page of its UUID, to be
-    brought back.
-    """
-    by_uuid = {g.get("uuid"): g for g in current_groups}
-    pairs = {
-        d.get("uuid"): by_uuid[d.get("uuid")]
-        for d in desired_groups if _is_live(by_uuid.get(d.get("uuid")))
+    desired_sections = {g.get("uuid"): g for g in desired_groups}
+    # A voided page counts as missing: fields added to it would never show.
+    current_sections = {
+        g.get("uuid"): g for g in current_form.get("formElementGroups", []) if _is_live(g)
     }
-    paired = {id(g) for g in pairs.values()}
-    unpaired_by_name: dict[str, list[dict]] = {}
-    for g in current_groups:
-        if _is_live(g) and id(g) not in paired:
-            unpaired_by_name.setdefault(name_key(g.get("name")), []).append(g)
-    for d in desired_groups:
-        if d.get("uuid") in pairs:
+
+    only_in_desired = [g for u, g in desired_sections.items() if u not in current_sections]
+    only_in_current = [g for u, g in current_sections.items() if u not in desired_sections]
+    result.pages_not_added.extend(f"{form_name} › {g.get('name')}" for g in only_in_desired)
+    result.pages_not_removed.extend(f"{form_name} › {g.get('name')}" for g in only_in_current)
+    if only_in_desired or only_in_current:
+        log.warning(f"diff: form {form_name!r} pages left as they are: new "
+                    f"{[g.get('name') for g in only_in_desired]}, not in the spreadsheets "
+                    f"{[g.get('name') for g in only_in_current]}")
+
+    shared = [(d, current_sections[u]) for u, d in desired_sections.items() if u in current_sections]
+    pairings = [(d, c, _pair_elements(d, c)) for d, c in shared]
+    on_other_page = _fields_on_another_page(desired_groups, current_form, pairings, form_name, result)
+
+    for d, current_section, pairs in pairings:
+        _emit_removals(current_section, pairs, form_name, result, next_id, keep=on_other_page)
+    for d, current_section, pairs in pairings:
+        elsewhere = {
+            e["uuid"]: g for g in current_form.get("formElementGroups", [])
+            if g is not current_section for e in g.get("formElements", [])
+        }
+        _diff_section(d, current_section, pairs, _page_target(form_name, current_section),
+                      result, next_id, keep=on_other_page, elsewhere=elsewhere)
+
+
+def _fields_on_another_page(desired_groups: list[dict], current_form: dict, pairings: list,
+                            form_name: str, result: BundleDiff) -> set[str]:
+    """Concepts of fields live on one page in the app and placed on another
+    page in the desired form; they are neither removed nor added."""
+    live_page_of: dict[str, dict] = {}
+    for group in current_form.get("formElementGroups", []):
+        if not _is_live(group):
             continue
-        same_name = unpaired_by_name.get(name_key(d.get("name")))
-        if same_name:
-            pairs[d.get("uuid")] = same_name.pop(0)
-        elif d.get("uuid") in by_uuid:
-            pairs[d.get("uuid")] = by_uuid[d.get("uuid")]
-    return pairs
+        for e in group.get("formElements", []):
+            if _is_live(e) and _field_key(e):
+                live_page_of.setdefault(_field_key(e), group)
+    stays = {
+        _field_key(e)
+        for _, current_section, pairs in pairings
+        for e in current_section.get("formElements", [])
+        if _is_live(e) and any(p is e for p in pairs.values())
+    }
+    kept: set[str] = set()
+    for group in desired_groups:
+        for e in group.get("formElements", []):
+            concept = _field_key(e)
+            app_page = live_page_of.get(concept)
+            if concept in stays or app_page is None or app_page.get("uuid") == group.get("uuid"):
+                continue
+            kept.add(concept)
+            if name_key(app_page.get("name")) == name_key(group.get("name")):
+                continue  # the same page as far as the user can tell, e.g. one made in App Designer
+            result.fields_on_another_page.append(
+                f"{form_name} › {e.get('name')} (page {app_page.get('name')!r} in the app, "
+                f"{group.get('name')!r} in the spreadsheets)"
+            )
+    return kept
 
 
 def _page_target(form_name: str, page: dict) -> dict:
@@ -246,10 +249,6 @@ def _without_name_clashes(desired_form: dict, current_form: dict, form_name: str
     ]
 
 
-def _op(next_id, kind: str, target: dict, payload: dict | None = None) -> dict:
-    return {"op_id": next_id(), "kind": kind, "target": target, "payload": payload or {}}
-
-
 # ── Per-section diff ──────────────────────────────────────────────────────────
 
 
@@ -257,29 +256,31 @@ def _concept_uuid(element: dict) -> str | None:
     return (element.get("concept") or {}).get("uuid")
 
 
+def _field_key(element: dict) -> str | None:
+    """What makes a field the same one on another page: its concept, else its element UUID."""
+    return _concept_uuid(element) or element.get("uuid")
+
+
 def _pair_elements(desired_section: dict, current_section: dict) -> dict[str, dict]:
     """Current element for each desired element UUID, where the section has one.
 
-    A desired element pairs with the current element of its UUID when that one
-    is live; failing that, with an unpaired live element of the same concept,
-    as after a field moved between pages gets a UUID tied to its new page; and
-    failing that, with the voided element of its UUID, to be reinstated.
+    A desired element pairs with the live element of its UUID; failing that,
+    with an unpaired live element of the same concept (one added in App
+    Designer, or given a page-tied UUID by an earlier build); failing that,
+    with the voided element of its UUID, to be reinstated.
     """
     desired_elements = desired_section.get("formElements", [])
     current_elements = current_section.get("formElements", [])
     current_by_uuid = {e["uuid"]: e for e in current_elements}
-
     pairs: dict[str, dict] = {
         e["uuid"]: current_by_uuid[e["uuid"]]
-        for e in desired_elements
-        if _is_live(current_by_uuid.get(e["uuid"]))
+        for e in desired_elements if _is_live(current_by_uuid.get(e["uuid"]))
     }
     desired_uuids = {e["uuid"] for e in desired_elements}
-    unpaired_by_concept: dict[str | None, list[dict]] = {}
+    unpaired_by_concept: dict[str, list[dict]] = {}
     for e in current_elements:
-        if _is_live(e) and e["uuid"] not in desired_uuids:
+        if _is_live(e) and e["uuid"] not in desired_uuids and _concept_uuid(e):
             unpaired_by_concept.setdefault(_concept_uuid(e), []).append(e)
-
     for desired_e in desired_elements:
         if desired_e["uuid"] in pairs:
             continue
@@ -297,15 +298,16 @@ def _is_live(item: dict | None) -> bool:
 
 
 def _emit_removals(current_section: dict, pairs: dict[str, dict], form_name: str,
-                   result: BundleDiff, next_id) -> None:
-    """field.remove for each live current element no desired element pairs with.
+                   result: BundleDiff, next_id, keep: set[str]) -> None:
+    """field.remove for each live current element no desired element pairs
+    with, except fields the desired form puts on another page.
 
     The target carries the element's UUID, as two live elements of a section
     can share a name.
     """
     paired_ids = {id(e) for e in pairs.values()}
     for e in current_section.get("formElements", []):
-        if not _is_live(e) or id(e) in paired_ids:
+        if not _is_live(e) or id(e) in paired_ids or _field_key(e) in keep:
             continue
         result.ops.append({
             "op_id": next_id(),
@@ -317,13 +319,27 @@ def _emit_removals(current_section: dict, pairs: dict[str, dict], form_name: str
 
 
 def _diff_section(desired_section: dict, current_section: dict, pairs: dict[str, dict],
-                  target: dict, result: BundleDiff, next_id) -> None:
+                  target: dict, result: BundleDiff, next_id, keep: set[str],
+                  elsewhere: dict[str, dict]) -> None:
     form_name = target["form"]
     ops = result.ops
 
     # Desired order is the order in which form elements appear in the desired
     # section's formElements list (the spec's intent for ordering).
-    desired_elements = desired_section.get("formElements", [])
+    desired_elements = []
+    for e in desired_section.get("formElements", []):
+        if not _is_live(pairs.get(e["uuid"])):
+            if _field_key(e) in keep:
+                continue
+            other_page = elsewhere.get(e["uuid"])
+            if other_page is not None and e["uuid"] not in pairs:
+                # Removed from another page earlier; its element cannot come back here.
+                result.fields_on_another_page.append(
+                    f"{form_name} › {e.get('name')} (removed from page {other_page.get('name')!r} "
+                    f"in the app, on {desired_section.get('name')!r} in the spreadsheets)"
+                )
+                continue
+        desired_elements.append(e)
     desired_by_uuid = {e["uuid"]: e for e in desired_elements}
     desired_order = [e["uuid"] for e in desired_elements]
 
@@ -348,29 +364,48 @@ def _diff_section(desired_section: dict, current_section: dict, pairs: dict[str,
             "payload": payload,
         })
 
-    # ── REORDER: added and reinstated fields go to the end of the page, so
-    # the order after the adds is the surviving fields in their current order
-    # followed by the added ones; reorder when that is not the desired order.
-    position = {id(pairs[u]): u for u in desired_order if _is_live(pairs.get(u))}
-    survivors = [
+    # ── REORDER: emitted only if the fields live in both are in another
+    # relative order than the desired one.
+    surviving = [u for u in desired_order if _is_live(pairs.get(u))]
+    position = {id(pairs[u]): u for u in surviving}
+    current_order = [
         position[id(e)]
         for e in sorted(current_section.get("formElements", []),
                         key=lambda x: x.get("displayOrder") or 0)
         if id(e) in position
     ]
-    added = [u for u in desired_order if not _is_live(pairs.get(u))]
-    if survivors + added != desired_order:
+    if current_order != surviving:
+        order = [
+            (pairs[u] if _is_live(pairs.get(u)) else desired_by_uuid[u]).get("name")
+            for u in desired_order
+        ]
+        _place_fields_left_on_the_page(order, current_section, pairs, keep)
         ops.append({
             "op_id": next_id(),
             "kind": "section.reorder_fields",
             "target": dict(target),
             # A surviving field goes by its name in the app, which a rename
             # there can have changed; an added one by its spreadsheet name.
-            "payload": {"order": [
-                (pairs[u] if _is_live(pairs.get(u)) else desired_by_uuid[u]).get("name")
-                for u in desired_order
-            ]},
+            "payload": {"order": order},
         })
+
+
+def _place_fields_left_on_the_page(order: list[str], current_section: dict,
+                                   pairs: dict[str, dict], keep: set[str]) -> None:
+    """Insert the live fields kept on this page (placed on another page in the
+    spreadsheets) into `order`, each right after the field before it on the
+    page, as a reorder must name every live field."""
+    paired = {id(e) for e in pairs.values()}
+    previous: str | None = None
+    for e in sorted(current_section.get("formElements", []), key=lambda x: x.get("displayOrder") or 0):
+        if not _is_live(e):
+            continue
+        if id(e) in paired:
+            previous = e.get("name")
+        elif _field_key(e) in keep:
+            at = order.index(previous) + 1 if previous in order else 0
+            order.insert(at, e.get("name"))
+            previous = e.get("name")
 
 
 def _note_selection_difference(desired_e: dict, current_e: dict, form_name: str,

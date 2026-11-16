@@ -1711,7 +1711,6 @@ def parse_scoping_docs(
     )
     spec.unmatched_rule_intents = unmatched_rule_intents
     spec.validation_warnings.extend(_unrecognised_data_type_warnings(all_forms))
-    spec.validation_warnings.extend(_unrecognised_selection_type_warnings(all_forms))
     return spec, skipped_sheets
 
 
@@ -1723,15 +1722,3 @@ def _unrecognised_data_type_warnings(forms: list[FormSpec]) -> list[str]:
         for form in forms
         for field_name, raw in form.unrecognised_data_types.items()
     ]
-
-
-def _unrecognised_selection_type_warnings(forms: list[FormSpec]) -> list[str]:
-    """One warning per field whose Selection Type cell was not recognised."""
-    return [
-        f"Form {form.name!r}, field {field_name!r}: Selection Type {raw!r} is not "
-        f"one the builder reads (Single Select or Multi Select), so the field "
-        f"was read as single select."
-        for form in forms
-        for field_name, raw in form.unrecognised_selection_types.items()
-    ]
-

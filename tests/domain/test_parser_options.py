@@ -138,18 +138,6 @@ def test_only_whole_selection_type_spellings_are_read(cell: str, expected: str |
     assert form.unrecognised_selection_types == ({} if expected else {"Conditions": cell})
 
 
-def test_an_unread_selection_type_is_warned_about() -> None:
-    from domain.parser import _unrecognised_selection_type_warnings
-    from models import FormSpec
-
-    form = FormSpec(name="ANC", formType="Encounter",
-                    unrecognised_selection_types={"Conditions": "Mutli Select"})
-    assert _unrecognised_selection_type_warnings([form]) == [
-        "Form 'ANC', field 'Conditions': Selection Type 'Mutli Select' is not one the builder "
-        "reads (Single Select or Multi Select), so the field was read as single select."
-    ]
-
-
 @pytest.mark.parametrize("text, expected", [
     ("MultiSelect", "MultiSelect"), ("Multi Select", "MultiSelect"), ("multiple", "MultiSelect"),
     ("not multi", "SingleSelect"), ("Single/Multi", "SingleSelect"), ("Mutli", "SingleSelect"),

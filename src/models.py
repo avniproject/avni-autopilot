@@ -324,9 +324,6 @@ EditOpKind = Literal[
     "field.rename",
     "field.remove",
     "section.reorder_fields",
-    "section.add",
-    "section.remove",
-    "form.reorder_sections",
 ]
 
 RejectionKind = Literal[
@@ -364,6 +361,4 @@ class EditResult(BaseModel):
     form_elements_reinstated: int = 0
     form_elements_voided: int = 0
     form_elements_renamed: int = 0
-    sections_added: int = 0
-    sections_removed: int = 0
     concepts_appended: int = 0

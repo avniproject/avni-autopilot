@@ -84,7 +84,6 @@ def apply_field_edits(bundle_path: str, operations: list[dict]) -> EditResult:
 
         for file_name in modified_forms:
             form = forms[file_name]
-            _renumber_clashing_display_orders(form.get("formElementGroups", []))
             for group in form.get("formElementGroups", []):
                 _renumber_clashing_display_orders(group.get("formElements", []))
 
@@ -141,13 +140,8 @@ def _apply_one(
         raise _OpReject("schema", "target.form is required")
 
     file_name, form = _find_form(forms, form_name, op.target.get("form_uuid"))
-    if op.kind == "section.add":
-        _apply_section_add(op, form, form_name, result)
-    elif op.kind == "form.reorder_sections":
-        _apply_section_reorder(op, form)
-    else:
-        section = _find_section(form, op.target.get("section", ""), op.target.get("section_uuid"))
-        _apply_section_op(op, form, section, concepts, result, form_name)
+    section = _find_section(form, op.target.get("section", ""), op.target.get("section_uuid"))
+    _apply_section_op(op, form, section, concepts, result, form_name)
 
     modified_forms.add(file_name)
     result.applied.append(op.op_id)
@@ -169,8 +163,6 @@ def _apply_section_op(
         _apply_remove(op, section, result)
     elif op.kind == "section.reorder_fields":
         _apply_reorder(op, section, result)
-    elif op.kind == "section.remove":
-        _apply_section_remove(section, result)
     else:
         raise _OpReject("schema", f"unsupported kind: {op.kind}")
 
@@ -197,7 +189,7 @@ def _apply_add(
         for option in payload["options"]:
             _check_name_length(option, f"answer of field {field_name!r}")
 
-    new_uuid = _element_uuid_in_section(form, section, form_name, field_name)
+    new_uuid = make_uuid(f"formElement:{form_name}:{field_name}")
     existing = _find_element_by_uuid(section, new_uuid)
 
     clash = _live_element_named(section, field_name)
@@ -211,13 +203,12 @@ def _apply_add(
             f"field {clash.get('name')!r} already exists (live) in section {section.get('name')!r}",
         )
     _check_not_live_on_other_page(form, section, field_name)
+    _check_not_on_other_page(form, section, new_uuid, field_name)
 
     if existing is not None and existing.get("voided", False):
         # Reinstate. Checked before any change: a rejected op is not undone.
         _check_selection_type_kept(existing, payload, field_name)
         existing["voided"] = False
-        # Like an added field it goes to the end of the page; a reorder places it.
-        existing["displayOrder"] = _next_display_order(section.get("formElements", []))
         _apply_properties(existing, payload, field_name)
         result.form_elements_reinstated += 1
         if (
@@ -273,7 +264,7 @@ def _apply_rename(
     existing["voided"] = True
 
     # Add new element at the captured displayOrder.
-    new_uuid = _element_uuid_in_section(form, section, form_name, new_name)
+    new_uuid = make_uuid(f"formElement:{form_name}:{new_name}")
     new_existing = _find_element_by_uuid(section, new_uuid)
 
     clash = _live_element_named(section, new_name)
@@ -289,6 +280,7 @@ def _apply_rename(
         )
     try:
         _check_not_live_on_other_page(form, section, new_name)
+        _check_not_on_other_page(form, section, new_uuid, new_name)
     except _OpReject:
         existing["voided"] = False
         raise
@@ -333,65 +325,6 @@ def _apply_remove(op: EditOperation, section: dict, result: EditResult) -> None:
     existing = _find_target_element(op, section)
     existing["voided"] = True
     result.form_elements_voided += 1
-
-
-def _apply_section_add(op: EditOperation, form: dict, form_name: str, result: EditResult) -> None:
-    """Add an empty page at the end of the form, or bring back the voided page of its UUID."""
-    name = (op.payload.get("name") or "").strip()
-    if not name:
-        raise _OpReject("schema", "payload.name is required for section.add")
-    groups = form.setdefault("formElementGroups", [])
-    clash = next((g for g in groups if not g.get("voided", False) and _norm(g.get("name", "")) == _norm(name)), None)
-    if clash is not None:
-        raise _OpReject("duplicate_name", f"page {clash.get('name')!r} already exists in form {form_name!r}")
-    group_uuid = make_uuid(f"formGroup:{form_name}:{name}")
-    existing = next((g for g in groups if g.get("uuid") == group_uuid), None)
-    if existing is not None and not existing.get("voided", False):
-        # Renamed in the app, which keeps the UUID.
-        raise _OpReject(
-            "duplicate_name",
-            f"page {existing.get('name')!r} of form {form_name!r} is the page "
-            f"{name!r} renamed; use it instead of adding another",
-        )
-    if existing is not None:
-        existing["voided"] = False
-        existing["name"] = name
-        existing["displayOrder"] = _next_display_order(groups)
-    else:
-        groups.append({
-            "uuid": group_uuid,
-            "name": name,
-            "displayOrder": _next_display_order(groups),
-            "voided": False,
-            "formElements": [],
-        })
-    result.sections_added += 1
-
-
-def _apply_section_remove(section: dict, result: EditResult) -> None:
-    """Void a page and every field still live on it."""
-    for element in section.get("formElements", []):
-        if not element.get("voided", False):
-            element["voided"] = True
-            result.form_elements_voided += 1
-    section["voided"] = True
-    result.sections_removed += 1
-
-
-def _apply_section_reorder(op: EditOperation, form: dict) -> None:
-    """Number the form's live pages in the order given; it must name each once."""
-    order = op.payload.get("order")
-    if not isinstance(order, list) or not order:
-        raise _OpReject("schema", "payload.order (non-empty list) required for form.reorder_sections")
-    live = [g for g in form.get("formElementGroups", []) if not g.get("voided", False)]
-    live_by_name = {_norm(g.get("name", "")): g for g in live}
-    requested = [_norm(n) for n in order]
-    if len(live_by_name) != len(live) or len(set(requested)) != len(requested):
-        raise _OpReject("ambiguous_target", f"form {form.get('name')!r} has repeated page names")
-    if set(requested) != set(live_by_name):
-        raise _OpReject("schema", "payload.order must name every live page of the form exactly once")
-    for number, key in enumerate(requested, start=1):
-        live_by_name[key]["displayOrder"] = number
 
 
 def _apply_reorder(op: EditOperation, section: dict, result: EditResult) -> None:
@@ -621,24 +554,21 @@ def _other_sections(form: dict, section: dict) -> list[dict]:
     return [g for g in form.get("formElementGroups", []) if g is not section]
 
 
-def _element_uuid_in_section(form: dict, section: dict, form_name: str, field_name: str) -> str:
-    """UUID for the field's element in this section.
+def _check_not_on_other_page(form: dict, section: dict, element_uuid: str, field_name: str) -> None:
+    """Refuse a field whose element is on another page of the form, live or voided.
 
-    The name-derived UUID is used unless another section of the form already
-    holds it, as after a field moves to another page. avni-server looks an
-    element up only within its own page and needs element UUIDs unique, so
-    the field then gets a UUID tied to this section; its concept, which holds
-    the recorded answers, stays the same.
+    avni-server looks an element up only within its own page and needs element
+    UUIDs unique, so the field cannot be added here under its UUID; and a new
+    element would lose the original's rules and settings. Moving fields
+    between pages is not supported.
     """
-    name_uuid = make_uuid(f"formElement:{form_name}:{field_name}")
-    held_elsewhere = any(
-        e.get("uuid") == name_uuid
-        for g in _other_sections(form, section)
-        for e in g.get("formElements", [])
-    )
-    if held_elsewhere:
-        return make_uuid(f"formElement:{form_name}:{section.get('uuid')}:{field_name}")
-    return name_uuid
+    for other in _other_sections(form, section):
+        if any(e.get("uuid") == element_uuid for e in other.get("formElements", [])):
+            raise _OpReject(
+                "not_allowed",
+                f"field {field_name!r} is on page {other.get('name')!r} of this form; "
+                "moving a field to another page is not supported",
+            )
 
 
 def _check_not_live_on_other_page(form: dict, section: dict, field_name: str) -> None:
@@ -717,14 +647,13 @@ def _find_live_element_by_name(section: dict, field_name: str) -> dict | None:
 
 
 def _renumber_clashing_display_orders(items: list[dict]) -> None:
-    """Give each page of a form, or each question of a page, its own displayOrder
-    when two share one.
+    """Give each question of a page its own displayOrder when two share one.
 
-    avni-server refuses a form where two pages, or two questions of a page,
-    share a displayOrder, voided or not (FormService.validateFormElementGroupDisplayOrders,
-    validateFormElementDisplayOrders). A removed field or page stays in the
-    bundle voided with its number, which a later add, rename or reorder can
-    reuse. Live items keep their relative order as 1..n; voided ones follow.
+    avni-server refuses a page where two questions share a displayOrder,
+    voided or not (FormService.validateFormElementDisplayOrders). A removed
+    field stays in the bundle voided with its number, which a later add,
+    rename or reorder can reuse. Live questions keep their relative order as
+    1..n; voided ones follow.
     """
     orders = [item.get("displayOrder") for item in items]
     if len(set(orders)) == len(orders):
@@ -760,14 +689,9 @@ def _check_integrity(forms: dict[str, dict], modified_forms: set[str]) -> list[s
         if dups:
             errors.append(f"{file_name}: duplicate formElement uuid(s): {dups}")
 
-    # displayOrder unique among a form's pages and within each page, voided
-    # included, on every form written.
+    # displayOrder unique within each page, voided included, on every form written.
     for file_name in sorted(modified_forms):
         groups = forms[file_name].get("formElementGroups", [])
-        page_counts = Counter(g.get("displayOrder") for g in groups)
-        page_dups = sorted(o for o, n in page_counts.items() if n > 1 and o is not None)
-        if page_dups:
-            errors.append(f"{file_name}: duplicate page displayOrder: {page_dups}")
         for g in groups:
             counts = Counter(e.get("displayOrder") for e in g.get("formElements", []))
             dups = sorted(o for o, n in counts.items() if n > 1 and o is not None)

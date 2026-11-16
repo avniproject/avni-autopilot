@@ -240,6 +240,11 @@ def parse_documents(state: BundleState) -> dict:
     return {
         "entity_spec": entity_spec,
         "parse_warnings": warnings,
+        "unread_selection_types": [
+            f"{form.name} › {field_name}: {cell!r}"
+            for form in entity_spec.forms
+            for field_name, cell in form.unrecognised_selection_types.items()
+        ],
         "skipped_sheet_notes": skipped_messages,
         "errors": errors,
     }
@@ -629,6 +634,9 @@ def diff_against_bundle(state: BundleState) -> dict:
         "forms_not_in_spec": forms_not_in_spec,
         "selection_type_differences": bundle_diff.selection_type_differences,
         "name_clashes": bundle_diff.name_clashes,
+        "fields_on_another_page": bundle_diff.fields_on_another_page,
+        "pages_not_added": bundle_diff.pages_not_added,
+        "pages_not_removed": bundle_diff.pages_not_removed,
         "errors": errors,
     }
 
