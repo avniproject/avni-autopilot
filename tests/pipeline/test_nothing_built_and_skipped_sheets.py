@@ -27,6 +27,7 @@ from openpyxl.styles import Font
 from test_spreadsheet_format_prompt import WORKBOOK, _write_workbook
 
 import chat.tools as tools
+from chat.tools import _NOT_APPLIED_BY_UPDATES
 from chat.prompts import SYSTEM_PROMPT
 from config import Settings
 from domain.diff import current_forms_not_in_desired
@@ -56,11 +57,12 @@ UNRECOGNISED_SHEETS = {
 }
 STRUCK_OUT_SHEET = "Dropped Ideas"
 SPACES_SHEET = "Spaces"
-SKIPPED_IN_EXTRAS = (
-    "These sheets were skipped because their headings do not match any sheet "
-    "the builder reads: 'Project Summary' in Extras.xlsx, 'Reports' in "
-    "Extras.xlsx, 'Villages' in Extras.xlsx."
-)
+SKIPPED_IN_EXTRAS = "Skipped 3 sheets the builder does not read."
+
+
+def _without_sheet_list(result: dict) -> dict:
+    """The result less `skipped_sheets`, the full list the model reads (tested apart)."""
+    return {key: value for key, value in result.items() if key != "skipped_sheets"}
 
 
 def _write_sheets(path: Path, sheets: dict[str, list[list]]) -> Path:
@@ -202,23 +204,29 @@ def test_sheets_with_the_right_headings_and_no_rows_are_reported_as_having_no_ro
     ]
 
 
-def test_each_skip_reason_gets_its_own_message_naming_sheets_and_files() -> None:
+def test_skipped_sheets_are_one_short_line_by_reason() -> None:
     sheets = [
         {"name": "Project Summary", "file": "Extras.xlsx", "reason": SKIPPED_UNRECOGNISED},
         {"name": "Subjects", "file": "Model.xlsx", "reason": SKIPPED_NO_ROWS},
         {"name": "Villages", "file": "Extras.xlsx", "reason": SKIPPED_UNRECOGNISED},
     ]
     assert _skipped_sheets_messages(sheets) == [
-        (
-            "These sheets were skipped because their headings do not match any sheet "
-            "the builder reads: 'Project Summary' in Extras.xlsx, 'Villages' in Extras.xlsx."
-        ),
-        (
-            "These sheets have the right headings but no rows under them, so nothing "
-            "was read from them: 'Subjects' in Model.xlsx."
-        ),
+        "Skipped 2 sheets the builder does not read and 1 sheet with the right headings "
+        "but no rows ('Subjects')."
     ]
     assert _skipped_sheets_messages([]) == []
+    assert _skipped_sheets_messages(sheets[:1]) == ["Skipped 1 sheet the builder does not read."]
+
+
+def test_a_scoping_document_with_many_extra_tabs_gets_one_short_line() -> None:
+    """Himesh's note: a real scoping document skips 9 to 16 tabs such as Cost and Reports."""
+    tabs = ["Cost", "Reports", "Timeline", "Team", "Risks", "Glossary", "Change log",
+            "Budget", "Training", "Sign-off", "Assumptions", "Contacts"]
+    sheets = [{"name": tab, "file": "Scoping.xlsx", "reason": SKIPPED_UNRECOGNISED} for tab in tabs]
+
+    [line] = _skipped_sheets_messages(sheets)
+
+    assert line == "Skipped 12 sheets the builder does not read."
 
 
 def test_a_form_sheet_with_headings_only_is_named_on_a_build_that_succeeds(org_dir: Path) -> None:
@@ -229,10 +237,9 @@ def test_a_form_sheet_with_headings_only_is_named_on_a_build_that_succeeds(org_d
     result = _build()
 
     assert result["status"] == "done", result.get("error")
-    assert (
-        "These sheets have the right headings but no rows under them, so nothing "
-        "was read from them: 'Woman Registration' in Model.xlsx."
-    ) in result["notices"]
+    assert "Skipped 1 sheet with the right headings but no rows ('Woman Registration')." in result["notices"]
+    assert {"sheet": "Woman Registration", "file": "Model.xlsx",
+            "reason": "the right headings but no rows under them"} in result["skipped_sheets"]
 
 
 def test_a_build_that_finds_nothing_ends_with_an_error_and_no_card(
@@ -242,7 +249,7 @@ def test_a_build_that_finds_nothing_ends_with_an_error_and_no_card(
 
     result = _build()
 
-    assert result == {
+    assert _without_sheet_list(result) == {
         "status": "error",
         "error": f"{_NOTHING_TO_BUILD_ERROR} {_CHECK_HEADINGS_ADVICE}",
         "notices": [SKIPPED_IN_EXTRAS],
@@ -261,7 +268,7 @@ def test_an_update_from_spreadsheets_that_hold_nothing_changes_nothing(
 
     result, notices = _web_update(bundle)
 
-    assert result == {"status": "error", "error": f"{_NOTHING_TO_BUILD_ERROR} {_CHECK_HEADINGS_ADVICE}"}
+    assert _without_sheet_list(result) == {"status": "error", "error": f"{_NOTHING_TO_BUILD_ERROR} {_CHECK_HEADINGS_ADVICE}"}
     assert notices == [SKIPPED_IN_EXTRAS]
     assert bundle.read_bytes() == before
 
@@ -277,9 +284,9 @@ def test_a_build_with_subject_types_but_no_forms_ends_with_an_error_and_no_card(
     result = _build()
 
     assert result == {"status": "error", "error": _NO_FORM_TO_BUILD_ERROR, "notices": [
-        "These sheets have the right headings but no rows under them, so nothing "
-        "was read from them: 'Woman Registration' in Modelling.xlsx."
-    ]}
+        "Skipped 1 sheet with the right headings but no rows ('Woman Registration')."
+    ], "skipped_sheets": [{"sheet": "Woman Registration", "file": "Modelling.xlsx",
+                           "reason": "the right headings but no rows under them"}]}
     assert not list((tmp_path / "output").rglob("*.zip"))
     assert _bundle_ready_events(result, tmp_path) == []
 
@@ -296,10 +303,9 @@ def test_when_every_sheet_has_headings_and_no_rows_the_error_asks_for_rows_not_h
 
     result, notices = _web_build() if run == "build" else _web_update(bundle)
 
-    assert result == {"status": "error", "error": f"{_NOTHING_TO_BUILD_ERROR} {_FILL_IN_ROWS_ADVICE}"}
+    assert _without_sheet_list(result) == {"status": "error", "error": f"{_NOTHING_TO_BUILD_ERROR} {_FILL_IN_ROWS_ADVICE}"}
     assert notices == [
-        "These sheets have the right headings but no rows under them, so nothing "
-        "was read from them: 'Subjects' in Model.xlsx, 'Woman Registration' in Model.xlsx."
+        "Skipped 2 sheets with the right headings but no rows ('Subjects', 'Woman Registration')."
     ]
 
 
@@ -316,10 +322,8 @@ def test_a_mix_of_unrecognised_and_empty_sheets_still_asks_to_check_headings(
     assert result["status"] == "error"
     assert result["error"] == f"{_NOTHING_TO_BUILD_ERROR} {_CHECK_HEADINGS_ADVICE}"
     assert result["notices"] == [
-        "These sheets were skipped because their headings do not match any sheet "
-        "the builder reads: 'Project Summary' in Model.xlsx.",
-        "These sheets have the right headings but no rows under them, so nothing "
-        "was read from them: 'Subjects' in Model.xlsx.",
+        "Skipped 1 sheet the builder does not read and 1 sheet with the right headings "
+        "but no rows ('Subjects')."
     ]
 
 
@@ -333,7 +337,7 @@ def test_forms_without_a_subject_type_end_with_an_error_that_names_the_cause(
 
     result, notices = _web_build() if run == "build" else _web_update(bundle)
 
-    assert result == {"status": "error", "error": _NO_SUBJECT_TYPE_ERROR}
+    assert _without_sheet_list(result) == {"status": "error", "error": _NO_SUBJECT_TYPE_ERROR}
     assert notices == []
     assert bundle.read_bytes() == before
 
@@ -379,8 +383,8 @@ def test_an_update_missing_some_of_the_apps_forms_does_not_call_it_a_match(
     assert result["no_changes"] is True
     assert "Household Survey" not in json.dumps(result)
     assert result["message"] == (
-        "Nothing was changed: the forms in the spreadsheets already match the app, "
-        "and the app's other forms were left as they are."
+        "Nothing was changed: the app's forms that are not in the spreadsheets were "
+        f"left as they are. {_NOT_APPLIED_BY_UPDATES}"
     )
     assert notices == [
         "These forms are in the app but not in the spreadsheets, and an update does "
@@ -417,7 +421,9 @@ def test_an_update_from_the_full_spreadsheets_reports_no_missing_forms(
     result, notices = _web_update(bundle)
 
     assert notices == []
-    assert result["message"] == "The bundle already matches the spreadsheets; nothing was changed."
+    assert result["message"] == (
+        f"Nothing was changed: the spreadsheets add, remove or reorder no field. {_NOT_APPLIED_BY_UPDATES}")
+    assert "match" not in result["message"]
 
 
 def test_voided_forms_are_not_listed_as_missing_from_the_spreadsheets() -> None:
@@ -484,3 +490,41 @@ def test_the_prompt_tells_the_model_to_name_skipped_sheets_and_not_call_an_empty
     assert "hold no subject type, or a build whose spreadsheets hold no form, returns an error and no card" in prompt
     assert "never announce that the app is ready" in prompt
     assert "Never say the app matches the spreadsheets while an update result's `forms_not_in_spreadsheets` is not empty" in prompt
+
+
+def test_sheets_with_headings_but_no_rows_are_named_up_to_three() -> None:
+    sheets = [{"name": f"Form {n}", "file": "Model.xlsx", "reason": SKIPPED_NO_ROWS} for n in range(1, 6)]
+
+    assert _skipped_sheets_messages(sheets) == [
+        "Skipped 5 sheets with the right headings but no rows ('Form 1', 'Form 2', 'Form 3', and 2 more)."
+    ]
+
+
+def test_a_no_rows_sheet_name_in_two_files_is_told_apart_by_its_file() -> None:
+    sheets = [
+        {"name": "Subjects", "file": "Model.xlsx", "reason": SKIPPED_NO_ROWS},
+        {"name": "Subjects", "file": "Extra.xlsx", "reason": SKIPPED_NO_ROWS},
+        {"name": "Visits", "file": "Model.xlsx", "reason": SKIPPED_NO_ROWS},
+    ]
+    assert _skipped_sheets_messages(sheets) == [
+        "Skipped 3 sheets with the right headings but no rows "
+        "('Subjects' in Model.xlsx, 'Subjects' in Extra.xlsx, 'Visits')."
+    ]
+
+
+def test_the_prompt_sends_skipped_sheet_questions_to_the_full_list_and_relays_notes_in_the_repl() -> None:
+    """The note only counts unread sheets, and only the web chat shows notes by itself."""
+    from chat.prompts import SYSTEM_PROMPT
+
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "name them with their file and reason from `skipped_sheets`, never from the note alone" in flat
+    assert "When the result has `already_shown_to_user`, the chat has shown those notes" in flat
+    assert "when it has `notices` instead, tell each one as the rule on `notices` says" in flat
+    assert "They name sheets nothing was read from (and why)" not in flat
+
+
+def test_a_skip_reason_with_no_words_is_listed_as_it_is() -> None:
+    from pipeline.nodes import _skipped_sheets_list
+
+    assert _skipped_sheets_list([{"name": "X", "file": "a.xlsx", "reason": "hidden"}]) == [
+        {"sheet": "X", "file": "a.xlsx", "reason": "hidden"}]

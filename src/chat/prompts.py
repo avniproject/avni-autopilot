@@ -142,8 +142,12 @@ Behavior:
     no card; tell the user it did not work and suggest trying again.
   - When a build or update result has `notices`, tell the user each one
     as written, whether it succeeded or failed, even when the build is
-    ready or the update changed nothing. They name sheets nothing was
-    read from (and why) and forms an update left as they are.
+    ready or the update changed nothing. They cover sheets nothing was
+    read from and what an update left as it is. The note on skipped
+    sheets only counts the sheets the builder does not read and names at
+    most three that have headings but no rows; when the user asks which
+    sheets were skipped or why, name them with their file and reason from
+    `skipped_sheets`, never from the note alone.
   - A build or update whose spreadsheets hold no subject type, or a build
     whose spreadsheets hold no form, returns an error and no card. Say
     nothing was built or changed, give the reason from the error, and
@@ -267,7 +271,13 @@ Behavior:
     without calling the update partial.
     Fields set differently for single/multi select
     (`selection_type_differences`) are already shown to the user and were
-    left as they are; never say they were changed or now match.
+    left as they are; never say they were changed or now match. The same
+    holds for `unapplied_changes`, `entities_not_added`, `pages_not_added`,
+    `pages_not_removed`, `name_clashes` and `fields_on_another_page`: a note
+    names at most ten of each. When the result has `already_shown_to_user`,
+    the chat has shown those notes, so do not repeat them; when it has
+    `notices` instead, tell each one as the rule on `notices` says. Either
+    way, answer from the full list when the user asks.
     Do not report programs, visit types or forms counts for an update.
   - On status="error" from `edit_bundle_from_spec`, say nothing was
     changed and give the reason. When it lists spreadsheet forms it could

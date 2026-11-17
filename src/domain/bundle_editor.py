@@ -21,7 +21,7 @@ import tempfile
 import zipfile
 from collections import Counter
 from enum import Enum
-from typing import Any
+from typing import Any, NamedTuple
 
 from pydantic import ValidationError
 
@@ -812,16 +812,59 @@ def load_bundle_snapshot(bundle_path: str) -> dict:
     compare like-for-like.
     """
     with _open_bundle(bundle_path) as workdir:
-        forms_map = _load_forms(workdir)
-        concepts_map = _load_concepts(workdir)
+        return _snapshot(workdir)
 
+
+def _snapshot(workdir: str) -> dict:
     return {
         "forms": [
             {"file_name": fname, "content": form}
-            for fname, form in sorted(forms_map.items())
+            for fname, form in sorted(_load_forms(workdir).items())
         ],
-        "concepts": list(concepts_map.values()),
+        "concepts": list(_load_concepts(workdir).values()),
     }
+
+
+# Bundle files holding what an update does not add, by what the user calls them.
+ENTITY_FILES = {
+    "subject type": "subjectTypes.json",
+    "program": "programs.json",
+    "visit type": "encounterTypes.json",
+}
+
+
+def _load_entity_names(workdir: str) -> dict[str, set[str]]:
+    """Live names by kind. A kind whose file the bundle lacks is left out, as
+    its names are unknown, not absent."""
+    names: dict[str, set[str]] = {}
+    for kind, file_name in ENTITY_FILES.items():
+        path = os.path.join(workdir, file_name)
+        if not os.path.exists(path):
+            log.warning(f"bundle has no {file_name}; new {kind}s are not checked")
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                items = json.load(f)
+            if not isinstance(items, list):
+                raise TypeError(f"holds a {type(items).__name__}, not a list")
+            names[kind] = {
+                name_key(item.get("name")) for item in items
+                if not item.get("voided", False) and name_key(item.get("name"))
+            }
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            log.warning(f"bundle's {file_name} is unreadable ({exc}); new {kind}s are not checked")
+    return names
+
+
+class BundleContents(NamedTuple):
+    snapshot: dict                      # as `load_bundle_snapshot`
+    entity_names: dict[str, set[str]]   # live subject type, program and visit type names, by ENTITY_FILES kind
+
+
+def load_bundle_contents(bundle_path: str) -> BundleContents:
+    """The bundle's snapshot and entity names, from one unpacking."""
+    with _open_bundle(bundle_path) as workdir:
+        return BundleContents(_snapshot(workdir), _load_entity_names(workdir))
 
 
 # ── Bundle origin ─────────────────────────────────────────────────────────────

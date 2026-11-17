@@ -210,7 +210,8 @@ def _report_bundle(result: dict, config: RunnableConfig | None) -> dict:
     as they are, whatever the model says. The model reads the same notes as
     `already_shown_to_user`, to answer questions about them without
     repeating them; the forms an update left as they are travel only in
-    those notes. In the REPL the result keeps `zip_path` and `notices` for
+    those notes. The other lists the notes name stay in the result in full,
+    as a note names at most ten. In the REPL the result keeps `zip_path` and `notices` for
     the person at the terminal.
     """
     session = _session_of(config)
@@ -305,6 +306,11 @@ def _track_fields_added_in_chat(session, result: dict) -> None:  # noqa: ANN001
 
 
 
+def _skipped_sheets_entry(state: dict) -> dict:
+    """`skipped_sheets` for a result, left out when no sheet was skipped."""
+    return {"skipped_sheets": list(state["skipped_sheets"])} if state.get("skipped_sheets") else {}
+
+
 def _summarize(state: dict) -> dict:
     """Build the success-summary dict the chat agent reports.
 
@@ -334,6 +340,7 @@ def _summarize(state: dict) -> dict:
         "parse_warnings": state.get("parse_warnings", []),
         "errors": state.get("errors", []),
         "notices": list(state.get("skipped_sheet_notes", [])),
+        **_skipped_sheets_entry(state),
     }
     unread_selection_types = state.get("unread_selection_types") or []
     if unread_selection_types:
@@ -479,6 +486,23 @@ def _shape_edit_from_spec_summary(summary: dict, state: dict) -> None:
             "does not move fields between pages, so they were left on their page: "
             + first_names(on_another_page) + "."
         )
+    unapplied = state.get("unapplied_changes") or []
+    if unapplied:
+        summary["unapplied_changes"] = unapplied
+        summary["notices"].append(
+            "These fields are changed in the spreadsheets in a way an update does "
+            "not apply, so the app keeps them as they were: " + first_names(unapplied)
+            + ". An update does not add options to an existing field or change its "
+            "mandatory setting, data type, unit or limits."
+        )
+    entities_not_added = state.get("entities_not_added") or []
+    if entities_not_added:
+        summary["entities_not_added"] = entities_not_added
+        summary["notices"].append(
+            "These are new in the spreadsheets, and an update does not add subject "
+            "types, programs or visit types, so they were left out: "
+            + first_names(entities_not_added) + "."
+        )
     selection_differences = state.get("selection_type_differences") or []
     if selection_differences:
         summary["selection_type_differences"] = selection_differences
@@ -508,32 +532,49 @@ def _shape_edit_from_spec_summary(summary: dict, state: dict) -> None:
     else:
         summary["no_changes"] = True
         summary["message"] = _no_changes_message(
-            bool(selection_differences), bool(name_clashes),
-            bool(pages_not_added or pages_not_removed or on_another_page),
-            bool(left_as_they_are),
+            fields_not_applied=bool(unapplied),
+            entities_left_out=bool(entities_not_added),
+            selection_differs=bool(selection_differences),
+            rows_left_out=bool(name_clashes),
+            pages_left=bool(pages_not_added or pages_not_removed),
+            fields_on_another_page=bool(on_another_page),
+            other_forms_left=bool(left_as_they_are),
         )
 
 
-def _no_changes_message(selection_differs: bool, rows_left_out: bool, pages_differ: bool,
+# What an update leaves as it is, said whenever it changed nothing. Worded
+# so it does not suggest the spreadsheets hold such a change; the ones found
+# are named in the result's notices.
+_NOT_APPLIED_BY_UPDATES = (
+    "An update adds, removes and reorders fields on a page; it does not change "
+    "an existing field's options, mandatory setting, data type, unit or limits, "
+    "or add or remove pages, and does not add subject types, programs or visit types."
+)
+
+
+def _no_changes_message(*, fields_not_applied: bool, entities_left_out: bool, selection_differs: bool,
+                        rows_left_out: bool, pages_left: bool, fields_on_another_page: bool,
                         other_forms_left: bool) -> str:
-    """Why an update that wrote nothing changed nothing; never "matches" when something differs."""
+    """Why an update that wrote nothing changed nothing. Never says the app
+    matches the spreadsheets: an update does not apply every kind of change."""
     reasons = [
+        *(["the field changes listed were not applied"] if fields_not_applied else []),
+        *(["the new subject types, programs or visit types listed were left out"]
+          if entities_left_out else []),
         *(["the fields set differently for single or multi select were left as "
            "they are, as Avni cannot switch a field it already has"] if selection_differs else []),
         *(["the spreadsheet rows whose names differ from another only in capitals "
            "were left out"] if rows_left_out else []),
-        *(["the pages, and the fields on another page, that differ from the "
-           "spreadsheets were left as they are"] if pages_differ else []),
+        *(["the page changes listed were not applied"] if pages_left else []),
+        *(["the fields the spreadsheets put on another page were left on their "
+           "page"] if fields_on_another_page else []),
+        *(["the app's forms that are not in the spreadsheets were left as they are"]
+          if other_forms_left else []),
     ]
-    other_forms = ", and the app's other forms were left as they are." if other_forms_left else "."
     if reasons:
-        return "Nothing was changed: " + "; ".join(reasons) + other_forms
-    if other_forms_left:
-        return (
-            "Nothing was changed: the forms in the spreadsheets already match "
-            "the app, and the app's other forms were left as they are."
-        )
-    return "The bundle already matches the spreadsheets; nothing was changed."
+        return f"Nothing was changed: {'; '.join(reasons)}. {_NOT_APPLIED_BY_UPDATES}"
+    return (f"Nothing was changed: the spreadsheets add, remove or reorder no field. "
+            f"{_NOT_APPLIED_BY_UPDATES}")
 
 
 async def _run_phase1_then_pause_or_finish(initial: dict, thread_id: str) -> dict:
@@ -552,6 +593,7 @@ async def _run_phase1_then_pause_or_finish(initial: dict, thread_id: str) -> dic
             "status": "error",
             "error": " ".join(errors),
             "notices": list(phase1_state.get("skipped_sheet_notes") or []),
+            **_skipped_sheets_entry(phase1_state),
         }
     pending = phase1_state.get("pending_changes") or []
     log.info(

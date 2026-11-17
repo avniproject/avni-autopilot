@@ -608,7 +608,7 @@ async def test_a_build_asks_before_dropping_fields_added_in_chat(
 
 @pytest.mark.parametrize(("forms_not_in_spec", "ending"), [
     ([], "it already has."),
-    (["Old Survey"], "the app's other forms were left as they are."),
+    (["Old Survey"], "the app's forms that are not in the spreadsheets were left as they are."),
 ])
 def test_an_update_with_only_selection_differences_says_what_was_left(
     forms_not_in_spec: list[str], ending: str,
@@ -620,8 +620,10 @@ def test_an_update_with_only_selection_differences_says_what_was_left(
         "edit_result": {"applied": []}, "diff_ops": [],
     })
     assert summary["no_changes"] is True
-    assert summary["message"].endswith(ending)
-    assert "only differences" not in summary["message"]
+    said, _, rest = summary["message"].partition(". An update ")
+    assert said.endswith(ending.rstrip("."))
+    assert rest.startswith("adds, removes and reorders fields")
+    assert "only differences" not in summary["message"] and "match" not in summary["message"]
 
 
 def test_the_left_as_they_are_notice_names_the_first_ten_fields() -> None:
@@ -1051,3 +1053,4 @@ def test_the_web_chat_tells_the_model_notices_are_already_shown(tmp_path: Path) 
     context = _build_org_context(_session(tmp_path))
     assert "carries those notes as `already_shown_to_user`: do not repeat or restate them" in context
     assert "when the user asks about skipped sheets or forms left as they are, answer from them" in context
+    assert "name them with their file and reason from the result's `skipped_sheets`" in context

@@ -55,9 +55,15 @@ class BundleDiff:
     `pages_not_added` and `pages_not_removed` name, as "Form › Page", pages
     only in the desired or only in the current bundle; an update leaves them
     as they are.
+
+    `unapplied_changes` names, as "Form › Field (<kinds>)", fields the update
+    keeps although the desired bundle adds options or changes their
+    mandatory setting, data type, unit or limits, which an update does not
+    apply.
     """
 
     ops: list[dict] = field(default_factory=list)
+    unapplied_changes: list[str] = field(default_factory=list)
     selection_type_differences: list[str] = field(default_factory=list)
     name_clashes: list[str] = field(default_factory=list)
     fields_on_another_page: list[str] = field(default_factory=list)
@@ -124,6 +130,23 @@ def unmatched_desired_forms(desired_bundle: dict, current_bundle: dict) -> list[
         for f in desired_bundle.get("forms", [])
         if f["content"].get("uuid") not in current_uuids
     })
+
+
+def entities_not_in_bundle(desired: dict[str, list[str]], current: dict[str, set[str]]) -> list[str]:
+    """The desired subject types, programs and visit types the current bundle
+    lacks, as "<kind> '<name>'"; an update does not add them. A kind missing
+    from `current` (the bundle lacks its file) is not checked."""
+    found: list[str] = []
+    for kind, names in desired.items():
+        if kind not in current:
+            continue
+        named: set[str] = set()
+        for name in names:
+            key = name_key(name)
+            if key and key not in current[kind] and key not in named:
+                named.add(key)
+                found.append(f"{kind} {name!r}")
+    return found
 
 
 def current_forms_not_in_desired(desired_bundle: dict, current_bundle: dict) -> list[str]:
@@ -347,6 +370,8 @@ def _diff_section(desired_section: dict, current_section: dict, pairs: dict[str,
     for uuid in desired_order:
         if uuid in pairs:
             _note_selection_difference(desired_by_uuid[uuid], pairs[uuid], form_name, result)
+        if _is_live(pairs.get(uuid)):
+            _note_unapplied_change(desired_by_uuid[uuid], pairs[uuid], form_name, result)
 
     # ── ADD: in desired, with no live current element ─────────────────────
     for uuid in desired_order:
@@ -406,6 +431,85 @@ def _place_fields_left_on_the_page(order: list[str], current_section: dict,
             at = order.index(previous) + 1 if previous in order else 0
             order.insert(at, e.get("name"))
             previous = e.get("name")
+
+
+def _note_unapplied_change(desired_e: dict, current_e: dict, form_name: str,
+                           result: BundleDiff) -> None:
+    """Name a live field whose options, mandatory setting, data type, unit or
+    limits differ, as an update keeps the field as it is."""
+    desired_concept = desired_e.get("concept") or {}
+    current_concept = current_e.get("concept") or {}
+    kinds = []
+    if _data_type_differs(desired_concept.get("dataType"), current_concept.get("dataType")):
+        kinds.append("data type")
+    elif desired_concept.get("dataType") == "Coded" and \
+            _answer_names(desired_concept) - _answer_names(current_concept):
+        # Only options the app lacks: the app's concept can hold more, shared
+        # with other forms or excluded on this one, and a blank cell keeps them.
+        kinds.append("options")
+    # A blank cell in the spreadsheet keeps the app's setting, as with options:
+    # a blank Mandatory cell reads the same as "No", so only "Yes" is told,
+    # and a blank unit or limit (or one side of a range) is not compared.
+    if desired_e.get("mandatory") and not current_e.get("mandatory"):
+        kinds.append("mandatory")
+    if _differs_where_given(desired_e, current_e, "unit", ignore_case=True):
+        kinds.append("unit")
+    if any(_differs_where_given(desired_e, current_e, k) for k in ("min", "max")):
+        kinds.append("limits")
+    if kinds:
+        result.unapplied_changes.append(f"{form_name} › {desired_e.get('name')} ({', '.join(kinds)})")
+
+
+def _answer_names(concept: dict) -> set[str]:
+    return {
+        name_key(answer.get("name"))
+        for answer in concept.get("answers") or []
+        if not answer.get("voided", False)
+    }
+
+
+# Where a field's concept holds each setting; App Designer sets them there.
+_CONCEPT_SETTINGS = {"unit": "unit", "min": "lowAbsolute", "max": "highAbsolute"}
+
+
+def _setting(element: dict, key: str) -> str | None:
+    """The field's unit, min or max as comparable text: the concept's value
+    when it has one, else the field's own key-value."""
+    concept_value = _comparable((element.get("concept") or {}).get(_CONCEPT_SETTINGS[key]))
+    if concept_value is not None:
+        return concept_value
+    return _comparable(next((kv.get("value") for kv in element.get("keyValues") or [] if kv.get("key") == key), None))
+
+
+# The same data type under an older and a newer name.
+_SAME_DATA_TYPE = {"Image": "ImageV2"}
+
+
+def _data_type_differs(wanted: str | None, current: str | None) -> bool:
+    """Whether the spreadsheet gives a data type the app field does not have.
+    A blank or unknown Data Type cell is read as "Text", so "Text" is not
+    told, as with a blank cell for the other settings."""
+    if not wanted or wanted == "Text":
+        return False
+    return _SAME_DATA_TYPE.get(wanted, wanted) != _SAME_DATA_TYPE.get(current, current)
+
+
+def _differs_where_given(desired_e: dict, current_e: dict, key: str, ignore_case: bool = False) -> bool:
+    """Whether the spreadsheet gives this setting and it differs from the app's."""
+    wanted, current = _setting(desired_e, key), _setting(current_e, key)
+    if ignore_case:
+        wanted, current = name_key(wanted) or None, name_key(current) or None
+    return wanted is not None and wanted != current
+
+
+def _comparable(value: object) -> str | None:
+    """A setting as comparable text: numbers as numbers, so 10 and "10.0" agree."""
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return repr(float(value))
+    except (TypeError, ValueError):
+        return str(value).strip()
 
 
 def _note_selection_difference(desired_e: dict, current_e: dict, form_name: str,

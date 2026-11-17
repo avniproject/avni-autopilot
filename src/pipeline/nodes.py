@@ -12,14 +12,16 @@ import json
 import logging
 import os
 import zipfile
+from collections import Counter
 from typing import Any
 
 
-from domain.bundle_editor import apply_field_edits, load_bundle_snapshot
+from domain.bundle_editor import apply_field_edits, load_bundle_contents
 from domain.changes import apply_resolutions
 from domain.diff import (
     current_forms_not_in_desired,
     diff,
+    entities_not_in_bundle,
     unmatched_desired_forms,
 )
 from domain.spreadsheets import find_spreadsheets
@@ -63,6 +65,7 @@ from domain.rules.orchestrator import (
     generate_all,
 )
 from domain.rules.parser import attach_unmatched_rule_intents
+from domain.wording import first_names
 from models import Change, RejectedOp
 from pipeline.state import BundleState
 
@@ -157,28 +160,46 @@ _NO_SUBJECT_TYPE_ERROR = (
 )
 
 
-def _skipped_sheets_messages(skipped_sheets: list[dict]) -> list[str]:
-    """One plain-words message per skip reason, naming each sheet and its file."""
-    def named(reason: str) -> str:
-        return ", ".join(
-            f"'{sheet['name']}' in {sheet['file']}"
-            for sheet in skipped_sheets if sheet["reason"] == reason
-        )
+_SKIPPED_REASON_WORDS = {
+    SKIPPED_UNRECOGNISED: "headings the builder does not read",
+    SKIPPED_NO_ROWS: "the right headings but no rows under them",
+}
 
-    messages = []
-    unrecognised = named(SKIPPED_UNRECOGNISED)
-    if unrecognised:
-        messages.append(
-            "These sheets were skipped because their headings do not match any "
-            f"sheet the builder reads: {unrecognised}."
-        )
-    without_rows = named(SKIPPED_NO_ROWS)
+
+def _skipped_sheets_messages(skipped_sheets: list[dict]) -> list[str]:
+    """One short line on the sheets nothing was read from.
+
+    Sheets the builder does not read (a scoping document has many, such as
+    Cost or Reports) are only counted; sheets with the right headings but no
+    rows, likely meant to be filled, are named. The full list is in
+    `_skipped_sheets_list`.
+    """
+    def sheets(count: int) -> str:
+        return f"{count} sheet" if count == 1 else f"{count} sheets"
+
+    unread = [s for s in skipped_sheets if s["reason"] == SKIPPED_UNRECOGNISED]
+    no_rows = [s for s in skipped_sheets if s["reason"] == SKIPPED_NO_ROWS]
+    repeated = {name for name, n in Counter(s["name"] for s in no_rows).items() if n > 1}
+    # A name in more than one file is told apart by its file.
+    without_rows = [
+        f"'{s['name']}' in {s['file']}" if s["name"] in repeated else f"'{s['name']}'"
+        for s in no_rows
+    ]
+    parts = []
+    if unread:
+        parts.append(f"{sheets(len(unread))} the builder does not read")
     if without_rows:
-        messages.append(
-            "These sheets have the right headings but no rows under them, so "
-            f"nothing was read from them: {without_rows}."
-        )
-    return messages
+        parts.append(f"{sheets(len(without_rows))} with the right headings but no rows "
+                     f"({first_names(without_rows, limit=3, separator=', ')})")
+    return ["Skipped " + " and ".join(parts) + "."] if parts else []
+
+
+def _skipped_sheets_list(skipped_sheets: list[dict]) -> list[dict]:
+    """Every skipped sheet with its file and reason, for answering questions about them."""
+    return [
+        {"sheet": sheet["name"], "file": sheet["file"], "reason": _SKIPPED_REASON_WORDS.get(sheet["reason"], sheet["reason"])}
+        for sheet in skipped_sheets
+    ]
 
 
 def parse_documents(state: BundleState) -> dict:
@@ -209,6 +230,7 @@ def parse_documents(state: BundleState) -> dict:
             "entity_spec": None,
             "parse_warnings": [],
             "skipped_sheet_notes": skipped_messages,
+            "skipped_sheets": _skipped_sheets_list(skipped_sheets),
             "errors": errors,
         }
 
@@ -224,6 +246,7 @@ def parse_documents(state: BundleState) -> dict:
             "entity_spec": None,
             "parse_warnings": [],
             "skipped_sheet_notes": skipped_messages,
+            "skipped_sheets": _skipped_sheets_list(skipped_sheets),
             "errors": errors,
         }
 
@@ -246,6 +269,7 @@ def parse_documents(state: BundleState) -> dict:
             for field_name, cell in form.unrecognised_selection_types.items()
         ],
         "skipped_sheet_notes": skipped_messages,
+        "skipped_sheets": _skipped_sheets_list(skipped_sheets),
         "errors": errors,
     }
 
@@ -609,9 +633,18 @@ def diff_against_bundle(state: BundleState) -> dict:
         "forms": state.get("forms_json", []),
         "concepts": state.get("concepts_json", []),
     }
-    current_bundle = load_bundle_snapshot(bundle_path)
+    contents = load_bundle_contents(bundle_path)
+    current_bundle = contents.snapshot
 
     bundle_diff = diff(desired_bundle, current_bundle)
+    entities_not_added = entities_not_in_bundle(
+        {
+            "subject type": [s.get("name") for s in state.get("subject_types_json", [])],
+            "program": [p.get("name") for p in state.get("programs_json", [])],
+            "visit type": [e.get("name") for e in state.get("encounter_types_json", [])],
+        },
+        contents.entity_names,
+    )
     ops = bundle_diff.ops
     unmatched_forms = unmatched_desired_forms(desired_bundle, current_bundle)
     forms_not_in_spec = current_forms_not_in_desired(desired_bundle, current_bundle)
@@ -635,6 +668,8 @@ def diff_against_bundle(state: BundleState) -> dict:
         "selection_type_differences": bundle_diff.selection_type_differences,
         "name_clashes": bundle_diff.name_clashes,
         "fields_on_another_page": bundle_diff.fields_on_another_page,
+        "unapplied_changes": bundle_diff.unapplied_changes,
+        "entities_not_added": entities_not_added,
         "pages_not_added": bundle_diff.pages_not_added,
         "pages_not_removed": bundle_diff.pages_not_removed,
         "errors": errors,

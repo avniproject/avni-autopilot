@@ -123,6 +123,7 @@ def test_update_with_no_changes_shows_no_card(offline_pipeline: Path, tmp_path: 
     result = _update(bundle)
     assert result["status"] == "done"
     assert result["no_changes"] is True
+    assert "unapplied_changes" not in result and "entities_not_added" not in result, result.get("notices")
     assert "bundle_updated" not in result
     assert "main_forms" not in result
     assert bundle.read_bytes() == before
@@ -494,6 +495,8 @@ def test_an_update_names_fields_left_on_their_page() -> None:
 
     assert summary["fields_on_another_page"] == [entry]
     assert any(entry in n and "does not move fields between pages" in n for n in summary["notices"])
+    assert summary["message"].startswith(
+        "Nothing was changed: the fields the spreadsheets put on another page were left on their page.")
 
 
 @pytest.mark.parametrize("mode", ["edit_from_spec", "generate"])
@@ -508,10 +511,57 @@ def test_unread_selection_type_cells_are_a_notice(mode: str) -> None:
     assert any(cell in n and "read as single select" in n for n in summary["notices"])
 
 
-def test_an_update_that_changes_nothing_still_says_it_matches() -> None:
+def test_an_update_that_changes_nothing_says_so_and_names_what_updates_do_not_apply() -> None:
     summary = _update_summary()
 
-    assert summary["message"] == "The bundle already matches the spreadsheets; nothing was changed."
+    assert summary["message"] == (
+        "Nothing was changed: the spreadsheets add, remove or reorder no field. "
+        f"{tools._NOT_APPLIED_BY_UPDATES}")
+    assert "match" not in summary["message"]
+    assert "skipped_sheets" not in summary
+
+
+def _add_an_option_to_a_dropdown(org_dir: Path) -> str:
+    """Append an option to the first filled Options cell of a form sheet; returns the field's name."""
+    for workbook_path in sorted(org_dir.glob("*.XLSX")):
+        workbook = openpyxl.load_workbook(workbook_path)
+        for worksheet in workbook.worksheets:
+            heading_row = next((
+                (i, [str(c.value or "").strip().lower() for c in row])
+                for i, row in enumerate(worksheet.iter_rows(max_row=6), start=1)
+                if any(str(c.value or "").strip().lower().startswith("options") for c in row)
+                and any("field name" == str(c.value or "").strip().lower() for c in row)
+            ), None)
+            if heading_row is None:
+                continue
+            at, header = heading_row
+            options_col = next(i for i, h in enumerate(header) if h.startswith("options"))
+            name_col = header.index("field name")
+            type_col = header.index("data type")
+            for row in worksheet.iter_rows(min_row=at + 1):
+                data_type = str(row[type_col].value or "").lower()
+                dropdown = any(word in data_type for word in ("option", "select", "coded"))
+                if row[options_col].value and row[name_col].value and dropdown:
+                    row[options_col].value = f"{row[options_col].value}\nQA new option"
+                    workbook.save(workbook_path)
+                    return str(row[name_col].value)
+    raise AssertionError("no dropdown with options in the sample sheets")
+
+
+def test_an_option_added_in_the_sheet_is_not_called_a_match(offline_pipeline: Path, tmp_path: Path) -> None:
+    """Himesh's testing note: add an option to a dropdown in the spreadsheet and run an update."""
+    bundle = _build()
+    before = bundle.read_bytes()
+    field = _add_an_option_to_a_dropdown(offline_pipeline)
+
+    result = _update(bundle)
+
+    assert result["status"] == "done" and result["no_changes"] is True
+    assert result["message"].startswith("Nothing was changed: the field changes listed were not applied")
+    assert any(entry.endswith(f"› {field} (options)") for entry in result["unapplied_changes"])
+    assert any(f"› {field} (options)" in n for n in result["already_shown_to_user"])
+    assert "match" not in result["message"]
+    assert bundle.read_bytes() == before
 
 
 def test_rows_left_out_for_capitals_are_named_and_never_called_a_match() -> None:
@@ -556,3 +606,103 @@ def test_an_update_names_pages_it_left_as_they_are_and_never_calls_it_a_match() 
     assert any("does not remove pages, so they and their fields were left as they are: ANC › History" in n
                for n in summary["notices"])
     assert "match" not in summary["message"]
+    assert summary["message"].startswith("Nothing was changed: the page changes listed were not applied.")
+
+
+def test_a_full_scoping_document_gets_one_short_skipped_sheets_line(offline_pipeline: Path) -> None:
+    """Himesh's testing note: build from a full scoping document and check the notice length."""
+    result = asyncio.run(tools.generate_bundle.ainvoke({"org": ORG}))
+
+    skipped_lines = [n for n in result["notices"] if n.startswith("Skipped ")]
+    assert len(skipped_lines) == 1
+    assert len(result["skipped_sheets"]) > 9
+    assert not any(sheet["sheet"] in skipped_lines[0] for sheet in result["skipped_sheets"]
+                   if sheet["reason"] == "headings the builder does not read")
+
+
+def _modelling_sheet(org_dir: Path, title: str):
+    path = next(org_dir.glob("*MODELLING*.XLSX"))
+    workbook = openpyxl.load_workbook(path)
+    return path, workbook, workbook[title]
+
+
+def _add_a_field_to_a_form(org_dir: Path) -> str:
+    """Append a Text field under the first form sheet's last field row; returns its name."""
+    for workbook_path in sorted(org_dir.glob("*.XLSX")):
+        workbook = openpyxl.load_workbook(workbook_path)
+        for worksheet in workbook.worksheets:
+            for at, row in enumerate(worksheet.iter_rows(max_row=6), start=1):
+                header = [str(c.value or "").strip().lower() for c in row]
+                if "field name" in header and any("data type" in h for h in header):
+                    name_col = header.index("field name")
+                    type_col = next(i for i, h in enumerate(header) if "data type" in h)
+                    last = max(r for r in range(at + 1, worksheet.max_row + 1)
+                               if worksheet.cell(r, name_col + 1).value)
+                    worksheet.insert_rows(last + 1)
+                    for col in range(1, worksheet.max_column + 1):
+                        worksheet.cell(last + 1, col).value = worksheet.cell(last, col).value
+                    worksheet.cell(last + 1, name_col + 1).value = "QA new field"
+                    worksheet.cell(last + 1, type_col + 1).value = "Text"
+                    workbook.save(workbook_path)
+                    return "QA new field"
+    raise AssertionError("no form sheet in the sample sheets")
+
+
+def test_a_changed_option_is_named_when_the_same_update_adds_a_field(
+    offline_pipeline: Path, tmp_path: Path,
+) -> None:
+    """Tester: an option added together with a new field was lost without a word."""
+    bundle = _build()
+    field = _add_an_option_to_a_dropdown(offline_pipeline)
+    _add_a_field_to_a_form(offline_pipeline)
+
+    result = _update(bundle)
+
+    assert result["status"] == "done" and "no_changes" not in result
+    assert any(entry.endswith(f"› {field} (options)") for entry in result["unapplied_changes"])
+    assert any(f"› {field} (options)" in n and "does not apply" in n for n in result["already_shown_to_user"])
+
+
+def test_a_new_subject_type_is_named_as_not_added(offline_pipeline: Path, tmp_path: Path) -> None:
+    bundle = _build()
+    path, workbook, sheet = _modelling_sheet(offline_pipeline, "Subject Types")
+    sheet.append(["QA Household", "Household", "", "City"])
+    workbook.save(path)
+
+    result = _update(bundle)
+
+    assert result["entities_not_added"] == ["subject type 'QA Household'"]
+    assert any("does not add subject types" in n and "QA Household" in n for n in result["already_shown_to_user"])
+    assert result["message"].startswith("Nothing was changed: the new subject types")
+
+
+def test_an_update_from_unchanged_sheets_does_not_suggest_a_change_exists() -> None:
+    summary = _update_summary()
+
+    assert "a change of that kind" not in summary["message"]
+    assert "is not in the app" not in summary["message"]
+
+
+def test_a_list_longer_than_its_note_reaches_the_model_in_full() -> None:
+    """A note names at most ten; the model answers from the full list."""
+    pages = [f"ANC › Page {n}" for n in range(25)]
+    summary = _update_summary(pages_not_added=pages)
+    session = SimpleNamespace(pending_notices=[])
+
+    result = tools._report_bundle(dict(summary), {"configurable": {"session": session}})
+
+    assert result["pages_not_added"] == pages
+    assert any("and 15 more" in n for n in result["already_shown_to_user"])
+    assert "forms_not_in_spreadsheets" not in result
+
+
+def test_each_no_change_reason_comes_from_its_own_flag() -> None:
+    flags = ["fields_not_applied", "entities_left_out", "selection_differs", "rows_left_out",
+             "pages_left", "fields_on_another_page", "other_forms_left"]
+    words = {"fields_not_applied": "field changes listed", "entities_left_out": "visit types listed",
+             "selection_differs": "single or multi select", "rows_left_out": "only in capitals",
+             "pages_left": "page changes listed", "fields_on_another_page": "left on their page",
+             "other_forms_left": "app's forms that are not in the spreadsheets"}
+    for on in flags:
+        message = tools._no_changes_message(**{f: f == on for f in flags})
+        assert [f for f in flags if words[f] in message] == [on], on

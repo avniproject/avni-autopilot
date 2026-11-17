@@ -29,10 +29,13 @@ class BundleState(TypedDict):
     selection_type_differences: list[str]   # fields left single/multi select unlike the spec
     name_clashes: list[str]                 # spec rows left out: same name as another row apart from capitals
     fields_on_another_page: list[str]       # fields the spec puts on another page; left on their page
+    unapplied_changes: list[str]            # "Form › Field (kinds)" setting changes an update does not apply
+    entities_not_added: list[str]           # new subject types, programs, visit types an update does not add
     pages_not_added: list[str]              # "Form › Page" new in the spec; an update does not add pages
     pages_not_removed: list[str]            # "Form › Page" not in the spec; an update does not remove pages
     unread_selection_types: list[str]       # "Form › Field: 'cell'" Selection Type cells not understood
-    skipped_sheet_notes: list[str]          # plain-words notes naming sheets nothing was read from
+    skipped_sheet_notes: list[str]          # one short line on the sheets nothing was read from
+    skipped_sheets: list[dict]              # each skipped sheet: {"sheet", "file", "reason"}
     edit_result: dict                       # set by apply_diff_edits (an EditResult dump)
     # Form ↔ entity linking
     form_link_warnings: list[str]
@@ -86,10 +89,13 @@ def initial_state(
         "selection_type_differences": [],
         "name_clashes": [],
         "fields_on_another_page": [],
+        "unapplied_changes": [],
+        "entities_not_added": [],
         "pages_not_added": [],
         "pages_not_removed": [],
         "unread_selection_types": [],
         "skipped_sheet_notes": [],
+        "skipped_sheets": [],
         "edit_result": {},
         "user_instructions": user_instructions,
         "pending_changes": [],
