@@ -18,7 +18,7 @@ import esprima
 from esprima.error_handler import Error as EsprimaError
 
 from domain.rules.accessors import CONCEPT_ACCESSORS, ENCOUNTER_TYPE_ACCESSORS
-from domain.rules.prompts import ENTITY_PARAMS, entity_param_for_form_type
+from domain.rules.prompts import ENTITY_PARAMS, current_form_value_method, entity_param_for_form_type
 from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
 
 log = logging.getLogger(__name__)
@@ -45,12 +45,23 @@ _VALUE_IN_METHODS: frozenset[str] = frozenset({
     "valueInExit",
     "valueInCancelEncounter",
 })
-# RuleCondition methods that read a field of the form being filled in. The
-# bundle context lists that form's fields, so these names are grounded too.
-# valueInRegistration / valueInEnrolment read other forms and are not checked.
-_CURRENT_FORM_VALUE_METHODS: frozenset[str] = frozenset({
-    "valueInEncounter",
+# The RuleCondition method that reads a field of the form being filled in
+# (prompts.current_form_value_method for the form's type). The bundle context
+# lists that form's fields, so its names are grounded too; the other
+# valueIn... methods read other forms and are not checked. Set by `check`.
+_CURRENT_FORM_VALUE_METHOD: contextvars.ContextVar[str] = contextvars.ContextVar("_CURRENT_FORM_VALUE_METHOD")
+# Methods that read the visit being filled in. A form whose own read is not
+# one of these (registration, enrolment, exit) has no visit: rules-config
+# finds no answer, so a condition on it never matches (valueInCancelEncounter
+# throws instead).
+_VISIT_VALUE_METHODS: frozenset[str] = frozenset({
+    "valueInEncounter", "valueInCancelEncounter",
 })
+_FORM_KIND_IN_WORDS: dict[str, str] = {
+    "IndividualProfile": "registration",
+    "ProgramEnrolment": "programme enrolment",
+    "ProgramExit": "programme exit",
+}
 # Accessors that read a question inside a question group when given the
 # group's concept name, mapped to that argument's position (openchs-models
 # AbstractEncounter, Individual, ProgramEnrolment; rules-config RuleCondition
@@ -202,9 +213,11 @@ def check(result: RuleResult, spec: RuleSpec) -> tuple[bool, list[str]]:
         ]
 
     token = _RECEIVERS.set(_receiver_kinds(tree, spec))
+    method_token = _CURRENT_FORM_VALUE_METHOD.set(current_form_value_method(spec.form_type))
     try:
         return _check_parsed(tree, arrow, spec)
     finally:
+        _CURRENT_FORM_VALUE_METHOD.reset(method_token)
         _RECEIVERS.reset(token)
 
 
@@ -245,6 +258,7 @@ def _check_parsed(tree: Any, arrow: Any, spec: RuleSpec) -> tuple[bool, list[str
     hard_warnings.extend(_check_text_comparisons(tree, spec))
     hard_warnings.extend(_check_answer_grounding(tree, spec))
     hard_warnings.extend(_check_builder_entity_key(arrow, spec))
+    hard_warnings.extend(_check_visit_reads_on_a_form_without_a_visit(tree, spec))
 
     # Soft warnings (return-shape mismatches) — surface to the caller but
     # do not block writes. See SDD §5.3.
@@ -324,7 +338,7 @@ def _is_enrolment(kinds: frozenset[str]) -> bool:
 def _reads_current_form(call: Any) -> bool:
     """A read of the form being filled in, whose question groups are known."""
     method = _method_name(call)
-    if method == "valueInEncounter":
+    if method == _CURRENT_FORM_VALUE_METHOD.get():
         return True
     return method in _CURRENT_FORM_RECORD_READS and _FORM in _call_receiver_kinds(call)
 
@@ -812,7 +826,9 @@ def _collect_call_args(
         if _UUID_RE.match(value) or _grouped_read_names(call) is not None:
             return
         concepts.add(value)
-    elif method in _CURRENT_FORM_VALUE_METHODS and not _UUID_RE.match(value):
+    elif method in (_CURRENT_FORM_VALUE_METHOD.get(), *_VISIT_VALUE_METHODS) and not _UUID_RE.match(value):
+        # A visit read is grounded on every form: a made-up name must stay an
+        # off-bundle error, so the wrong-form-type retry cannot swap in a field.
         if _grouped_read_names(call) is None:
             concepts.add(value)
     elif method in ENCOUNTER_TYPE_ACCESSORS:
@@ -1262,6 +1278,26 @@ def _check_builder_entity_key(arrow: Any, spec: RuleSpec) -> list[str]:
                         f"form needs {expected_key!r}"
                     )
     return warnings
+
+
+def _check_visit_reads_on_a_form_without_a_visit(tree: Any, spec: RuleSpec) -> list[str]:
+    """Hard check: no visit read (valueInEncounter / valueInCancelEncounter)
+    on a registration, enrolment or exit form, where it finds no answer and
+    the condition is never true."""
+    own_read = current_form_value_method(spec.form_type)
+    if own_read in _VISIT_VALUE_METHODS:
+        return []
+    form_kind = _FORM_KIND_IN_WORDS.get(spec.form_type, spec.form_type or "subject")
+    used = sorted({
+        method for method in map(_method_name, _iter_call_expressions(tree))
+        if method in _VISIT_VALUE_METHODS
+    })
+    return [
+        f"{WRONG_FORM_TYPE_WARNING}: {method} reads a visit's answers, but this is a "
+        f"{form_kind} form, so it finds no answer and the condition is never true; "
+        f"read this form's answers with {own_read}"
+        for method in used
+    ]
 
 
 def _is_form_record(value: Any, entity_variables: set[str]) -> bool:

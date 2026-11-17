@@ -1,6 +1,6 @@
 """Prompt templates for rule generation.
 
-`build_system_prompt(rule_kind, entity_param)` returns the cacheable system
+`build_system_prompt(rule_kind, form_type)` returns the cacheable system
 prompt that constrains the JS IIFE shape and the symbol allowlist. The
 `build_user_prompt(spec, helpers_text, examples_text)` builds the per-call user
 message with intent, bundle context, and the retrieved helpers/examples.
@@ -96,6 +96,43 @@ def entity_param_for_form_type(form_type: str) -> str:
     return _FORM_TYPE_TO_ENTITY_PARAM.get(form_type, "individual")
 
 
+# The RuleCondition method that reads an answer given on the form being filled
+# in. rules-config's valueInEncounter reads `encounter`/`programEncounter`
+# observations only, so on a registration, enrolment or exit form it finds
+# nothing and every condition on it is false; a cancellation form's answers
+# are the visit's cancel observations.
+_FORM_TYPE_TO_CURRENT_FORM_VALUE_METHOD: dict[str, str] = {
+    "IndividualProfile": "valueInRegistration",
+    "ProgramEnrolment": "valueInEnrolment",
+    "ProgramExit": "valueInExit",
+    "ProgramEncounter": "valueInEncounter",
+    "Encounter": "valueInEncounter",
+    "ProgramEncounterCancellation": "valueInCancelEncounter",
+    "IndividualEncounterCancellation": "valueInCancelEncounter",
+}
+
+# Of those, the ones that take a question group's concept as a second argument.
+_VALUE_METHODS_TAKING_A_GROUP: frozenset[str] = frozenset({
+    "valueInRegistration", "valueInEnrolment", "valueInEncounter",
+})
+
+
+def current_form_value_method(form_type: str) -> str:
+    """The RuleCondition method that reads this form's own answers."""
+    return _FORM_TYPE_TO_CURRENT_FORM_VALUE_METHOD.get(form_type, "valueInRegistration")
+
+
+def _rule_condition_read(form_type: str, concept: str, group: str | None = None) -> str | None:
+    """`<method>(concept[, group])` reading this form's answer in a RuleCondition,
+    or None when the method cannot read a question inside a group."""
+    method = current_form_value_method(form_type)
+    if group is None:
+        return f"{method}({concept})"
+    if method not in _VALUE_METHODS_TAKING_A_GROUP:
+        return None
+    return f"{method}({concept}, {group})"
+
+
 _SYSTEM_PROMPT_TEMPLATE = """\
 You generate Avni rule functions written in JavaScript.
 
@@ -116,8 +153,13 @@ Hard constraints:
      or `new imports.rulesConfig.RuleCondition({{{entity_param}}})`. EXAMPLES may
      come from other form types and use another key (`programEncounter`,
      `encounter`, `programEnrolment`, `individual`); never copy that key.
+     In a RuleCondition or StatusBuilder chain, read an answer given on this
+     form with `.when.{value_method}('<concept>')`. EXAMPLES may read with
+     another `valueIn...` method; never copy it for this form's answers: on
+     another form type it reads nothing and the condition is always false.
   2. The function MUST return {return_type_description}.
-  3. Reference ONLY the helper methods listed under HELPERS in the user message.
+  3. Reference ONLY the helper methods listed under HELPERS in the user message,
+     and `{value_method}` from constraint 1.
      Do not invent helpers, methods, or namespaces.
   4. Reference ONLY the concept names listed under AVAILABLE_CONCEPTS, or under
      QUESTION_GROUPS read with their group as the second argument, copied
@@ -146,7 +188,7 @@ Hard constraints:
   8. Express each condition exactly as the intent states it; never swap it
      for one that only seems the same. Every coded-answer check is false while
      the question is unanswered and `.not` turns that into true, so "hide
-     when X is No" is `show().when.valueInEncounter('X').not.containsAnswerConceptName('No')`
+     when X is No" is `show().when.{value_method}('X').not.containsAnswerConceptName('No')`
      (visible until No is chosen), not `containsAnswerConceptName('Yes')`
      or `containsAnswerConceptNameOtherThan('No')` (both hidden while X
      is unanswered).
@@ -174,11 +216,12 @@ _RETURN_EXPRESSION_BY_KIND: dict[RuleKind, str] = {
 }
 
 
-def build_system_prompt(rule_kind: RuleKind, entity_param: str) -> str:
-    """Render the cacheable system prompt for a rule kind + entity-param pair."""
+def build_system_prompt(rule_kind: RuleKind, form_type: str) -> str:
+    """Render the cacheable system prompt for a rule kind + form type."""
     meta = _KIND_META[rule_kind]
     return _SYSTEM_PROMPT_TEMPLATE.format(
-        entity_param=entity_param,
+        entity_param=entity_param_for_form_type(form_type),
+        value_method=current_form_value_method(form_type),
         return_type_description=meta.return_type_description,
         return_expression=_RETURN_EXPRESSION_BY_KIND[rule_kind],
     )
@@ -253,13 +296,15 @@ def _format_question_groups(spec: RuleSpec) -> str:
     if not spec.question_group_children and not spec.repeatable_question_groups:
         return ""
     entity_param = entity_param_for_form_type(spec.form_type)
+    record_read = f"{entity_param}.getObservationReadableValue('<question concept>', '<group concept>')"
+    condition_read = _rule_condition_read(spec.form_type, "'<question concept>'", "'<group concept>'")
     lines = [
         "",
         "QUESTION_GROUPS",
         "Questions inside a question group, by group concept name. Read each one with its group's",
-        f"concept name as well: {entity_param}.getObservationReadableValue('<question concept>', '<group concept>'),",
-        "or in a RuleCondition valueInEncounter('<question concept>', '<group concept>'). A read without",
-        "the group, or a loop over observations comparing concept names, finds nothing.",
+        f"concept name as well: {record_read}"
+        + (f",\nor in a RuleCondition {condition_read}." if condition_read else "."),
+        "A read without the group, or a loop over observations comparing concept names, finds nothing.",
     ]
     for group, children in spec.question_group_children.items():
         lines.append(f"- {group}:")
@@ -290,16 +335,14 @@ def _format_target_field(spec: RuleSpec) -> str:
         f'The rule is set on the question "{question}" (concept {concept!r}). "This field" in the intent means',
         "this question; use no other question for it.",
     ]
-    if spec.target_question_group:
-        group = spec.target_question_group
-        lines.append(
-            f"It is inside the question group {group!r}: read its value as "
-            f"{entity_param}.getObservationReadableValue({concept!r}, {group!r}) or valueInEncounter({concept!r}, {group!r})."
-        )
+    group = spec.target_question_group
+    record_read = f"{entity_param}.getObservationReadableValue({concept!r}" + (f", {group!r})" if group else ")")
+    condition_read = _rule_condition_read(spec.form_type, repr(concept), repr(group) if group else None)
+    reads = record_read + (f" or {condition_read}" if condition_read else "")
+    if group:
+        lines.append(f"It is inside the question group {group!r}: read its value as {reads}.")
     else:
-        lines.append(
-            f"Read its value as {entity_param}.getObservationReadableValue({concept!r}) or valueInEncounter({concept!r})."
-        )
+        lines.append(f"Read its value as {reads}.")
     return "\n".join(lines) + "\n"
 
 
@@ -358,8 +401,13 @@ Hard constraints:
      `{entity_param}`, e.g.
      `new imports.rulesConfig.FormElementStatusBuilder({{{entity_param}, formElement}})`.
      EXAMPLES may come from other form types and use another key; never copy it.
+     In a RuleCondition or StatusBuilder chain, read an answer given on this
+     form with `.when.{value_method}('<concept>')`. EXAMPLES may read with
+     another `valueIn...` method; never copy it for this form's answers: on
+     another form type it reads nothing and the condition is always false.
   2. Each IIFE MUST return a `FormElementStatus` instance.
-  3. Reference ONLY the helper methods listed under HELPERS.
+  3. Reference ONLY the helper methods listed under HELPERS, and `{value_method}`
+     from constraint 1.
   4. Reference ONLY the concept names listed under AVAILABLE_CONCEPTS, copied
      exactly, including case: Avni matches concept names exactly.
   5. Reference ONLY the encounter-type names listed under AVAILABLE_ENCOUNTER_TYPES.
@@ -369,7 +417,7 @@ Hard constraints:
   7. Express each condition exactly as the intent states it. Every coded-answer
      check is false while the question is unanswered and `.not` turns that
      into true, so "hide when X is No" is
-     `show().when.valueInEncounter('X').not.containsAnswerConceptName('No')`,
+     `show().when.{value_method}('X').not.containsAnswerConceptName('No')`,
      not `containsAnswerConceptName('Yes')` (hidden while X is unanswered).
   8. If a field's intent is empty, a dash, or cannot be expressed within these
      constraints, return empty `js` and set `confidence` to "low".
@@ -407,9 +455,12 @@ Generate one JS IIFE per field. Return a `rules` list with one entry per field,
 """
 
 
-def build_field_batch_system_prompt(entity_param: str) -> str:
+def build_field_batch_system_prompt(form_type: str) -> str:
     """Render the cacheable system prompt for a field-batch call."""
-    return _FIELD_BATCH_SYSTEM_PROMPT_TEMPLATE.format(entity_param=entity_param)
+    return _FIELD_BATCH_SYSTEM_PROMPT_TEMPLATE.format(
+        entity_param=entity_param_for_form_type(form_type),
+        value_method=current_form_value_method(form_type),
+    )
 
 
 def build_field_batch_user_prompt(

@@ -27,7 +27,6 @@ from domain.rules.prompts import (
     build_field_batch_user_prompt,
     build_system_prompt,
     build_user_prompt,
-    entity_param_for_form_type,
 )
 from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
 
@@ -144,8 +143,7 @@ class RuleGenerator:
         helpers_text = self._kb.render_helpers(ctx.helpers)
         examples_text = self._kb.render_examples(ctx.examples)
 
-        entity_param = entity_param_for_form_type(spec.form_type)
-        system_text = build_system_prompt(spec.rule_kind, entity_param)
+        system_text = build_system_prompt(spec.rule_kind, spec.form_type)
         user_text = build_user_prompt(spec, helpers_text, examples_text)
 
         system_msg = SystemMessage(content=[{
@@ -216,10 +214,9 @@ class RuleGenerator:
         examples_text = self._kb.render_examples(merged_examples)
 
         shared_spec = entries[0][2]
-        entity_param = entity_param_for_form_type(shared_spec.form_type)
         field_entries = [(name, section, spec) for name, section, spec, _ in entries]
 
-        system_text = build_field_batch_system_prompt(entity_param)
+        system_text = build_field_batch_system_prompt(shared_spec.form_type)
         user_text = build_field_batch_user_prompt(field_entries, helpers_text, examples_text)
 
         system_msg = SystemMessage(content=[{

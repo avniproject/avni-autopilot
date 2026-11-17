@@ -196,3 +196,58 @@ def test_rule_that_also_reads_a_field_not_on_the_form_is_not_regenerated(
     assert result["status"] == "rejected"
     assert len(specs) == 1
     assert any(w.startswith("off-bundle concept names") for w in result["warnings"])
+
+
+_REGISTRATION_CONTEXT = {
+    **_CONTEXT,
+    "form_type": "IndividualProfile",
+    "encounter_type": None,
+    "available_concepts": ["Operational Status", "Coordinator name"],
+    "concept_answers": {"Operational Status": ["Active", "Closed"]},
+}
+
+_REGISTRATION_JS = """\
+"use strict";
+({params, imports}) => {
+  const individual = params.entity;
+  const formElement = params.formElement;
+  const statusBuilder = new imports.rulesConfig.FormElementStatusBuilder({individual, formElement});
+  statusBuilder.show().when.valueInRegistration("Operational Status").containsAnswerConceptName("Active");
+  return statusBuilder.build();
+};
+"""
+_REGISTRATION_JS_READING_A_VISIT = _REGISTRATION_JS.replace("valueInRegistration", "valueInEncounter")
+
+
+def _registration_field_rule(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
+    monkeypatch.setattr(tools, "load_form_rule_context", lambda _bundle, _form, _form_uuid=None: _REGISTRATION_CONTEXT)
+    config = {"configurable": {"session": SimpleNamespace(bundle_path=tmp_path / "bundle.zip")}}
+    return tools.suggest_form_element_rule.func(
+        form_name="School Registration",
+        page_name="Details",
+        field_name="Coordinator name",
+        intent="show only when Operational Status is Active",
+        config=config,
+    )
+
+
+def test_a_registration_rule_reading_a_visit_is_regenerated_with_the_registration_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """valueInEncounter finds nothing on a registration form, so the field would never show."""
+    specs = _stub_generator_sequence(monkeypatch, _REGISTRATION_JS_READING_A_VISIT, _REGISTRATION_JS)
+    result = _registration_field_rule(monkeypatch, tmp_path)
+    assert result["status"] == "suggested"
+    assert result["js"] == _REGISTRATION_JS
+    assert "read this form's answers with valueInRegistration" in specs[1][0].intent
+    assert "read this form's answers with `valueInRegistration`." in specs[1][0].intent
+
+
+def test_a_registration_rule_still_reading_a_visit_after_the_retry_shows_no_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _stub_generator_sequence(monkeypatch, _REGISTRATION_JS_READING_A_VISIT, _REGISTRATION_JS_READING_A_VISIT)
+    result = _registration_field_rule(monkeypatch, tmp_path)
+    assert result["status"] == "rejected"
+    assert "js" not in result
+    assert any("never true" in w for w in result["warnings"])

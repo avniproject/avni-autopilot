@@ -208,7 +208,7 @@ def test_questions_inside_a_question_group_are_not_offered_on_their_own(tmp_path
 def test_generator_is_told_to_pass_the_record_under_the_form_types_key() -> None:
     from domain.rules.prompts import build_system_prompt
 
-    prompt = build_system_prompt(RuleKind.FORM_ELEMENT, "encounter")
+    prompt = build_system_prompt(RuleKind.FORM_ELEMENT, "Encounter")
 
     assert "new imports.rulesConfig.FormElementStatusBuilder({encounter, formElement})" in prompt
     assert "never copy that key" in prompt

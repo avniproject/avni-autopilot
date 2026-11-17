@@ -36,7 +36,7 @@ from domain.bundle_editor import (
 from domain.docs.knowledge_base import DocsKnowledgeBase
 from domain.generators import name_key, unlinked_form_names, unlinked_forms, unlinked_forms_error
 from domain.rules.generator import RuleGenerator
-from domain.rules.prompts import entity_param_for_form_type
+from domain.rules.prompts import current_form_value_method, entity_param_for_form_type
 from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
 from domain.rules.validator import OFF_BUNDLE_WARNING, WRONG_FORM_TYPE_WARNING
 from domain.rules.validator import validate_and_decide as _validate_and_decide
@@ -1382,7 +1382,8 @@ def _generate_and_check(spec: RuleSpec) -> tuple[RuleResult, bool, list[str]]:
     retry_spec = spec.model_copy(update={
         "intent": (
             f"{spec.intent}\n\nThe previous attempt was rejected: {reasons}. "
-            f"Pass the form's record as `{entity_param}` to every rulesConfig builder and RuleCondition."
+            f"Pass the form's record as `{entity_param}` to every rulesConfig builder and RuleCondition, "
+            f"and read this form's answers with `{current_form_value_method(spec.form_type)}`."
         ),
     })
     retry_result = _rule_generator.generate(retry_spec, context=context)

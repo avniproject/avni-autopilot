@@ -27,7 +27,7 @@ def test_catalog_has_or_and_grouping_entries() -> None:
 
 @pytest.mark.parametrize("rule_kind", list(RuleKind))
 def test_system_prompt_forbids_mixed_and_or_chain(rule_kind: RuleKind) -> None:
-    prompt = build_system_prompt(rule_kind, "programEncounter")
+    prompt = build_system_prompt(rule_kind, "ProgramEncounter")
     assert "A && (B || (C && D))" in prompt
     assert "Never mix `.and` and" in prompt
 
@@ -46,9 +46,9 @@ def test_grouping_example_nests_instead_of_distributing() -> None:
 
 @pytest.mark.parametrize("rule_kind", list(RuleKind))
 def test_system_prompt_keeps_hide_when_answer_negated(rule_kind: RuleKind) -> None:
-    prompt = build_system_prompt(rule_kind, "programEncounter")
+    prompt = build_system_prompt(rule_kind, "ProgramEncounter")
     assert ".not.containsAnswerConceptName('No')" in prompt
 
 
 def test_field_batch_prompt_keeps_hide_when_answer_negated() -> None:
-    assert ".not.containsAnswerConceptName('No')" in build_field_batch_system_prompt("programEncounter")
+    assert ".not.containsAnswerConceptName('No')" in build_field_batch_system_prompt("ProgramEncounter")

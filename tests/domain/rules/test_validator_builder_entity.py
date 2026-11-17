@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 
+from domain.rules.prompts import current_form_value_method
 from domain.rules.rule_spec import RuleKind, RuleResult, RuleSpec
 from domain.rules.validator import check
 
@@ -32,14 +33,14 @@ def _result(js: str, rule_kind: RuleKind = RuleKind.FORM_ELEMENT) -> RuleResult:
     return RuleResult(rule_kind=rule_kind, js=js, confidence="high")
 
 
-def _form_element_rule(entity_variable: str, builder_argument: str) -> str:
+def _form_element_rule(entity_variable: str, builder_argument: str, read: str = "valueInEncounter") -> str:
     return f"""\
 "use strict";
 ({{params, imports}}) => {{
   const {entity_variable} = params.entity;
   const formElement = params.formElement;
   const statusBuilder = new imports.rulesConfig.FormElementStatusBuilder({builder_argument});
-  statusBuilder.show().when.valueInEncounter("Place of delivery").containsAnswerConceptName("Hospital");
+  statusBuilder.show().when.{read}("Place of delivery").containsAnswerConceptName("Hospital");
   return statusBuilder.build();
 }};
 """
@@ -152,7 +153,7 @@ def test_form_record_reached_another_way_is_still_checked(binding: str, builder_
 def test_builder_given_the_forms_own_entity_key_is_accepted(
     form_type: str, entity_variable: str, builder_argument: str,
 ) -> None:
-    js = _form_element_rule(entity_variable, builder_argument)
+    js = _form_element_rule(entity_variable, builder_argument, current_form_value_method(form_type))
     ok, warnings = check(_result(js), _spec(form_type))
     assert ok is True
     assert _wrong_form_type_warnings(warnings) == []
