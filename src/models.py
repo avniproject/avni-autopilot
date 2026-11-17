@@ -46,6 +46,12 @@ class FieldSpec(BaseModel):
     # by the parser. None when no behaviour columns were populated for this
     # field. See specs/FIELD_AND_PAGE_VISIBILITY_RULES_SDD.md §6.1.
     rule_intent: str | None = None
+    # The field's name as the spreadsheet gives it, kept when the name review
+    # renames the field; a build records it on the form element so an update
+    # can find the field again (see domain.recorded_names).
+    spreadsheetName: str | None = None
+    # The app's concept for a field an update matched by its recorded name.
+    conceptUuid: str | None = None
 
 
 # ── Form-level ─────────────────────────────────────────────────────────────────

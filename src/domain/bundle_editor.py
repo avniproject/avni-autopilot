@@ -33,6 +33,7 @@ from domain.generators import (
     is_over_name_limit,
     make_uuid,
     name_key,
+    recorded_name_key_value,
     selection_words,
     unlinked_forms,
 )
@@ -446,6 +447,7 @@ def _build_key_values(payload: dict) -> list[dict]:
         out.append({"key": "min", "value": payload["min"]})
     if payload.get("max") is not None:
         out.append({"key": "max", "value": payload["max"]})
+    out.extend(recorded_name_key_value(payload.get("spreadsheetName"), payload.get("name")))
     return out
 
 

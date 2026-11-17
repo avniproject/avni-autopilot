@@ -36,6 +36,19 @@ def is_over_name_limit(name: str | None) -> bool:
     return len(name or "") > NAME_LIMIT
 
 
+# Form element keyValue holding the spreadsheet name of a field the build renamed.
+SPREADSHEET_NAME_KEY = "spreadsheetName"
+
+
+def recorded_name_key_value(spreadsheet_name: str | None, field_name: str | None) -> list[dict]:
+    """The keyValue recording a field's spreadsheet name, only when the field
+    goes by another name in the app. Capitals count, as field and concept
+    UUIDs are made from the exact name."""
+    if spreadsheet_name and spreadsheet_name.strip() != (field_name or "").strip():
+        return [{"key": SPREADSHEET_NAME_KEY, "value": spreadsheet_name}]
+    return []
+
+
 def name_key(name: str | None) -> str:
     """Key under which two names count as the same: case and outer spaces ignored."""
     return (name or "").strip().lower()
@@ -274,7 +287,7 @@ def _build_form(
 
         for field in section.fields:
             concept_name = field.name
-            concept_uuid = make_uuid(f"concept:{concept_name}")
+            concept_uuid = field.conceptUuid or make_uuid(f"concept:{concept_name}")
             e_idx += 1
 
             # Build the answer list for Coded fields. Dedupe by answer-concept
@@ -320,6 +333,7 @@ def _build_form(
                 key_values.append({"key": "min", "value": field.min})
             if field.max is not None:
                 key_values.append({"key": "max", "value": field.max})
+            key_values.extend(recorded_name_key_value(field.spreadsheetName, field.name))
 
             form_elements.append({
                 "uuid": make_uuid(f"formElement:{name}:{concept_name}"),
@@ -381,6 +395,8 @@ def _build_cancellation_form(
         min=None,
         max=None,
         selectionType="SingleSelect",
+        spreadsheetName=None,
+        conceptUuid=None,
     )
     cancel_section = SimpleNamespace(name="Cancellation Details", fields=[reason_field])
     form_dict = _build_form(cancel_name, cancel_form_type, [cancel_section], concepts_registry)

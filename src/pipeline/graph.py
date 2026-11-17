@@ -4,7 +4,9 @@ LangGraph wiring for the bundle generation pipeline.
 The pipeline is split into two compiled graphs around the HITL gate:
 
 - Phase 1: `discover_files → parse_documents → link_forms_to_entities →
-  enrich_with_llm → END`. Produces a state with `pending_changes` populated
+  match_recorded_names → enrich_with_llm → END`. In an update,
+  `match_recorded_names` gives spreadsheet rows the app fields that recorded
+  their names, so those fields are kept and not reviewed again. Produces a state with `pending_changes` populated
   when human-in-the-loop decisions are required, or an empty list when no
   decisions are needed.
 - Phase 2: `apply_user_decisions → generate_entities → generate_forms →
@@ -32,6 +34,7 @@ from pipeline.nodes import (
     diff_against_bundle,
     discover_files,
     enrich_with_llm,
+    match_fields_by_recorded_name,
     generate_entities,
     generate_form_mappings,
     generate_forms,
@@ -72,6 +75,7 @@ def build_phase1_graph() -> Any:
     graph.add_node("discover_files", discover_files)
     graph.add_node("parse_documents", parse_documents)
     graph.add_node("link_forms_to_entities", link_forms_to_entities)
+    graph.add_node("match_recorded_names", match_fields_by_recorded_name)
     graph.add_node("enrich_with_llm", enrich_with_llm)
 
     graph.set_entry_point("discover_files")
@@ -83,7 +87,8 @@ def build_phase1_graph() -> Any:
         "parse_documents", _can_proceed,
         {"continue": "link_forms_to_entities", "abort": END},
     )
-    graph.add_edge("link_forms_to_entities", "enrich_with_llm")
+    graph.add_edge("link_forms_to_entities", "match_recorded_names")
+    graph.add_edge("match_recorded_names", "enrich_with_llm")
     graph.add_edge("enrich_with_llm", END)
 
     return graph.compile()

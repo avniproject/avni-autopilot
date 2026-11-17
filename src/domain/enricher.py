@@ -208,7 +208,9 @@ def enrich_forms(
     user_instructions: str | None,
     llm_helper: LLMHelper,
 ) -> tuple[list[FormSpec], list[Change], list[Change], list[str]]:
-    """Run enrichment across every form.
+    """Run enrichment across every form. A field an update matched to the
+    app's field (it carries the app's concept) keeps the app's name and is
+    not reviewed.
 
     Returns:
         refined_forms   — list of FormSpec, same length/order as input (unchanged)
@@ -216,7 +218,15 @@ def enrich_forms(
         pending_changes — every Change awaiting user confirmation
         warnings        — any warnings worth surfacing
     """
-    problems = _detect_cross_form_conflicts(forms) + _detect_problems(forms)
+    in_app = {
+        (form.name, fld.name)
+        for form in forms for section in form.sections for fld in section.fields
+        if fld.conceptUuid
+    }
+    problems = [
+        p for p in _detect_cross_form_conflicts(forms) + _detect_problems(forms)
+        if (p.form_name, p.field_name) not in in_app
+    ]
 
     if not problems:
         return forms, [], [], []

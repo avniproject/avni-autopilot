@@ -16,7 +16,7 @@ from collections import Counter
 from typing import Any
 
 
-from domain.bundle_editor import apply_field_edits, load_bundle_contents
+from domain.bundle_editor import apply_field_edits, load_bundle_contents, load_bundle_snapshot
 from domain.changes import apply_resolutions
 from domain.diff import (
     current_forms_not_in_desired,
@@ -24,6 +24,7 @@ from domain.diff import (
     entities_not_in_bundle,
     unmatched_desired_forms,
 )
+from domain.recorded_names import match_recorded_names, record_spreadsheet_names
 from domain.spreadsheets import find_spreadsheets
 from domain.enricher import (
     added_names_over_limit,
@@ -251,6 +252,7 @@ def parse_documents(state: BundleState) -> dict:
         }
 
     warnings = list(entity_spec.validation_warnings)
+    record_spreadsheet_names(entity_spec.forms)
 
     log.info(
         "[%s] Parsed — subjects=%d programs=%d encounters=%d forms=%d",
@@ -320,6 +322,22 @@ def link_forms_to_entities(state: BundleState) -> dict:
     )
 
     return {"entity_spec": spec, "form_link_warnings": warnings}
+
+
+# ── Node 2.4: match spreadsheet rows to app fields by recorded name ───────────
+
+
+def match_fields_by_recorded_name(state: BundleState) -> dict:
+    """In an update, give spreadsheet rows the app fields that recorded their
+    names, so the update keeps those fields whether or not the name review runs."""
+    spec = state.get("entity_spec")
+    bundle_path = state.get("bundle_path") or ""
+    # A missing bundle is reported by diff_against_bundle.
+    if state.get("mode") != "edit_from_spec" or spec is None or not spec.forms or not os.path.exists(bundle_path):
+        return {}
+    app_forms = [f["content"] for f in load_bundle_snapshot(bundle_path)["forms"]]
+    match_recorded_names(spec.forms, app_forms)
+    return {"entity_spec": spec}
 
 
 # ── Node 2.5: LLM enrichment ──────────────────────────────────────────────────

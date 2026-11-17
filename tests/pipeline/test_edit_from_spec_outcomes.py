@@ -706,3 +706,43 @@ def test_each_no_change_reason_comes_from_its_own_flag() -> None:
     for on in flags:
         message = tools._no_changes_message(**{f: f == on for f in flags})
         assert [f for f in flags if words[f] in message] == [on], on
+
+
+@pytest.mark.parametrize("review_on_update", [True, False], ids=["AI review on update", "no AI on update"])
+def test_an_update_keeps_fields_the_build_renamed(
+    offline_pipeline: Path, monkeypatch: pytest.MonkeyPatch, review_on_update: bool,
+) -> None:
+    """The build's accepted rename is recorded, so an update neither asks again
+    nor removes the field and adds it back (hiding its saved answers), with or
+    without the AI service."""
+    import pipeline.nodes as nodes
+
+    renamed: dict[str, str] = {}
+
+    def review_renames_the_first_field(forms, _instructions, _helper):
+        form = next(f for f in forms if f.sections and f.sections[0].fields)
+        field = form.sections[0].fields[0]
+        if not field.conceptUuid:
+            # The review words the new name differently each run.
+            field.name = f"{field.spreadsheetName} (reviewed {len(renamed) + 1})"
+            renamed[form.name] = field.name
+        return forms, [], [], []
+
+    def available_only_to_the_review(_self) -> bool:
+        """The build's AI review runs; form linking stays offline."""
+        import sys
+        return sys._getframe(1).f_code.co_name == nodes.enrich_with_llm.__name__
+
+    monkeypatch.setattr(nodes, "enrich_forms", review_renames_the_first_field)
+    monkeypatch.setattr(LLMHelper, "is_available", available_only_to_the_review)
+    bundle = _build()
+    before = bundle.read_bytes()
+    if not review_on_update:
+        monkeypatch.setattr(LLMHelper, "is_available", lambda _self: False)
+
+    result = _update(bundle)
+
+    assert len(renamed) == 1, renamed
+    assert result["status"] == "done" and result.get("no_changes") is True, result
+    assert "removed_fields" not in result
+    assert bundle.read_bytes() == before

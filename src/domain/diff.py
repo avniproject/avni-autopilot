@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 
 from domain.generators import (
     SELECTION_TYPE_DATA_TYPES,
+    SPREADSHEET_NAME_KEY,
     form_element_type,
     name_key,
     selection_words,
@@ -171,7 +172,7 @@ def _diff_form(desired_form: dict, current_form: dict, form_name: str,
     desired_sections = {g.get("uuid"): g for g in desired_groups}
     # A voided page counts as missing: fields added to it would never show.
     current_sections = {
-        g.get("uuid"): g for g in current_form.get("formElementGroups", []) if _is_live(g)
+        g.get("uuid"): g for g in current_form.get("formElementGroups", []) if is_live(g)
     }
 
     only_in_desired = [g for u, g in desired_sections.items() if u not in current_sections]
@@ -204,16 +205,16 @@ def _fields_on_another_page(desired_groups: list[dict], current_form: dict, pair
     page in the desired form; they are neither removed nor added."""
     live_page_of: dict[str, dict] = {}
     for group in current_form.get("formElementGroups", []):
-        if not _is_live(group):
+        if not is_live(group):
             continue
         for e in group.get("formElements", []):
-            if _is_live(e) and _field_key(e):
+            if is_live(e) and _field_key(e):
                 live_page_of.setdefault(_field_key(e), group)
     stays = {
         _field_key(e)
         for _, current_section, pairs in pairings
         for e in current_section.get("formElements", [])
-        if _is_live(e) and any(p is e for p in pairs.values())
+        if is_live(e) and any(p is e for p in pairs.values())
     }
     kept: set[str] = set()
     for group in desired_groups:
@@ -243,7 +244,7 @@ def _without_name_clashes(desired_form: dict, current_form: dict, form_name: str
     kept, else the first."""
     live_in_app = {
         e["uuid"] for g in current_form.get("formElementGroups", [])
-        for e in g.get("formElements", []) if _is_live(e)
+        for e in g.get("formElements", []) if is_live(e)
     }
     placed = [
         (e, group.get("name"))
@@ -275,13 +276,13 @@ def _without_name_clashes(desired_form: dict, current_form: dict, form_name: str
 # ── Per-section diff ──────────────────────────────────────────────────────────
 
 
-def _concept_uuid(element: dict) -> str | None:
+def concept_uuid(element: dict) -> str | None:
     return (element.get("concept") or {}).get("uuid")
 
 
 def _field_key(element: dict) -> str | None:
     """What makes a field the same one on another page: its concept, else its element UUID."""
-    return _concept_uuid(element) or element.get("uuid")
+    return concept_uuid(element) or element.get("uuid")
 
 
 def _pair_elements(desired_section: dict, current_section: dict) -> dict[str, dict]:
@@ -297,17 +298,17 @@ def _pair_elements(desired_section: dict, current_section: dict) -> dict[str, di
     current_by_uuid = {e["uuid"]: e for e in current_elements}
     pairs: dict[str, dict] = {
         e["uuid"]: current_by_uuid[e["uuid"]]
-        for e in desired_elements if _is_live(current_by_uuid.get(e["uuid"]))
+        for e in desired_elements if is_live(current_by_uuid.get(e["uuid"]))
     }
     desired_uuids = {e["uuid"] for e in desired_elements}
     unpaired_by_concept: dict[str, list[dict]] = {}
     for e in current_elements:
-        if _is_live(e) and e["uuid"] not in desired_uuids and _concept_uuid(e):
-            unpaired_by_concept.setdefault(_concept_uuid(e), []).append(e)
+        if is_live(e) and e["uuid"] not in desired_uuids and concept_uuid(e):
+            unpaired_by_concept.setdefault(concept_uuid(e), []).append(e)
     for desired_e in desired_elements:
         if desired_e["uuid"] in pairs:
             continue
-        same_concept = unpaired_by_concept.get(_concept_uuid(desired_e))
+        same_concept = unpaired_by_concept.get(concept_uuid(desired_e))
         if same_concept:
             pairs[desired_e["uuid"]] = same_concept.pop(0)
         elif desired_e["uuid"] in current_by_uuid:
@@ -315,7 +316,7 @@ def _pair_elements(desired_section: dict, current_section: dict) -> dict[str, di
     return pairs
 
 
-def _is_live(item: dict | None) -> bool:
+def is_live(item: dict | None) -> bool:
     """True for a present, non-voided element or page; `{}` stands for none."""
     return bool(item) and not item.get("voided", False)
 
@@ -330,7 +331,7 @@ def _emit_removals(current_section: dict, pairs: dict[str, dict], form_name: str
     """
     paired_ids = {id(e) for e in pairs.values()}
     for e in current_section.get("formElements", []):
-        if not _is_live(e) or id(e) in paired_ids or _field_key(e) in keep:
+        if not is_live(e) or id(e) in paired_ids or _field_key(e) in keep:
             continue
         result.ops.append({
             "op_id": next_id(),
@@ -351,7 +352,7 @@ def _diff_section(desired_section: dict, current_section: dict, pairs: dict[str,
     # section's formElements list (the spec's intent for ordering).
     desired_elements = []
     for e in desired_section.get("formElements", []):
-        if not _is_live(pairs.get(e["uuid"])):
+        if not is_live(pairs.get(e["uuid"])):
             if _field_key(e) in keep:
                 continue
             other_page = elsewhere.get(e["uuid"])
@@ -370,13 +371,13 @@ def _diff_section(desired_section: dict, current_section: dict, pairs: dict[str,
     for uuid in desired_order:
         if uuid in pairs:
             _note_selection_difference(desired_by_uuid[uuid], pairs[uuid], form_name, result)
-        if _is_live(pairs.get(uuid)):
+        if is_live(pairs.get(uuid)):
             _note_unapplied_change(desired_by_uuid[uuid], pairs[uuid], form_name, result)
 
     # ── ADD: in desired, with no live current element ─────────────────────
     for uuid in desired_order:
         current_e = pairs.get(uuid)
-        if _is_live(current_e):
+        if is_live(current_e):
             continue
         payload = _add_payload_from_element(desired_by_uuid[uuid])
         if current_e is not None and payload["dataType"] in SELECTION_TYPE_DATA_TYPES:
@@ -391,7 +392,7 @@ def _diff_section(desired_section: dict, current_section: dict, pairs: dict[str,
 
     # ── REORDER: emitted only if the fields live in both are in another
     # relative order than the desired one.
-    surviving = [u for u in desired_order if _is_live(pairs.get(u))]
+    surviving = [u for u in desired_order if is_live(pairs.get(u))]
     position = {id(pairs[u]): u for u in surviving}
     current_order = [
         position[id(e)]
@@ -401,7 +402,7 @@ def _diff_section(desired_section: dict, current_section: dict, pairs: dict[str,
     ]
     if current_order != surviving:
         order = [
-            (pairs[u] if _is_live(pairs.get(u)) else desired_by_uuid[u]).get("name")
+            (pairs[u] if is_live(pairs.get(u)) else desired_by_uuid[u]).get("name")
             for u in desired_order
         ]
         _place_fields_left_on_the_page(order, current_section, pairs, keep)
@@ -423,7 +424,7 @@ def _place_fields_left_on_the_page(order: list[str], current_section: dict,
     paired = {id(e) for e in pairs.values()}
     previous: str | None = None
     for e in sorted(current_section.get("formElements", []), key=lambda x: x.get("displayOrder") or 0):
-        if not _is_live(e):
+        if not is_live(e):
             continue
         if id(e) in paired:
             previous = e.get("name")
@@ -555,6 +556,8 @@ def _add_payload_from_element(elem: dict) -> dict:
             payload["min"] = v
         elif k == "max":
             payload["max"] = v
+        elif k == SPREADSHEET_NAME_KEY:
+            payload["spreadsheetName"] = v
     # Coded options come back from concept.answers
     answers = concept.get("answers") or []
     if concept.get("dataType") == "Coded" and answers:
