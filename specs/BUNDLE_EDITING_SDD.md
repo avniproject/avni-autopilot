@@ -99,6 +99,9 @@ Effect:
   - **If found and live** — duplicate-name conflict; reject with `"duplicate_name"`.
   - **If not found** — append a new form element with the computed UUID, `voided: false`, and `displayOrder = max(existing displayOrder) + 1` (counting voided elements).
 - Compute the concept UUID `uuid5(NS, f"concept:{field_name}")`. If not already in `concepts.json`, append a new entry (with answers for Coded). If present, reuse — do not modify.
+- **The organisation's own concepts.** avni-server refuses a concept whose name it already holds under another UUID, and the form that refers to it then fails too. Concepts made in App Designer have random UUIDs, so each Coded option, and the field's own concept, is first looked up by name (case and outer spaces ignored) in `concepts.json`, its entries' answers, and the concepts and answers on the bundle's forms (a parent organisation's concepts appear only there):
+  - An option found takes that concept's name and UUID; one not found gets `uuid5(NS, f"concept:{option}")`.
+  - A field concept found under another UUID is reused as it is: nothing is appended. Its data type must be the one asked for and, for Coded, its options must be the ones asked for; otherwise the op is rejected with `"not_allowed"` and a hint, since the editor never modifies a concept.
 
 This is the **only** operation that may write to `concepts.json`, and it only ever appends.
 
@@ -123,7 +126,7 @@ Effect — rename is implemented as **void-then-add**, atomically:
    - If an element with that UUID exists and is voided (the user is renaming back to a previously-removed name), un-void it. The original record reactivates with all its existing observations.
    - Otherwise insert a new form element at the **original element's displayOrder** so the rename appears in place visually. Live elements with `displayOrder ≥ original` shift down by 1.
 5. Carry the captured field properties onto the new element.
-6. Compute `new_concept_uuid = uuid5(NS, f"concept:{new_name}")`. If not in `concepts.json`, append it; otherwise reuse.
+6. Compute `new_concept_uuid = uuid5(NS, f"concept:{new_name}")`. If not in `concepts.json`, append it with the field's answers under their own UUIDs; otherwise reuse. The organisation's own concepts are looked up by name first, as for `field.add` (§4.1); a rejection there is raised before anything changes.
 
 Why void-then-add: deterministic UUIDs tie name → UUID, so the new name must have its own UUID. Keeping name and UUID consistent for every live element means future lookups always resolve cleanly via the same scheme. The server-side cost is that observations against the old form element stay attached to the (now voided) record — structurally a `field.remove` + `field.add`.
 

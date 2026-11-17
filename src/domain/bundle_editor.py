@@ -71,6 +71,7 @@ def apply_field_edits(bundle_path: str, operations: list[dict]) -> EditResult:
     with _open_bundle(bundle_path) as workdir:
         forms = _load_forms(workdir)            # {file_name: form_dict}
         concepts = _load_concepts(workdir)      # {uuid: concept_dict}
+        known = _KnownConcepts(concepts, forms)
 
         ops, schema_rejects = _parse_operations(operations)
         result.rejected.extend(schema_rejects)
@@ -79,7 +80,7 @@ def apply_field_edits(bundle_path: str, operations: list[dict]) -> EditResult:
 
         for op in ops:
             try:
-                _apply_one(op, forms, concepts, result, modified_forms)
+                _apply_one(op, forms, known, result, modified_forms)
             except _OpReject as r:
                 result.rejected.append(RejectedOp(op_id=op.op_id, kind=r.kind, reason=r.reason, hint=r.hint))
 
@@ -119,6 +120,63 @@ def apply_field_edits(bundle_path: str, operations: list[dict]) -> EditResult:
     return result
 
 
+# ── Concepts the organisation already has ─────────────────────────────────────
+
+
+class _KnownConcepts:
+    """The bundle's concepts, looked up by name the way avni-server matches them.
+
+    avni-server refuses a concept whose name it already holds under another
+    UUID, so a field or answer the editor adds takes the organisation's UUID
+    for that name. concepts.json lists the organisation's own concepts; form
+    elements also carry concepts and answers from a parent organisation, which
+    concepts.json leaves out.
+    """
+
+    def __init__(self, concepts: dict[str, dict], forms: dict[str, dict]):
+        self.concepts = concepts
+        self._by_name: dict[str, list[dict]] = {}
+        for concept in list(concepts.values()):
+            self._index(concept)
+        for concept in list(concepts.values()):
+            for answer in concept.get("answers") or []:
+                self._index(answer)
+        for form in forms.values():
+            for group in form.get("formElementGroups", []):
+                for element in group.get("formElements", []):
+                    concept = element.get("concept") or {}
+                    self._index(concept)
+                    for answer in concept.get("answers") or []:
+                        self._index(answer)
+
+    def named(self, name: str) -> dict | None:
+        """The concept of this name: a live one before a voided one, and one
+        spelt exactly so before one differing only in case."""
+        exact = name.strip()
+        return min(
+            self._by_name.get(name_key(name), []),
+            key=lambda c: (bool(c.get("voided")), (c.get("name") or "").strip() != exact),
+            default=None,
+        )
+
+    def add(self, concept: dict) -> None:
+        """Append a new concept to concepts.json and make it, and its answers, known by name."""
+        self.concepts[concept["uuid"]] = concept
+        self._index(concept)
+        for answer in concept.get("answers") or []:
+            self._index(answer)
+
+    def _index(self, concept: dict) -> None:
+        if concept.get("uuid") and concept.get("name"):
+            self._by_name.setdefault(name_key(concept["name"]), []).append(concept)
+
+
+class _FieldConcept(NamedTuple):
+    """The concept a field refers to; `existing` marks one the organisation already has."""
+    entry: dict
+    existing: bool = False
+
+
 # ── Op application ────────────────────────────────────────────────────────────
 
 
@@ -132,7 +190,7 @@ class _OpReject(Exception):
 def _apply_one(
     op: EditOperation,
     forms: dict[str, dict],
-    concepts: dict[str, dict],
+    known: _KnownConcepts,
     result: EditResult,
     modified_forms: set[str],
 ) -> None:
@@ -142,7 +200,7 @@ def _apply_one(
 
     file_name, form = _find_form(forms, form_name, op.target.get("form_uuid"))
     section = _find_section(form, op.target.get("section", ""), op.target.get("section_uuid"))
-    _apply_section_op(op, form, section, concepts, result, form_name)
+    _apply_section_op(op, form, section, known, result, form_name)
 
     modified_forms.add(file_name)
     result.applied.append(op.op_id)
@@ -152,14 +210,14 @@ def _apply_section_op(
     op: EditOperation,
     form: dict,
     section: dict,
-    concepts: dict[str, dict],
+    known: _KnownConcepts,
     result: EditResult,
     form_name: str,
 ) -> None:
     if op.kind == "field.add":
-        _apply_add(op, form, section, concepts, result, form_name)
+        _apply_add(op, form, section, known, result, form_name)
     elif op.kind == "field.rename":
-        _apply_rename(op, form, section, concepts, result, form_name)
+        _apply_rename(op, form, section, known, result, form_name)
     elif op.kind == "field.remove":
         _apply_remove(op, section, result)
     elif op.kind == "section.reorder_fields":
@@ -172,7 +230,7 @@ def _apply_add(
     op: EditOperation,
     form: dict,
     section: dict,
-    concepts: dict[str, dict],
+    known: _KnownConcepts,
     result: EditResult,
     form_name: str,
 ) -> None:
@@ -209,8 +267,9 @@ def _apply_add(
     if existing is not None and existing.get("voided", False):
         # Reinstate. Checked before any change: a rejected op is not undone.
         _check_selection_type_kept(existing, payload, field_name)
+        reinstated_concept = _reinstated_concept(existing, field_name, payload, form, known)
         existing["voided"] = False
-        _apply_properties(existing, payload, field_name)
+        _apply_properties(existing, payload, field_name, reinstated_concept, known)
         result.form_elements_reinstated += 1
         if (
             not payload.get("selectionType")
@@ -222,26 +281,23 @@ def _apply_add(
                 "as it was before it was removed; Avni cannot switch an existing "
                 "field between single and multi select."
             )
+        _append_if_new(known, reinstated_concept, result)
     else:
-        # New element
+        answers = _answers(data_type, payload.get("options"), known)
+        concept = _field_concept(field_name, data_type, answers, form, known)
         elements = section.setdefault("formElements", [])
-        new_elem = _build_element(form_name, field_name, payload, new_uuid,
+        new_elem = _build_element(field_name, payload, concept, new_uuid,
                                   _next_display_order(elements))
         elements.append(new_elem)
         result.form_elements_added += 1
-
-    # Concept
-    concept_uuid = make_uuid(f"concept:{field_name}")
-    if concept_uuid not in concepts:
-        concepts[concept_uuid] = _build_concept(field_name, data_type, payload, concept_uuid)
-        result.concepts_appended += 1
+        _append_if_new(known, concept, result)
 
 
 def _apply_rename(
     op: EditOperation,
     form: dict,
     section: dict,
-    concepts: dict[str, dict],
+    known: _KnownConcepts,
     result: EditResult,
     form_name: str,
 ) -> None:
@@ -279,14 +335,19 @@ def _apply_rename(
             "duplicate_name",
             f"cannot rename to {new_name!r}: a live field {clash.get('name')!r} already exists in section {section.get('name')!r}",
         )
+    reinstating = new_existing is not None and new_existing.get("voided", False)
+    answers = _answers(
+        captured["dataType"], [a.get("name") for a in captured["answers"] if not a.get("voided", False)], known,
+    )
     try:
         _check_not_live_on_other_page(form, section, new_name)
         _check_not_on_other_page(form, section, new_uuid, new_name)
+        concept = None if reinstating else _field_concept(new_name, captured["dataType"], answers, form, known)
     except _OpReject:
         existing["voided"] = False
         raise
 
-    if new_existing is not None and new_existing.get("voided", False):
+    if reinstating:
         # Reinstate (e.g. renaming back to a previously removed name). It keeps
         # its own properties, as the server has it, but takes the renamed
         # field's place on the page.
@@ -301,23 +362,12 @@ def _apply_rename(
                 "as it was before it was removed; Avni cannot switch an existing "
                 "field between single and multi select."
             )
+        if _uses_generated_concept(new_existing, new_name):
+            _append_if_new(known, _FieldConcept(_new_concept(new_name, captured["dataType"], answers)), result)
     else:
-        new_elem = _build_element_from_captured(new_name, captured, new_uuid)
+        new_elem = _build_element_from_captured(new_name, captured, concept, new_uuid)
         section["formElements"].append(new_elem)
-
-    # Concept for the new name
-    new_concept_uuid = make_uuid(f"concept:{new_name}")
-    if new_concept_uuid not in concepts:
-        # Use the captured dataType + answers so the concept inherits the renamed
-        # field's nature.
-        synth_payload = {
-            "dataType": captured["dataType"],
-            "options": [a.get("name") for a in captured["answers"]],
-        }
-        concepts[new_concept_uuid] = _build_concept(
-            new_name, captured["dataType"], synth_payload, new_concept_uuid,
-        )
-        result.concepts_appended += 1
+        _append_if_new(known, concept, result)
 
     result.form_elements_renamed += 1
 
@@ -367,10 +417,8 @@ def _apply_reorder(op: EditOperation, section: dict, result: EditResult) -> None
 # ── Builders ──────────────────────────────────────────────────────────────────
 
 
-def _build_element(form_name: str, field_name: str, payload: dict, uuid: str, display_order: int) -> dict:
-    data_type = payload.get("dataType", "Text")
-    answers = _build_answers(data_type, payload.get("options"))
-    elem = {
+def _build_element(field_name: str, payload: dict, concept: _FieldConcept, uuid: str, display_order: int) -> dict:
+    return {
         "uuid": uuid,
         "name": field_name,
         "displayOrder": display_order,
@@ -380,18 +428,15 @@ def _build_element(form_name: str, field_name: str, payload: dict, uuid: str, di
         "validationDeclarativeRule": "",
         "rule": "",
         "voided": False,
-        "concept": {
-            "name": field_name,
-            "uuid": make_uuid(f"concept:{field_name}"),
-            "dataType": data_type,
-            "answers": answers,
-        },
+        "concept": _concept_ref(concept.entry, concept.entry["answers"]),
     }
-    return elem
 
 
-def _build_element_from_captured(field_name: str, captured: dict, uuid: str) -> dict:
-    elem = {
+def _build_element_from_captured(field_name: str, captured: dict, concept: _FieldConcept, uuid: str) -> dict:
+    # A new concept keeps the renamed field's answers as they were; an existing
+    # concept of the organisation brings its own.
+    answers = concept.entry["answers"] if concept.existing else captured.get("answers", [])
+    return {
         "uuid": uuid,
         "name": field_name,
         "displayOrder": captured["displayOrder"],
@@ -401,42 +446,146 @@ def _build_element_from_captured(field_name: str, captured: dict, uuid: str) -> 
         "validationDeclarativeRule": "",
         "rule": "",
         "voided": False,
-        "concept": {
-            "name": field_name,
-            "uuid": make_uuid(f"concept:{field_name}"),
-            "dataType": captured["dataType"],
-            "answers": captured.get("answers", []),
-        },
+        "concept": _concept_ref(concept.entry, answers),
     }
-    return elem
 
 
-def _build_concept(name: str, data_type: str, payload: dict, uuid: str) -> dict:
-    answers = _build_answers(data_type, payload.get("options"))
+def _concept_ref(concept: dict, answers: list[dict]) -> dict:
+    return {
+        "name": concept["name"],
+        "uuid": concept["uuid"],
+        "dataType": concept["dataType"],
+        "answers": answers,
+    }
+
+
+def _new_concept(name: str, data_type: str, answers: list[dict]) -> dict:
     return {
         "name": name,
-        "uuid": uuid,
+        "uuid": make_uuid(f"concept:{name}"),
         "dataType": data_type,
         "active": True,
         "answers": answers,
     }
 
 
-def _build_answers(data_type: str, options: list | None) -> list[dict]:
+def _answers(data_type: str, options: list | None, known: _KnownConcepts) -> list[dict]:
+    """Answer entries for a Coded field's options.
+
+    An option the organisation already has as a concept takes that concept's
+    name and UUID: avni-server refuses a concept whose name it holds under
+    another UUID.
+    """
     if data_type != "Coded" or not options:
         return []
     seen: set[str] = set()
     answers: list[dict] = []
-    for opt in options:
-        opt = (opt or "").strip()
-        if not opt:
+    for option in options:
+        option = (option or "").strip()
+        if not option:
             continue
-        u = make_uuid(f"concept:{opt}")
-        if u in seen:
+        existing = known.named(option)
+        name, uuid = (existing["name"], existing["uuid"]) if existing else (option, make_uuid(f"concept:{option}"))
+        if uuid in seen:
             continue
-        seen.add(u)
-        answers.append({"name": opt, "uuid": u, "order": len(answers), "active": True})
+        seen.add(uuid)
+        answers.append({"name": name, "uuid": uuid, "order": len(answers), "active": True})
     return answers
+
+
+def _field_concept(
+    field_name: str, data_type: str, answers: list[dict], form: dict, known: _KnownConcepts,
+) -> _FieldConcept:
+    """The concept a new field element refers to.
+
+    A concept the organisation holds under this name and another UUID is
+    reused, never modified. Otherwise the concept is new (or the generated one
+    this name always maps to).
+    """
+    existing = known.named(field_name)
+    if existing is None or existing["uuid"] == make_uuid(f"concept:{field_name}"):
+        return _FieldConcept(_new_concept(field_name, data_type, answers))
+    return _reused_concept(existing, data_type, answers, form)
+
+
+def _reinstated_concept(
+    element: dict, field_name: str, payload: dict, form: dict, known: _KnownConcepts,
+) -> _FieldConcept:
+    """The concept a brought-back element keeps, checked against what is asked of it."""
+    if _uses_generated_concept(element, field_name):
+        data_type = payload.get("dataType", "Text")
+        return _FieldConcept(_new_concept(field_name, data_type, _answers(data_type, payload.get("options"), known)))
+    data_type = _reinstated_data_type(element, payload)
+    answers = _answers(data_type, payload.get("options"), known)
+    concept_uuid = element["concept"]["uuid"]
+    organisation_concept = known.concepts.get(concept_uuid) or element["concept"]
+    return _reused_concept(organisation_concept, data_type, answers, form, reusing_element=element)
+
+
+def _uses_generated_concept(element: dict, field_name: str) -> bool:
+    return element.get("concept", {}).get("uuid") == make_uuid(f"concept:{field_name}")
+
+
+def _reused_concept(
+    existing: dict, data_type: str, answers: list[dict], form: dict, reusing_element: dict | None = None,
+) -> _FieldConcept:
+    """An organisation concept a field may refer to as it is: same data type,
+    same options, and no other live field of the form asking it."""
+    existing_data_type = existing.get("dataType") or "NA"
+    if existing_data_type == "NA":
+        raise _OpReject(
+            "not_allowed",
+            f"{existing['name']!r} is an answer option in this organisation, so a field cannot use that name",
+            hint="choose another field name",
+        )
+    if existing_data_type != data_type:
+        raise _OpReject(
+            "not_allowed",
+            f"this organisation already has a {existing_data_type} concept named {existing['name']!r}, "
+            f"so a {data_type} field cannot use that name",
+            hint=f"add it as {existing_data_type} or choose another field name",
+        )
+    existing_answers = [a for a in existing.get("answers") or [] if not a.get("voided", False)]
+    if data_type == "Coded" and _answer_keys(existing_answers) != _answer_keys(answers):
+        listed = ", ".join(a.get("name", "") for a in existing_answers)
+        raise _OpReject(
+            "not_allowed",
+            f"this organisation already has a Coded concept named {existing['name']!r} "
+            f"with the options {listed}; its options cannot be changed here",
+            hint="add the field with exactly those options or choose another field name",
+        )
+    asking = next(
+        (e for g in form.get("formElementGroups", []) for e in g.get("formElements", [])
+         if not e.get("voided", False) and e is not reusing_element
+         and e.get("concept", {}).get("uuid") == existing["uuid"]),
+        None,
+    )
+    if asking is not None:
+        raise _OpReject(
+            "not_allowed",
+            f"the field {asking.get('name')!r} of this form already asks the organisation's "
+            f"concept {existing['name']!r}, and a form cannot ask one concept twice",
+            hint="use that field or choose another field name",
+        )
+    entry = {
+        "name": existing["name"],
+        "uuid": existing["uuid"],
+        "dataType": existing_data_type,
+        "answers": existing_answers,
+    }
+    return _FieldConcept(entry, existing=True)
+
+
+def _answer_keys(answers: list[dict]) -> set[str]:
+    return {name_key(a.get("name")) for a in answers}
+
+
+def _append_if_new(known: _KnownConcepts, concept: _FieldConcept, result: EditResult) -> None:
+    """Add a new concept to concepts.json; the organisation's own concepts are only referenced."""
+    if concept.existing or concept.entry["uuid"] in known.concepts:
+        return
+    known.add(concept.entry)
+    result.concepts_appended += 1
 
 
 def _build_key_values(payload: dict) -> list[dict]:
@@ -473,14 +622,17 @@ def _check_selection_type_kept(elem: dict, payload: dict, field_name: str) -> No
         )
 
 
-def _apply_properties(elem: dict, payload: dict, field_name: str) -> None:
+def _apply_properties(
+    elem: dict, payload: dict, field_name: str, concept: _FieldConcept, known: _KnownConcepts,
+) -> None:
     """Overwrite a reinstated element's mutable properties from the payload.
 
     For data types that take a single/multi select setting the element keeps
-    its own (`_check_selection_type_kept` has refused a different one).
+    its own (`_check_selection_type_kept` has refused a different one). An
+    organisation concept keeps its own answers.
     """
     data_type = _reinstated_data_type(elem, payload)
-    answers = _build_answers(data_type, payload.get("options"))
+    answers = concept.entry["answers"] if concept.existing else _answers(data_type, payload.get("options"), known)
     elem["mandatory"] = bool(payload.get("mandatory", elem.get("mandatory", False)))
     if data_type in SELECTION_TYPE_DATA_TYPES:
         elem["type"] = form_element_type(elem.get("type"))

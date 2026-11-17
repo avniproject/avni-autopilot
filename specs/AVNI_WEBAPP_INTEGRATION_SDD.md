@@ -192,7 +192,7 @@ type name:
 | `hitl.pending` | `{interrupt_id, changes: [...]}` | `interrupt()` fires |
 | `pipeline.progress` | `{node, status}` | LangGraph node start/end (best-effort) |
 | `bundle.ready` | `{path, summary}` | ZIP written to disk |
-| `upload.done` | `{job_id, status}` | `/import/new` returns |
+| `upload.done` | `{job_id, status, details?, error_log_available?}` | the import job `/import/new` started has finished (or could not be confirmed) |
 | `error` | `{code, message, recoverable}` | Recoverable or terminal error |
 | `session.closed` | `{reason}` | Session ended or expired |
 
@@ -368,6 +368,9 @@ deferred problem; not built in this SDD.
 | `interrupt()` resolve | client posts invalid `change_id` | 400 response on `/resolve`; the pending HITL stays pending. |
 | `bundle.ready` | ZIP write fails (disk full) | `error` SSE event; session terminal. |
 | Auto-upload | `/import/new` returns non-2xx | `upload.done` SSE with `status: "failed"` + `details`; user can retry or download instead. |
+| Auto-upload | The import job ends `FAILED`, or `COMPLETED` with files skipped | `upload.done` with `status: "failed"`, `details` naming the files and avni-server's reasons from `/import/errorfile`, and the full error file as the upload error log. `status: "ok"` only when every file was imported. |
+| Auto-upload | Telling this upload's job apart | Each upload is sent as `<bundle>-<12 hex>.zip`; avni-server records that name on the job, so the watch matches it by name among the user's other jobs. |
+| Auto-upload | The job's outcome cannot be read within 10 minutes | `upload.done` with `status: "failed"` saying the result could not be confirmed and pointing to Admin › Upload. A job still running 45 s after the request started returns `status: "importing"` from the request and publishes `upload.done` when it ends. |
 | Auto-upload | admin token expired mid-session | Service returns 401 on `/upload-to-avni`; webapp prompts re-auth and retries. |
 | SSE disconnect | client EventSource drops | Server keeps the session alive; on reconnect, replays events buffered after `Last-Event-ID`. |
 | Concurrent tab | same `session_id` opened twice | Second `EventSource` is rejected (`409 Conflict`); one stream per session. |

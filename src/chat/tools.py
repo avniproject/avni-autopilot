@@ -990,6 +990,11 @@ def edit_bundle_fields(
     field keeps its setting, and asking for the other one is rejected
     ('not_allowed').
 
+    Options and field names the organisation already has as concepts keep
+    the organisation's concept. A field named like one of its concepts must
+    have that concept's data type and, for Coded, its options; otherwise the
+    op is rejected ('not_allowed') with a hint.
+
     Matching is case-folded + whitespace-stripped EXACT (no fuzzy). On a
     mismatch the op is rejected with kind 'not_found' / 'ambiguous_target' /
     'duplicate_name' / 'schema'; a rejection's `hint` says how to retry

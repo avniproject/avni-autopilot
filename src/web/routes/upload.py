@@ -10,7 +10,10 @@ hits — see `avni-webapp/src/upload/api.js`). Failure modes: SDD §9.
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +44,27 @@ IMPORT_TYPE = "metadataZip"
 # How long the bundle relay may take. Avni-server's import processes
 # asynchronously — the response is just job-acceptance, so 30 s is enough.
 UPLOAD_TIMEOUT_SEC = 30.0
+
+IMPORT_STATUS_PATH = "/import/status"
+IMPORT_ERROR_FILE_PATH = "/import/errorfile"
+# Spring Batch statuses after which an import job no longer changes.
+FINISHED_JOB_STATUSES = frozenset({"COMPLETED", "FAILED", "STOPPED", "ABANDONED"})
+# The upload request, counted from its start, waits at most this long for the
+# import to finish, under a load balancer's usual 60 s idle timeout; a longer
+# import is reported when it ends.
+IMPORT_WAIT_IN_REQUEST_SEC = 45.0
+IMPORT_WATCH_LIMIT_SEC = 600.0
+IMPORT_POLL_INTERVAL_SEC = 2.0
+IMPORT_NOT_CONFIRMED = (
+    "Avni accepted the file, but its import result could not be read. "
+    "Open Admin › Upload to see whether it was imported."
+)
+# Error lines quoted in the chat; the full error file is in the upload error log.
+MAX_IMPORT_ERRORS_SHOWN = 3
+
+# Import watches still running after their upload request returned; held so
+# the event loop does not drop them.
+_running_import_watches: set[asyncio.Task] = set()
 
 # 1 MiB per read — small enough to stay responsive on a slow disk, big
 # enough that 10 MB workbooks copy in ~10 reads.
@@ -196,15 +220,17 @@ async def upload_to_avni(
     a successful `generate_bundle` / `edit_bundle_from_spec` — SDD §7).
     The admin's auth token captured at session creation is reused here.
 
-    avni-server returns the import job id (response body — opaque text).
-    The browser deep-links to the existing UploadStatus page filtered to
-    that job id.
+    avni-server only accepts the file; the import then runs as a job. The
+    `upload.done` event says ok only when that job imported every file, and
+    otherwise carries avni-server's reasons. An import still running after
+    IMPORT_WAIT_IN_REQUEST_SEC returns status "importing" and publishes
+    `upload.done` when it ends.
     """
     session = _require_session(session_id, store)
 
     # The token comes from this request, not the session — the browser
-    # refreshes it automatically, so it is always current, and nothing keeps
-    # a credential in memory between calls.
+    # refreshes it automatically, so it is always current. Only the watch of
+    # this upload's import holds it, until the import ends.
     if not auth_token:
         raise HTTPException(
             status_code=401,
@@ -241,6 +267,11 @@ async def upload_to_avni(
         "user-name": session.username,
     }
     file_path = Path(session.bundle_path)
+    # avni-server records the uploaded file's name on the import job; a name of
+    # its own lets the watch find this upload's job among the user's others.
+    upload_name = f"{file_path.stem}-{uuid.uuid4().hex[:12]}{file_path.suffix}"
+    loop = asyncio.get_running_loop()
+    request_started = loop.time()
 
     try:
         async with httpx.AsyncClient(timeout=UPLOAD_TIMEOUT_SEC) as client:
@@ -249,7 +280,7 @@ async def upload_to_avni(
                     url,
                     params=params,
                     headers=headers,
-                    files={"file": (file_path.name, fh, "application/zip")},
+                    files={"file": (upload_name, fh, "application/zip")},
                 )
     except httpx.HTTPError as exc:
         _record_relay_failure(
@@ -290,58 +321,128 @@ async def upload_to_avni(
             },
         )
 
-    # avni-server's /import/new returns the literal string "true" on
-    # acceptance — not the job UUID. Discover the UUID via /import/status,
-    # matching by fileName so a concurrent upload doesn't get attributed.
-    job_uuid = await _fetch_latest_job_uuid(
-        base_url=settings.avni_server_base_url,
-        headers=headers,
-        file_name=file_path.name,
+    # avni-server's /import/new only accepts the file; the import runs as a
+    # job. Its outcome is what the user is told.
+    watch = asyncio.create_task(_watch_import(session, headers=headers, upload_name=upload_name))
+    _running_import_watches.add(watch)
+    watch.add_done_callback(_running_import_watches.discard)
+    time_left = IMPORT_WAIT_IN_REQUEST_SEC - (loop.time() - request_started)
+    finished, _ = await asyncio.wait({watch}, timeout=max(time_left, 0.0))
+    if finished:
+        return watch.result()
+    return {"job_id": "", "status": "importing"}
+
+
+async def _watch_import(session: ChatSession, *, headers: dict[str, str], upload_name: str) -> dict[str, Any]:
+    """Wait for the import job of this upload to finish and publish `upload.done`."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            job = await _finished_job(client, headers, upload_name)
+            outcome = await _import_outcome(client, session, headers=headers, job=job)
+    except Exception:  # noqa: BLE001 — the user must hear back whatever went wrong
+        log.exception(f"import watch failed for sid={session.session_id}")
+        outcome = {"job_id": "", "status": "failed", "details": IMPORT_NOT_CONFIRMED, "error_log_available": False}
+    session.bus.publish("upload.done", outcome)
+    return outcome
+
+
+async def _finished_job(
+    client: httpx.AsyncClient, headers: dict[str, str], upload_name: str,
+) -> dict[str, Any] | None:
+    """This upload's job once finished, or as last seen when the watch limit passes."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + IMPORT_WATCH_LIMIT_SEC
+    job: dict[str, Any] | None = None
+    while True:
+        jobs = await _recent_import_jobs(client, headers)
+        if jobs is not None:
+            job = next((j for j in jobs if j.get("fileName") == upload_name), None)
+            if job is not None and job.get("status") in FINISHED_JOB_STATUSES:
+                return job
+        if loop.time() >= deadline:
+            return job
+        await asyncio.sleep(IMPORT_POLL_INTERVAL_SEC)
+
+
+async def _import_outcome(
+    client: httpx.AsyncClient, session: ChatSession, *, headers: dict[str, str], job: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """`upload.done` payload: ok only when every file of the bundle was imported."""
+    job_uuid = (job or {}).get("uuid") or ""
+    if job is None or job.get("status") not in FINISHED_JOB_STATUSES:
+        log.warning(f"import job for sid={session.session_id} not confirmed: {job}")
+        return {"job_id": job_uuid, "status": "failed", "details": IMPORT_NOT_CONFIRMED,
+                "error_log_available": False}
+    if job.get("status") == "COMPLETED" and not job.get("skipped"):
+        return {"job_id": job_uuid, "status": "ok"}
+
+    error_file = await _import_error_file(client, headers, job_uuid)
+    details = _import_failure_details(job, error_file)
+    log.warning(f"import job {job_uuid} sid={session.session_id} did not import everything: {details}")
+    error_log = _write_upload_error_log(
+        session.workdir,
+        status_code=200,
+        body=error_file or details,
+        context=f"import job {job_uuid} finished {job.get('status')} with {job.get('skipped')} file(s) skipped",
     )
-    session.bus.publish(
-        "upload.done", {"job_id": job_uuid or "", "status": "ok"},
-    )
-    return {"job_id": job_uuid or "", "status": "ok"}
+    return {"job_id": job_uuid, "status": "failed", "details": details,
+            "error_log_available": error_log is not None}
 
 
-async def _fetch_latest_job_uuid(
-    *,
-    base_url: str,
-    headers: dict[str, str],
-    file_name: str,
-    retries: int = 3,
-    retry_delay_sec: float = 0.5,
-) -> str | None:
-    """Look up the import job UUID for `file_name` via /import/status.
+def _import_failure_details(job: dict[str, Any], error_file: str | None) -> str:
+    """One line for the chat: how many files were not imported and avni-server's first reasons."""
+    total, skipped = job.get("total") or 0, job.get("skipped") or 0
+    if skipped:
+        summary = f"Avni did not import {skipped} of the {total} files in the app"
+    else:
+        summary = f"Avni's import job ended with status {job.get('status')}"
+    reasons = _import_error_reasons(error_file or "")
+    if not reasons:
+        return f"{summary}."
+    shown = "; ".join(reasons[:MAX_IMPORT_ERRORS_SHOWN])
+    more = len(reasons) - MAX_IMPORT_ERRORS_SHOWN
+    return f"{summary}: {shown}" + (f" (and {more} more)" if more > 0 else "")
 
-    Returns None on any failure — the upload has already succeeded by this
-    point, so a missing UUID only blocks the inline error-file download.
-    Retries cover the case where /import/status hasn't yet caught up.
-    """
-    url = f"{base_url.rstrip('/')}/import/status"
-    params = {"size": 10}
-    for attempt in range(retries):
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url, params=params, headers=headers)
-            if resp.status_code >= 400:
-                log.warning(
-                    f"import/status returned {resp.status_code}: {resp.text[:200]}"
-                )
-                return None
-            payload = resp.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            log.warning(f"import/status fetch failed: {exc}")
+
+def _import_error_reasons(error_file: str) -> list[str]:
+    """`<file>: <first line of avni-server's message>` per record of the CSV
+    error file; each message is followed by its stack trace."""
+    reasons = []
+    for row in csv.reader(io.StringIO(error_file)):
+        if len(row) >= 2 and row[0].strip() and row[1].strip():
+            reasons.append(f"{row[0].strip()}: {row[1].strip().splitlines()[0]}")
+    return reasons
+
+
+async def _recent_import_jobs(client: httpx.AsyncClient, headers: dict[str, str]) -> list[dict[str, Any]] | None:
+    """The user's latest import jobs, newest first; None when avni-server cannot be read."""
+    url = settings.avni_server_base_url.rstrip("/") + IMPORT_STATUS_PATH
+    try:
+        resp = await client.get(url, params={"size": 10}, headers=headers)
+        if resp.status_code >= 400:
+            log.warning(f"import/status returned {resp.status_code}: {resp.text[:200]}")
             return None
-        for entry in payload.get("content") or []:
-            if entry.get("fileName") == file_name and entry.get("uuid"):
-                return entry["uuid"]
-        if attempt + 1 < retries:
-            await asyncio.sleep(retry_delay_sec)
-    log.warning(
-        f"could not locate import job for fileName={file_name!r} after {retries} attempts"
-    )
-    return None
+        return resp.json().get("content") or []
+    except (httpx.HTTPError, ValueError, AttributeError) as exc:
+        log.warning(f"import/status fetch failed: {exc}")
+        return None
+
+
+async def _import_error_file(client: httpx.AsyncClient, headers: dict[str, str], job_uuid: str) -> str | None:
+    url = settings.avni_server_base_url.rstrip("/") + IMPORT_ERROR_FILE_PATH
+    try:
+        resp = await client.get(
+            url,
+            params={"jobUuid": job_uuid},
+            headers={**headers, "Content-Type": "application/octet-stream"},
+        )
+        if resp.status_code >= 400:
+            log.warning(f"import/errorfile returned {resp.status_code} for job {job_uuid}")
+            return None
+        return resp.text.lstrip("\ufeff")
+    except httpx.HTTPError as exc:
+        log.warning(f"import/errorfile fetch failed for job {job_uuid}: {exc}")
+        return None
 
 
 # ── GET /sessions/{id}/upload-error-log ───────────────────────────────────────

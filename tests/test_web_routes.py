@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import re
 from pathlib import Path
 from typing import Any
 
+import anyio
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -76,8 +78,18 @@ def _install_fake_avni_server(
     userinfo_body: dict | None = None,
     import_status: int = 200,
     import_body: str = "job-42",
+    import_job: dict | list[dict] | None = None,
+    import_error_file: str = "",
 ) -> None:
-    """Replace verify_token and the upload-to-avni httpx client with mocks."""
+    """Replace verify_token and the upload-to-avni httpx client with mocks.
+
+    Each accepted upload starts a job named after the uploaded file, as
+    avni-server does; `import_job` (one override, or one per upload in order)
+    sets how it ends — by default completed with nothing skipped. A job is
+    listed from the second /import/status call after its upload, as
+    avni-server can list a new job a moment late. An earlier job of the same
+    bundle is always listed.
+    """
     userinfo_body = userinfo_body or {"username": "alice", "organisationName": "Srijan"}
 
     async def fake_verify(base_url: str, header: str, *, client: httpx.AsyncClient | None = None):
@@ -94,6 +106,11 @@ def _install_fake_avni_server(
 
     # For /upload-to-avni: patch httpx.AsyncClient with a MockTransport.
     real_async_client = httpx.AsyncClient
+    earlier_job = {"fileName": "Srijan-0123456789ab.zip", "uuid": "job-earlier", "status": "COMPLETED",
+                   "total": 3, "completed": 1, "skipped": 2}
+    overrides = import_job if isinstance(import_job, list) else [import_job or {}]
+    # Newest first, each with the number of /import/status calls since its upload.
+    jobs: list[dict] = []
 
     def fake_async_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -110,15 +127,23 @@ def _install_fake_avni_server(
                 # On success avni-server returns the literal "true"; on failure
                 # callers can override import_body to inspect the error path.
                 body = "true" if import_status == 200 else import_body
+                if import_status == 200:
+                    file_name = re.search(rb'filename="([^"]+)"', request.content).group(1).decode()
+                    n = len(jobs)
+                    jobs.insert(0, {"job": {
+                        "fileName": file_name, "uuid": import_body if n == 0 else f"{import_body}-{n + 1}",
+                        "status": "COMPLETED", "total": 19, "completed": 19, "skipped": 0,
+                        **overrides[min(n, len(overrides) - 1)],
+                    }, "status_calls": 0})
                 return httpx.Response(import_status, content=body)
             if request.url.path == "/import/status":
-                # Production code calls this after a successful /import/new to
-                # resolve the job UUID by fileName. import_body doubles as the
-                # job UUID in this path.
-                return httpx.Response(
-                    200,
-                    json={"content": [{"fileName": "Srijan.zip", "uuid": import_body}]},
-                )
+                for entry in jobs:
+                    entry["status_calls"] += 1
+                listed = [entry["job"] for entry in jobs if entry["status_calls"] >= 2]
+                return httpx.Response(200, json={"content": [*listed, earlier_job]})
+            if request.url.path == "/import/errorfile":
+                assert request.url.params.get("jobUuid") in {entry["job"]["uuid"] for entry in jobs}
+                return httpx.Response(200, content=import_error_file)
             raise AssertionError(f"unexpected request to {request.url.path}")
         kwargs["transport"] = httpx.MockTransport(handler)
         return real_async_client(*args, **kwargs)
@@ -404,3 +429,179 @@ def test_get_events_returns_409_when_stream_in_use(client: TestClient) -> None:
     r = client.get(f"/sessions/{sid}/events")
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "E_DUP_STREAM"
+
+
+# ── upload-to-avni: the import job's outcome ─────────────────────────────────
+
+# avni-server's error file for the chat-added field that could not be imported
+# (Concern India UAT, prerelease, 17 Nov 2026), stack traces trimmed.
+_CONCEPT_CLASH_ERROR_FILE = (
+    "\ufeffconcepts.json,\"Concept with name 'Yes' already exists with different UUID: 8509a321\n"
+    "org.avni.server.util.BadRequestError: Concept with name 'Yes' already exists with different UUID: 8509a321\n"
+    "\tat org.avni.server.service.ConceptService.assertNotDuplicate(ConceptService.java:300)\n"
+    "\"\n"
+    "forms/Women Registration_b4d84445.json,\"Concept with uuid 'c5f027af' not found\n"
+    "org.avni.server.builder.FormBuilderException: Concept with uuid 'c5f027af' not found\n"
+    "\"\n"
+)
+
+
+def _app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **fake_server: Any):
+    """An app whose upload-to-avni talks to a fake avni-server."""
+    _patch_settings(monkeypatch, avni_server_base_url="https://x.test", ai_session_dir=str(tmp_path / "s"))
+    monkeypatch.setattr(upload_routes, "IMPORT_POLL_INTERVAL_SEC", 0.01)
+    _install_stub_chat_service(monkeypatch)
+    _install_fake_avni_server(monkeypatch, **fake_server)
+    return create_app()
+
+
+def _upload(c: TestClient) -> tuple[dict, ChatSession]:
+    """Upload a bundle; returns the response body and the session."""
+    sid = c.post("/sessions", headers={"Authorization": "Bearer abc"}).json()["session_id"]
+    session = c.app.state.store.get(sid)
+    zip_path = session.workdir / "output" / "Srijan.zip"
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    zip_path.write_bytes(b"PK")
+    session.bundle_path = zip_path
+    r = c.post(f"/sessions/{sid}/upload-to-avni", headers={"AUTH-TOKEN": "tok"})
+    assert r.status_code == 200
+    return r.json(), session
+
+
+def _upload_done_events(session: ChatSession) -> list[dict]:
+    return [e.data for e in session.bus._buffer if e.type == "upload.done"]
+
+
+def test_an_upload_is_ok_only_when_the_import_imported_every_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    with TestClient(_app(monkeypatch, tmp_path)) as c:
+        body, session = _upload(c)
+    assert body == {"job_id": "job-42", "status": "ok"}
+    assert _upload_done_events(session) == [body]
+
+
+def test_an_import_that_skipped_files_is_reported_as_failed_with_avnis_reasons(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    app = _app(monkeypatch, tmp_path, import_job={"completed": 17, "skipped": 2},
+               import_error_file=_CONCEPT_CLASH_ERROR_FILE)
+    with TestClient(app) as c:
+        body, session = _upload(c)
+        error_log = c.get(f"/sessions/{session.session_id}/upload-error-log")
+    assert body["status"] == "failed"
+    assert body["details"] == (
+        "Avni did not import 2 of the 19 files in the app: "
+        "concepts.json: Concept with name 'Yes' already exists with different UUID: 8509a321; "
+        "forms/Women Registration_b4d84445.json: Concept with uuid 'c5f027af' not found"
+    )
+    assert body["error_log_available"] is True
+    assert _upload_done_events(session) == [body]
+    assert error_log.status_code == 200
+    assert "assertNotDuplicate" in error_log.text
+
+
+def test_a_failed_import_job_is_reported_as_failed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    with TestClient(_app(monkeypatch, tmp_path, import_job={"status": "FAILED", "skipped": 0})) as c:
+        body, _ = _upload(c)
+    assert body["status"] == "failed"
+    assert body["details"] == "Avni's import job ended with status FAILED."
+
+
+def test_an_import_that_never_shows_its_outcome_is_not_reported_as_ok(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(upload_routes, "IMPORT_WATCH_LIMIT_SEC", 0.05)
+    with TestClient(_app(monkeypatch, tmp_path, import_job={"status": "STARTED"})) as c:
+        body, session = _upload(c)
+    assert body["status"] == "failed"
+    assert body["details"] == upload_routes.IMPORT_NOT_CONFIRMED
+    assert _upload_done_events(session) == [body]
+
+
+def test_a_long_import_returns_importing_and_reports_its_outcome_when_it_ends(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(upload_routes, "IMPORT_WAIT_IN_REQUEST_SEC", 0.05)
+    monkeypatch.setattr(upload_routes, "IMPORT_WATCH_LIMIT_SEC", 0.3)
+    with TestClient(_app(monkeypatch, tmp_path, import_job={"status": "STARTED"})) as c:
+        body, session = _upload(c)
+        assert body == {"job_id": "", "status": "importing"}
+        assert _upload_done_events(session) == []
+        c.portal.call(anyio.sleep, 0.6)
+    later = _upload_done_events(session)
+    assert [e["status"] for e in later] == ["failed"]
+    assert later[0]["details"] == upload_routes.IMPORT_NOT_CONFIRMED
+
+
+def test_each_upload_reports_its_own_import_job(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Every upload of a bundle has the bundle's name; avni-server lists the
+    user's jobs newest first, so a job is told apart by the upload's own name."""
+    app = _app(monkeypatch, tmp_path, import_job=[{"skipped": 2}, {}])
+    with TestClient(app) as c:
+        first, session = _upload(c)
+        second = c.post(f"/sessions/{session.session_id}/upload-to-avni", headers={"AUTH-TOKEN": "tok"}).json()
+    assert (first["job_id"], first["status"]) == ("job-42", "failed")
+    assert (second["job_id"], second["status"]) == ("job-42-2", "ok")
+    assert [e["job_id"] for e in _upload_done_events(session)] == ["job-42", "job-42-2"]
+
+
+def test_the_upload_carries_a_name_of_its_own(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    names: list[str] = []
+    real_post = httpx.AsyncClient.post
+
+    async def recording_post(self, url, **kwargs):
+        names.append(kwargs["files"]["file"][0])
+        return await real_post(self, url, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", recording_post)
+    with TestClient(_app(monkeypatch, tmp_path)) as c:
+        _upload(c)
+    assert len(names) == 1
+    assert re.fullmatch(r"Srijan-[0-9a-f]{12}\.zip", names[0])
+
+
+def test_an_error_while_reading_the_outcome_still_tells_the_user(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    app = _app(monkeypatch, tmp_path)
+
+    async def broken_outcome(*args, **kwargs):
+        raise KeyError("status")
+
+    monkeypatch.setattr(upload_routes, "_import_outcome", broken_outcome)
+    with TestClient(app) as c:
+        body, session = _upload(c)
+    assert body["status"] == "failed"
+    assert body["details"] == upload_routes.IMPORT_NOT_CONFIRMED
+    assert _upload_done_events(session) == [body]
+
+
+def test_error_file_records_are_read_as_csv() -> None:
+    error_file = (
+        '"forms/Registration, Women_ab12.json","Invalid value ""x"" for Age\n\tat org.avni.X(X.java:1)\n"\n'
+        'concepts.json,"Concept with name \'Yes\' already exists\nstack\n"\n'
+    )
+    assert upload_routes._import_error_reasons(error_file) == [
+        'forms/Registration, Women_ab12.json: Invalid value "x" for Age',
+        "concepts.json: Concept with name 'Yes' already exists",
+    ]
+
+
+def test_the_wait_for_the_import_counts_from_the_start_of_the_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A slow /import/new uses up the time the request may wait."""
+    monkeypatch.setattr(upload_routes, "IMPORT_WAIT_IN_REQUEST_SEC", 0.2)
+    real_post = httpx.AsyncClient.post
+
+    async def slow_post(self, url, **kwargs):
+        await anyio.sleep(0.3)
+        return await real_post(self, url, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", slow_post)
+    with TestClient(_app(monkeypatch, tmp_path)) as c:
+        body, session = _upload(c)
+        assert body == {"job_id": "", "status": "importing"}
+        c.portal.call(anyio.sleep, 0.3)
+    assert [e["status"] for e in _upload_done_events(session)] == ["ok"]
